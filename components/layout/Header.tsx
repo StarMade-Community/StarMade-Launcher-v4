@@ -1,28 +1,20 @@
 import React, { useState, useRef } from 'react';
 import { UserIcon, ChevronDownIcon, MinimizeIcon, MaximizeIcon, CloseIcon, CogIcon, UserPlusIcon, ArrowRightOnRectangleIcon, CheckCircleIcon } from '../common/icons';
 import useOnClickOutside from '../hooks/useOnClickOutside';
-import type { Page, PageProps } from '../../types';
+import type { Page } from '../../types';
+import { useApp } from '../../contexts/AppContext';
+import { useData } from '../../contexts/DataContext';
 
-interface NavigationProps {
-    activePage: Page;
-    onNavigate: (page: Page, props?: PageProps) => void;
-}
-
-const accounts = [
-    { id: '1', name: 'DukeofRealms' },
-    { id: '2', name: 'GuestUser123' },
-];
-
-const UserProfile: React.FC<NavigationProps> = ({ onNavigate }) => {
+const UserProfile: React.FC = () => {
     const [isOpen, setIsOpen] = useState(false);
-    const [activeAccount, setActiveAccount] = useState(accounts[0]);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const { navigate } = useApp();
+    const { accounts, activeAccount, setActiveAccount } = useData();
 
     useOnClickOutside(dropdownRef, () => setIsOpen(false));
 
-    const handleAccountSwitch = (account: typeof accounts[0]) => {
-        setActiveAccount(account);
-        setIsOpen(false);
+    if (!activeAccount) {
+        return null;
     }
 
     return (
@@ -45,7 +37,10 @@ const UserProfile: React.FC<NavigationProps> = ({ onNavigate }) => {
                             {accounts.map(account => (
                                 <li key={account.id}>
                                     <button
-                                        onClick={() => handleAccountSwitch(account)}
+                                        onClick={() => {
+                                            setActiveAccount(account);
+                                            setIsOpen(false);
+                                        }}
                                         className="w-full flex items-center gap-3 px-2 py-2 text-left rounded-md hover:bg-slate-700/50 transition-colors"
                                     >
                                         <div className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center border border-slate-600">
@@ -64,7 +59,7 @@ const UserProfile: React.FC<NavigationProps> = ({ onNavigate }) => {
                             <li>
                                 <button
                                     onClick={() => {
-                                        onNavigate('Settings', { initialSection: 'accounts' });
+                                        navigate('Settings', { initialSection: 'accounts' });
                                         setIsOpen(false);
                                     }}
                                     className="w-full flex items-center gap-3 px-2 py-2 text-left rounded-md hover:bg-slate-700/50 transition-colors text-sm text-gray-300 hover:text-white"
@@ -107,7 +102,8 @@ const WindowControls: React.FC = () => (
     </div>
 );
 
-const Navigation: React.FC<NavigationProps> = ({ activePage, onNavigate }) => {
+const Navigation: React.FC = () => {
+    const { activePage, navigate } = useApp();
     const navItems: Page[] = ['Play', 'Installations', 'News'];
 
     return (
@@ -115,7 +111,7 @@ const Navigation: React.FC<NavigationProps> = ({ activePage, onNavigate }) => {
             {navItems.map(item => (
                 <button 
                     key={item} 
-                    onClick={() => onNavigate(item)}
+                    onClick={() => navigate(item)}
                     className={`
                         font-display uppercase tracking-widest transition-colors duration-200 relative pb-2
                         ${activePage === item ? 'text-white' : 'text-gray-500 hover:text-gray-300'}
@@ -131,14 +127,15 @@ const Navigation: React.FC<NavigationProps> = ({ activePage, onNavigate }) => {
     );
 };
 
-const Header: React.FC<NavigationProps> = ({ activePage, onNavigate }) => {
+const Header: React.FC = () => {
+  const { navigate } = useApp();
   return (
     <header className="relative z-30 flex justify-between items-center px-6 py-3 bg-black/20 backdrop-blur-sm border-b border-white/5" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
       <div className="flex-1 flex justify-start" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
         <div className="flex items-center gap-3">
-            <UserProfile activePage={activePage} onNavigate={onNavigate} />
+            <UserProfile />
             <button 
-              onClick={() => onNavigate('Settings')}
+              onClick={() => navigate('Settings')}
               className="p-2 rounded-full hover:bg-white/10 transition-colors" 
               aria-label="Settings"
             >
@@ -147,7 +144,7 @@ const Header: React.FC<NavigationProps> = ({ activePage, onNavigate }) => {
         </div>
       </div>
       <div className="flex-1 flex justify-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-        <Navigation activePage={activePage} onNavigate={onNavigate} />
+        <Navigation />
       </div>
       <div className="flex-1 flex justify-end" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
         <WindowControls />

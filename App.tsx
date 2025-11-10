@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import Header from './components/layout/Header';
 import Footer from './components/layout/Footer';
 import News from './components/pages/News';
@@ -6,59 +6,28 @@ import Installations from './components/pages/Installations';
 import Play from './components/pages/Play';
 import Settings from './components/pages/Settings';
 import LaunchConfirmModal from './components/common/LaunchConfirmModal';
-import type { Page, PageProps } from './types';
+import { useApp } from './contexts/AppContext';
 
 const App: React.FC = () => {
-  const [activePage, setActivePage] = useState<Page>('Play');
-  const [pageProps, setPageProps] = useState<PageProps>({});
-  
-  const [isLaunchModalOpen, setIsLaunchModalOpen] = useState(false);
-  const [isLaunching, setIsLaunching] = useState(false);
-
-  const handleNavigate = (page: Page, props: PageProps = {}) => {
-    setActivePage(page);
-    setPageProps(props);
-  };
-
-  const handleLaunchClick = () => {
-    if (!isLaunching) {
-      setIsLaunchModalOpen(true);
-    }
-  };
-  
-  const handleModalConfirm = () => {
-      console.log("Terminate & Launch confirmed.");
-      setIsLaunchModalOpen(false);
-      setIsLaunching(true);
-  };
-
-  const handleLaunchAnyway = () => {
-      console.log("Launch Anyway confirmed.");
-      setIsLaunchModalOpen(false);
-      setIsLaunching(true);
-  };
-
-  const handleModalCancel = () => {
-      setIsLaunchModalOpen(false);
-  };
-  
-  const handleLaunchComplete = () => {
-      console.log("Launch sequence complete.");
-      setIsLaunching(false);
-  };
+  const { 
+    activePage, 
+    pageProps, 
+    isLaunchModalOpen, 
+    closeLaunchModal, 
+    startLaunching 
+  } = useApp();
 
   const renderContent = () => {
-    const props = { ...pageProps, onNavigate: handleNavigate };
     switch (activePage) {
       case 'Installations':
-        return <Installations {...props} />;
+        return <Installations {...pageProps} />;
       case 'News':
-        return <News {...props} />;
+        return <News />;
       case 'Settings':
-        return <Settings {...props} />;
+        return <Settings {...pageProps} />;
       case 'Play':
       default:
-        return <Play {...props} />;
+        return <Play />;
     }
   };
 
@@ -66,9 +35,9 @@ const App: React.FC = () => {
     <div className="bg-starmade-bg text-gray-200 font-sans h-screen w-screen flex flex-col antialiased">
       <LaunchConfirmModal
         isOpen={isLaunchModalOpen}
-        onConfirm={handleModalConfirm}
-        onLaunchAnyway={handleLaunchAnyway}
-        onCancel={handleModalCancel}
+        onConfirm={startLaunching}
+        onLaunchAnyway={startLaunching}
+        onCancel={closeLaunchModal}
       />
       
       <div 
@@ -82,16 +51,11 @@ const App: React.FC = () => {
       </div>
       
       <div className="relative z-10 flex flex-col flex-grow h-full">
-        <Header activePage={activePage} onNavigate={handleNavigate} />
+        <Header />
         <main className="flex-grow flex items-center justify-center p-8 overflow-y-auto">
           {renderContent()}
         </main>
-        <Footer 
-          onNavigate={handleNavigate}
-          isLaunching={isLaunching}
-          onLaunchClick={handleLaunchClick}
-          onLaunchComplete={handleLaunchComplete}
-        />
+        <Footer />
       </div>
     </div>
   );

@@ -2,11 +2,7 @@ import React from 'react';
 import { ChevronRightIcon } from '../../common/icons';
 import useNewsFetch from '../../hooks/useNewsFetch';
 import PageContainer from '../../common/PageContainer';
-import type { Page, PageProps } from '../../../types';
-
-interface NewsProps {
-    onNavigate: (page: Page, props?: PageProps) => void;
-}
+import { useApp } from '../../../contexts/AppContext';
 
 const NewsContent: React.FC<{ text: string }> = ({ text }) => {
     // Split the text by [c]...[/c] tags, keeping the tags as part of the result array
@@ -33,9 +29,9 @@ const NewsContent: React.FC<{ text: string }> = ({ text }) => {
     );
 };
 
-const News: React.FC<NewsProps> = ({ onNavigate }) => {
+const News: React.FC = () => {
     const { news, loading, error } = useNewsFetch();
-
+    
     const LoadingSpinner: React.FC = () => (
         <div className="flex flex-col items-center justify-center gap-4 h-full">
             <svg className="animate-spin -ml-1 mr-3 h-10 w-10 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -92,7 +88,7 @@ const News: React.FC<NewsProps> = ({ onNavigate }) => {
     }
 
     return (
-        <PageContainer onClose={() => onNavigate('Play')}>
+        <PageContainer>
             <div className="h-full flex flex-col">
                 <h1 className="font-display text-3xl font-bold uppercase text-white mb-6 tracking-wider flex-shrink-0">
                     Steam News Feed

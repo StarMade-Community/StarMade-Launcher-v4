@@ -3,6 +3,7 @@ import { FolderIcon, MonitorIcon, ChevronDownIcon, CloseIcon, PencilIcon } from 
 import type { ManagedItem, ItemType } from '../../types';
 import { getIconComponent } from '../../utils/getIconComponent';
 import CustomDropdown from './CustomDropdown';
+import MemorySlider from './MemorySlider';
 
 interface InstallationFormProps {
   item: ManagedItem;
@@ -27,10 +28,6 @@ const branches: { value: ItemType, label: string }[] = [
 ];
 
 const resolutions = ["1280x720", "1920x1080", "2560x1440", "3840x2160"];
-
-const MIN_MEMORY = 2048; // 2GB
-const MAX_MEMORY = 16384; // 16GB
-const STEP = 1024; // 1GB
 
 const availableIcons: { icon: string; name: string }[] = [
     { icon: 'release', name: 'Release' },
@@ -117,26 +114,9 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
     if (xmxMatch && xmxMatch[1]) {
         const memoryInGB = parseInt(xmxMatch[1]);
         const memoryInMB = memoryInGB * 1024;
-        if (memoryInMB >= MIN_MEMORY && memoryInMB <= MAX_MEMORY) {
-            setJavaMemory(memoryInMB);
-        }
+        setJavaMemory(prev => (prev !== memoryInMB ? memoryInMB : prev));
     }
   }, [jvmArgs]);
-
-  const getMemoryMarkers = () => {
-    const markers = [];
-    let interval = MAX_MEMORY <= 16384 ? 2048 : 4096;
-    for (let i = MIN_MEMORY; i <= MAX_MEMORY; i += interval) {
-      markers.push(i);
-    }
-    return markers;
-  };
-
-  const handleMemoryChange = (value: number) => {
-    const clampedValue = Math.max(MIN_MEMORY, Math.min(MAX_MEMORY, value));
-    const snappedValue = Math.round(clampedValue / STEP) * STEP;
-    setJavaMemory(snappedValue);
-  };
 
   const handleSaveClick = () => {
     onSave({
@@ -150,8 +130,6 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
     });
   }
 
-  const memoryPercentage = ((javaMemory - MIN_MEMORY) / (MAX_MEMORY - MIN_MEMORY)) * 100;
-  const markers = getMemoryMarkers();
   const title = isNew ? `New ${itemTypeName}` : `Edit ${itemTypeName}`;
   const saveButtonText = isNew ? 'Create' : 'Save';
 
@@ -259,65 +237,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
                 {showMoreOptions && (
                     <div id="more-options-panel" className="mt-6 grid grid-cols-2 gap-x-8 gap-y-6 animate-fade-in-scale">
                         <FormField label="Java Memory Allocation" htmlFor="javaMemory" className="col-span-2">
-                          <div className="flex items-center gap-4">
-                            <div className="flex-1 px-3">
-                              <div className="relative">
-                                <div className="h-2 bg-slate-800/80 rounded-full border border-slate-700 overflow-hidden">
-                                  <div 
-                                    className="h-full bg-gradient-to-r from-starmade-accent/60 to-starmade-accent transition-all duration-150"
-                                    style={{ width: `${memoryPercentage}%` }}
-                                  />
-                                </div>
-                                <input
-                                  id="javaMemory"
-                                  type="range"
-                                  min={MIN_MEMORY}
-                                  max={MAX_MEMORY}
-                                  step={STEP}
-                                  value={javaMemory}
-                                  onChange={(e) => handleMemoryChange(parseInt(e.target.value))}
-                                  className="absolute top-0 w-full h-2 opacity-0 cursor-pointer"
-                                  style={{ margin: 0 }}
-                                />
-                                <div 
-                                  className="absolute top-1/2 w-5 h-5 bg-starmade-accent rounded-full border-2 border-white shadow-lg transform -translate-y-1/2 -translate-x-1/2 pointer-events-none transition-all duration-150 hover:scale-110"
-                                  style={{ left: `${memoryPercentage}%` }}
-                                >
-                                  <div className="absolute inset-0 rounded-full bg-white/20" />
-                                </div>
-                              </div>
-                              <div className="relative mt-2 h-4">
-                                {markers.map((marker) => {
-                                  const markerPos = ((marker - MIN_MEMORY) / (MAX_MEMORY - MIN_MEMORY)) * 100;
-                                  return (
-                                    <div
-                                      key={marker}
-                                      className="absolute flex flex-col items-center transform -translate-x-1/2"
-                                      style={{ left: `${markerPos}%` }}
-                                    >
-                                      <div className="w-px h-2 bg-slate-600 mb-1" />
-                                      <span className="text-xs text-gray-500">
-                                        {marker / 1024}GB
-                                      </span>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                            
-                            <div className="flex items-center gap-2">
-                              <input
-                                type="number"
-                                value={javaMemory}
-                                onChange={(e) => handleMemoryChange(parseInt(e.target.value))}
-                                min={MIN_MEMORY}
-                                max={MAX_MEMORY}
-                                step={STEP}
-                                className="w-24 bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 text-center focus:outline-none focus:ring-2 focus:ring-starmade-accent"
-                              />
-                              <span className="text-sm text-gray-400">MB</span>
-                            </div>
-                          </div>
+                            <MemorySlider value={javaMemory} onChange={setJavaMemory} />
                         </FormField>
 
                         <FormField label="Java Executable Path" htmlFor="javaPath">

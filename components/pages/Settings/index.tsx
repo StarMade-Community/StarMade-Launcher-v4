@@ -1,21 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { CogIcon, UserIcon, InformationCircleIcon, CloseIcon, ArchiveIcon } from '../../common/icons';
+import { CogIcon, UserIcon, InformationCircleIcon, ArchiveIcon } from '../../common/icons';
 import LauncherSettings from './LauncherSettings';
 import AccountSettings from './AccountSettings';
 import AboutSection from './AboutSection';
 import DefaultSettings from './DefaultSettings';
-import type { Page, PageProps, SettingsSection } from '../../../types';
+import type { SettingsSection } from '../../../types';
 import PageContainer from '../../common/PageContainer';
 
-// FIX: An interface cannot extend a union type like PageProps.
-// The interface is redefined to explicitly state the props it expects,
-// which resolves the extension error and the subsequent property access error for `initialSection`.
 interface SettingsProps {
     initialSection?: SettingsSection;
-    onNavigate: (page: Page) => void;
 }
 
-const Settings: React.FC<SettingsProps> = ({ initialSection, onNavigate }) => {
+const Settings: React.FC<SettingsProps> = ({ initialSection }) => {
     const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection || 'launcher');
 
     useEffect(() => {
@@ -47,7 +43,7 @@ const Settings: React.FC<SettingsProps> = ({ initialSection, onNavigate }) => {
     };
 
     return (
-        <PageContainer onClose={() => onNavigate('Play')}>
+        <PageContainer>
             <div className="flex flex-grow min-h-0 -m-6">
                 <aside className="w-64 bg-black/20 border-r border-white/10 p-4 flex-shrink-0">
                     <h1 className="font-display text-2xl font-bold uppercase text-white mb-8 tracking-wider px-2 pt-2">

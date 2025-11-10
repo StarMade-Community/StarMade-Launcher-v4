@@ -1,109 +1,32 @@
 import React, { useState, useEffect } from 'react';
-import { PlusIcon, CloseIcon } from '../../common/icons';
+import { PlusIcon } from '../../common/icons';
 import InstallationForm from '../../common/InstallationForm';
 import ItemCard from '../../common/ItemCard';
-import type { ManagedItem } from '../../../types';
-import type { Page, PageProps } from '../../../types';
+import type { ManagedItem, InstallationsTab } from '../../../types';
 import PageContainer from '../../common/PageContainer';
-
-const initialInstallations: ManagedItem[] = [
-  {
-    id: '1',
-    name: 'Latest Release',
-    version: '0.203.175',
-    type: 'latest',
-    icon: 'latest',
-    path: 'C:\\Games\\StarMade\\Instances\\latest-release',
-    lastPlayed: '2 hours ago',
-  },
-  {
-    id: '2',
-    name: 'Dev Build',
-    version: '24w14a',
-    type: 'dev',
-    icon: 'dev',
-    path: 'C:\\Games\\StarMade\\Instances\\dev-build',
-    lastPlayed: '3 days ago',
-  },
-  {
-    id: '3',
-    name: 'Legacy Version',
-    version: '1.0',
-    type: 'archive',
-    icon: 'archive',
-    path: 'C:\\Games\\StarMade\\Instances\\archive-1.0',
-    lastPlayed: 'Over a year ago',
-  },
-];
-
-const defaultInstallation: ManagedItem = {
-  id: '',
-  name: 'New Installation',
-  version: '0.203.175',
-  type: 'release',
-  icon: 'release',
-  path: 'C:\\Games\\StarMade\\Instances\\new-installation',
-  lastPlayed: 'Never',
-};
-
-const initialServers: ManagedItem[] = [
-  {
-    id: 's1',
-    name: 'Official EU Server',
-    version: '0.203.175',
-    type: 'latest',
-    icon: 'server',
-    path: 'C:\\Games\\StarMade\\Servers\\official-eu',
-    lastPlayed: 'Online',
-    port: '4242',
-  },
-  {
-    id: 's2',
-    name: 'Creative Build World',
-    version: '24w14a',
-    type: 'dev',
-    icon: 'cube',
-    path: 'C:\\Games\\StarMade\\Servers\\creative-build',
-    lastPlayed: '5 minutes ago',
-    port: '27015',
-  },
-  {
-    id: 's3',
-    name: 'Legacy PvP Arena',
-    version: '1.0',
-    type: 'archive',
-    icon: 'bolt',
-    path: 'C:\\Games\\StarMade\\Servers\\pvp-legacy',
-    lastPlayed: 'Offline',
-    port: '4243',
-  },
-];
-
-const defaultServer: ManagedItem = {
-  id: '',
-  name: 'New Server',
-  version: '0.203.175',
-  type: 'release',
-  icon: 'server',
-  path: 'C:\\Games\\StarMade\\Servers\\new-server',
-  lastPlayed: 'Never',
-  port: '4242',
-};
+import { useData } from '../../../contexts/DataContext';
 
 interface InstallationsProps {
-  initialTab?: 'installations' | 'servers';
-  onNavigate: (page: Page, props?: PageProps) => void;
+  initialTab?: InstallationsTab;
 }
 
-const Installations: React.FC<InstallationsProps> = ({ initialTab, onNavigate }) => {
-    const [activeTab, setActiveTab] = useState<'installations' | 'servers'>(initialTab || 'installations');
+const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
+    const [activeTab, setActiveTab] = useState<InstallationsTab>(initialTab || 'installations');
     
     const [view, setView] = useState<'list' | 'form'>('list');
     const [activeItem, setActiveItem] = useState<ManagedItem | null>(null);
     const [isNew, setIsNew] = useState(false);
 
-    const [installations, setInstallations] = useState<ManagedItem[]>(initialInstallations);
-    const [servers, setServers] = useState<ManagedItem[]>(initialServers);
+    const { 
+        installations, 
+        servers,
+        addInstallation,
+        updateInstallation,
+        addServer,
+        updateServer,
+        getInstallationDefaults,
+        getServerDefaults,
+    } = useData();
 
     useEffect(() => {
         if (initialTab && initialTab !== activeTab) {
@@ -111,21 +34,17 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab, onNavigate })
             setView('list');
             setActiveItem(null);
         }
-    }, [initialTab]);
+    }, [initialTab, activeTab]);
 
-    const { items, setItems, defaultItem, itemTypeName, cardActionButtonText, cardStatusLabel } = activeTab === 'installations' 
+    const { items, itemTypeName, cardActionButtonText, cardStatusLabel } = activeTab === 'installations' 
     ? { 
         items: installations, 
-        setItems: setInstallations, 
-        defaultItem: defaultInstallation, 
         itemTypeName: 'Installation', 
         cardActionButtonText: 'Play', 
         cardStatusLabel: 'Last played' 
       }
     : { 
         items: servers, 
-        setItems: setServers, 
-        defaultItem: defaultServer, 
         itemTypeName: 'Server', 
         cardActionButtonText: 'Start', 
         cardStatusLabel: 'Status' 
@@ -138,16 +57,17 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab, onNavigate })
     };
 
     const handleCreateNew = () => {
-        setActiveItem({ ...defaultItem, id: Date.now().toString() });
+        const newItem = activeTab === 'installations' ? getInstallationDefaults() : getServerDefaults();
+        setActiveItem(newItem);
         setIsNew(true);
         setView('form');
     };
 
     const handleSave = (savedData: ManagedItem) => {
-        if (isNew) {
-            setItems(prev => [savedData, ...prev]);
+        if (activeTab === 'installations') {
+            isNew ? addInstallation(savedData) : updateInstallation(savedData);
         } else {
-            setItems(prev => prev.map(inst => inst.id === savedData.id ? savedData : inst));
+            isNew ? addServer(savedData) : updateServer(savedData);
         }
         setView('list');
         setActiveItem(null);
@@ -158,7 +78,7 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab, onNavigate })
         setActiveItem(null);
     };
     
-    const handleTabChange = (tab: 'installations' | 'servers') => {
+    const handleTabChange = (tab: InstallationsTab) => {
         if (tab !== activeTab) {
             setActiveTab(tab);
             setView('list');
@@ -234,7 +154,7 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab, onNavigate })
     }
     
     return (
-      <PageContainer onClose={() => onNavigate('Play')}>
+      <PageContainer>
         {renderContent()}
       </PageContainer>
     );

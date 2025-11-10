@@ -1,20 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChevronDownIcon, CheckIcon, BugIcon, ArchiveIcon, ChevronRightIcon, DiscordIcon } from '../common/icons';
 import useOnClickOutside from '../hooks/useOnClickOutside';
-import type { Page, PageProps } from '../../types';
-
-interface Version {
-  id: string;
-  name: string;
-  type: 'latest' | 'release' | 'dev' | 'archive';
-}
-
-const versions: Version[] = [
-  { id: '0.203.175', name: 'Latest Release 0.203.175', type: 'latest' },
-  { id: '1.19.4', name: 'Release 1.19.4', type: 'release' },
-  { id: '24w14a', name: 'Snapshot 24w14a', type: 'dev' },
-  { id: '1.0', name: 'Archive 1.0', type: 'archive' },
-];
+import type { Version } from '../../types';
+import { useApp } from '../../contexts/AppContext';
+import { useData } from '../../contexts/DataContext';
 
 const DiscordButton: React.FC = () => {
     const [onlineCount, setOnlineCount] = useState<number | null>(null);
@@ -66,9 +55,9 @@ const DiscordButton: React.FC = () => {
 
 const VersionSelector: React.FC = () => {
     const [isOpen, setIsOpen] = useState(false);
-    const [selectedVersion, setSelectedVersion] = useState<Version>(versions[0]);
     const dropdownRef = useRef<HTMLDivElement>(null);
     useOnClickOutside(dropdownRef, () => setIsOpen(false));
+    const { versions, selectedVersion, setSelectedVersion } = useData();
 
     const getIconForType = (type: Version['type']) => {
         switch(type) {
@@ -78,6 +67,10 @@ const VersionSelector: React.FC = () => {
             case 'archive': return <ArchiveIcon className="w-5 h-5 text-gray-400" />;
             default: return null;
         }
+    }
+
+    if (!selectedVersion) {
+        return null;
     }
 
   return (
@@ -209,14 +202,9 @@ const SciFiPlayButton: React.FC<SciFiPlayButtonProps> = ({ isUpdating, onClick, 
 };
 
 
-interface FooterProps {
-  onNavigate: (page: Page, props?: PageProps) => void;
-  isLaunching: boolean;
-  onLaunchClick: () => void;
-  onLaunchComplete: () => void;
-}
+const Footer: React.FC = () => {
+  const { navigate, isLaunching, openLaunchModal, completeLaunching } = useApp();
 
-const Footer: React.FC<FooterProps> = ({ onNavigate, isLaunching, onLaunchClick, onLaunchComplete }) => {
   return (
     <footer className="relative z-20 px-6 py-4 bg-black/20 backdrop-blur-sm border-t border-white/5">
       <div className="flex items-center justify-between">
@@ -229,12 +217,12 @@ const Footer: React.FC<FooterProps> = ({ onNavigate, isLaunching, onLaunchClick,
 
             <SciFiPlayButton 
                 isUpdating={isLaunching}
-                onClick={onLaunchClick}
-                onUpdateComplete={onLaunchComplete}
+                onClick={openLaunchModal}
+                onUpdateComplete={completeLaunching}
             />
 
             <button 
-                onClick={() => onNavigate('Installations', { initialTab: 'servers' })}
+                onClick={() => navigate('Installations', { initialTab: 'servers' })}
                 className="flex items-center gap-2 text-gray-300 hover:text-white transition-colors text-sm font-semibold uppercase tracking-wider">
                 <span>Start Server</span>
                 <ChevronRightIcon className="w-4 h-4" />

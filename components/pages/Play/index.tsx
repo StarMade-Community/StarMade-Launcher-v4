@@ -1,6 +1,6 @@
 import React from 'react';
 import { ChevronRightIcon } from '../../common/icons';
-import type { Page, PageProps } from '../../../types';
+import { useApp } from '../../../contexts/AppContext';
 
 interface NewsItem {
     id: number;
@@ -43,10 +43,6 @@ const newsData: NewsItem[] = [
     },
 ];
 
-interface PlayProps {
-    onNavigate: (page: Page, props?: PageProps) => void;
-}
-
 const HeroNewsCard: React.FC<{ item: NewsItem }> = ({ item }) => (
     <div
         className="col-span-2 row-span-3 h-[450px] bg-black/20 rounded-lg p-3 border border-transparent hover:border-white/10 transition-all cursor-pointer group"
@@ -80,7 +76,8 @@ const SmallNewsCard: React.FC<{ item: NewsItem }> = ({ item }) => (
 );
 
 
-const Play: React.FC<PlayProps> = ({ onNavigate }) => {
+const Play: React.FC = () => {
+    const { navigate } = useApp();
     const heroItem = newsData.find(item => item.isHero);
     const otherItems = newsData.filter(item => !item.isHero);
 
@@ -91,7 +88,7 @@ const Play: React.FC<PlayProps> = ({ onNavigate }) => {
                     Latest News
                 </h1>
                 <button
-                    onClick={() => onNavigate('News')}
+                    onClick={() => navigate('News')}
                     className="flex items-center gap-2 text-gray-300 hover:text-white transition-colors text-sm font-semibold uppercase tracking-wider"
                 >
                     <span>View All News</span>

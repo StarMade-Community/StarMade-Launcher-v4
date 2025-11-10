@@ -1,14 +1,10 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { UserIcon, PlusIcon } from '../../common/icons';
-
-const accountsData = [
-    { id: '1', name: 'DukeofRealms', uuid: '8d3b4e2a-1b9c-4f7d-8a6e-3c5d7f9a1b2c' },
-    { id: '2', name: 'GuestUser123', uuid: 'f4a7b8e1-5c6d-4e8f-9a1b-2c3d4e5f6a7b' },
-];
+import { useData } from '../../../contexts/DataContext';
 
 const AccountSettings: React.FC = () => {
-    const [activeAccountId, setActiveAccountId] = useState(accountsData[0].id);
-
+    const { accounts, activeAccount, setActiveAccount } = useData();
+    
     return (
         <div>
             <div className="flex justify-between items-center mb-6 pb-2 border-b-2 border-white/10">
@@ -27,8 +23,8 @@ const AccountSettings: React.FC = () => {
             </div>
             
             <div className="space-y-3">
-                {accountsData.map(account => {
-                    const isActive = account.id === activeAccountId;
+                {accounts.map(account => {
+                    const isActive = account.id === activeAccount?.id;
 
                     if (isActive) {
                         return (
@@ -52,7 +48,7 @@ const AccountSettings: React.FC = () => {
                     return (
                         <button
                             key={account.id}
-                            onClick={() => setActiveAccountId(account.id)}
+                            onClick={() => setActiveAccount(account)}
                             className="w-full flex items-center gap-4 p-4 rounded-lg bg-black/20 border border-white/10 text-left transition-colors hover:bg-white/5 hover:border-white/20"
                         >
                             <div className="w-12 h-12 bg-slate-800 rounded-full flex items-center justify-center border border-slate-700">
