@@ -7,8 +7,8 @@ export const accountsData: Account[] = [
 
 export const versionsData: Version[] = [
   { id: '0.203.175', name: 'Latest Release 0.203.175', type: 'latest' },
-  { id: '1.19.4', name: 'Release 1.19.4', type: 'release' },
-  { id: '24w14a', name: 'Snapshot 24w14a', type: 'dev' },
+  { id: '0.202.136', name: 'Release 0.202.136', type: 'release' },
+  { id: '0.203.176-dev', name: 'Dev Build 0.203.176', type: 'dev' },
   { id: '1.0', name: 'Archive 1.0', type: 'archive' },
 ];
 
@@ -25,7 +25,7 @@ export const initialInstallationsData: ManagedItem[] = [
   {
     id: '2',
     name: 'Dev Build',
-    version: '24w14a',
+    version: '0.203.176-dev',
     type: 'dev',
     icon: 'dev',
     path: 'C:\\Games\\StarMade\\Instances\\dev-build',
@@ -66,7 +66,7 @@ export const initialServersData: ManagedItem[] = [
   {
     id: 's2',
     name: 'Creative Build World',
-    version: '24w14a',
+    version: '0.203.176-dev',
     type: 'dev',
     icon: 'cube',
     path: 'C:\\Games\\StarMade\\Servers\\creative-build',
