@@ -1,20 +1,47 @@
 <div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+<img width="1200" height="475" alt="StarMade Launcher Banner" src="https://www.star-made.org/images/bg1.jpg" />
 </div>
 
-# Run and deploy your AI Studio app
+# StarMade Launcher v4
 
-This contains everything you need to run your app locally.
+A modern, immersive launcher for [StarMade](https://www.star-made.org/) — the space sandbox game by Schine GmbH. Built with React, TypeScript, and Vite.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1uIyW28DMvw4pYwSdCKG7p58Vhj-11BRy
+## Features
+
+- **Installation Management** — Create, edit, and delete game instances with per-instance Java settings
+- **Server Management** — Manage local StarMade server instances
+- **Account Switching** — Support for multiple accounts
+- **Version Selection** — Switch between latest release, dev builds, and archived versions
+- **News Feed** — Live news pulled from the StarMade Steam page
+- **Discord Integration** — Live member count and one-click join button
+- **Settings** — Language, Java configuration, default game paths, and memory allocation
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
-
+**Prerequisites:** Node.js
 
 1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+   ```
+   npm install
+   ```
+2. Run the app:
+   ```
+   npm run dev
+   ```
+3. Open your browser at `http://localhost:3000`
+
+## Build
+
+```
+npm run build
+```
+
+## Links
+
+- **Official Website**: https://www.star-made.org/
+- **Discord**: https://discord.gg/starmade
+- **Steam**: https://store.steampowered.com/app/244770/StarMade/
+
+## License
+
+MIT © 2025 Schine GmbH

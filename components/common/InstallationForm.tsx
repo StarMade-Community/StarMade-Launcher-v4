@@ -135,7 +135,8 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
 
   const versions = [
     { value: '0.203.175', label: '0.203.175' },
-    { value: '24w14a', label: '24w14a' },
+    { value: '0.202.136', label: '0.202.136' },
+    { value: '0.203.176-dev', label: '0.203.176-dev' },
     { value: '1.0', label: '1.0' },
   ];
   const resolutionOptions = resolutions.map(res => ({ value: res, label: res }));
