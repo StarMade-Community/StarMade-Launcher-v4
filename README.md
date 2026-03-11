@@ -42,6 +42,10 @@ npm run build
 - **Discord**: https://discord.gg/starmade
 - **Steam**: https://store.steampowered.com/app/244770/StarMade/
 
+## Contributing
+
+Before contributing, please read the [Copilot / AI coding instructions](.github/copilot-instructions.md) — they document the project conventions, architecture, and development workflow that all contributors (human or AI) should follow.
+
 ## License
 
 MIT © 2025 Schine GmbH
