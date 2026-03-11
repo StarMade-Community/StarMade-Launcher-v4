@@ -88,19 +88,25 @@ const UserProfile: React.FC = () => {
     );
 };
 
-const WindowControls: React.FC = () => (
+const WindowControls: React.FC = () => {
+    const handleMinimize = () => window.launcher?.window.minimize();
+    const handleMaximize = () => window.launcher?.window.maximize();
+    const handleClose = () => window.launcher?.window.close();
+
+    return (
     <div className="flex items-center gap-2">
-        <button className="p-2 rounded-md hover:bg-white/5 transition-colors">
+        <button onClick={handleMinimize} className="p-2 rounded-md hover:bg-white/5 transition-colors" aria-label="Minimize">
             <MinimizeIcon className="w-5 h-5 text-gray-400" />
         </button>
-        <button className="p-2 rounded-md hover:bg-white/5 transition-colors">
+        <button onClick={handleMaximize} className="p-2 rounded-md hover:bg-white/5 transition-colors" aria-label="Maximize">
             <MaximizeIcon className="w-5 h-5 text-gray-400" />
         </button>
-        <button className="p-2 rounded-md hover:bg-starmade-danger/20 transition-colors">
+        <button onClick={handleClose} className="p-2 rounded-md hover:bg-starmade-danger/20 transition-colors" aria-label="Close">
             <CloseIcon className="w-5 h-5 text-gray-400 hover:text-starmade-danger-light" />
         </button>
     </div>
 );
+};
 
 const Navigation: React.FC = () => {
     const { activePage, navigate } = useApp();
