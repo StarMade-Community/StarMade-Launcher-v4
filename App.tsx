@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import Header from './components/layout/Header';
 import Footer from './components/layout/Footer';
 import News from './components/pages/News';
@@ -7,8 +7,17 @@ import Play from './components/pages/Play';
 import Settings from './components/pages/Settings';
 import LaunchConfirmModal from './components/common/LaunchConfirmModal';
 import GameLogViewer from './components/common/GameLogViewer';
+import UpdateAvailableModal from './components/common/UpdateAvailableModal';
 import { useApp } from './contexts/AppContext';
 import useRandomBackground from './components/hooks/useRandomBackground';
+
+interface UpdateInfo {
+  available: boolean;
+  latestVersion: string;
+  currentVersion: string;
+  releaseNotes: string;
+  downloadUrl: string;
+}
 
 const App: React.FC = () => {
   const { 
@@ -23,6 +32,36 @@ const App: React.FC = () => {
   } = useApp();
 
   const { url: bgUrl, loaded: bgLoaded } = useRandomBackground();
+
+  // ─── Auto-update state ────────────────────────────────────────────────────
+
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.launcher?.updater) return;
+
+    const cleanup = window.launcher.updater.onUpdateAvailable((info) => {
+      setUpdateInfo(info);
+      setIsUpdateModalOpen(true);
+    });
+
+    return cleanup;
+  }, []);
+
+  const handleDownloadUpdate = () => {
+    if (updateInfo?.downloadUrl) {
+      // Open the GitHub releases page in the default browser
+      window.open(updateInfo.downloadUrl, '_blank');
+    }
+    setIsUpdateModalOpen(false);
+  };
+
+  const handleDismissUpdate = () => {
+    setIsUpdateModalOpen(false);
+  };
+
+  // ─── Page rendering ───────────────────────────────────────────────────────
 
   const renderContent = () => {
     switch (activePage) {
@@ -45,6 +84,13 @@ const App: React.FC = () => {
         onConfirm={startLaunching}
         onLaunchAnyway={startLaunching}
         onCancel={closeLaunchModal}
+      />
+
+      <UpdateAvailableModal
+        isOpen={isUpdateModalOpen}
+        updateInfo={updateInfo}
+        onDownload={handleDownloadUpdate}
+        onDismiss={handleDismissUpdate}
       />
       
       {logViewerInstallation && (

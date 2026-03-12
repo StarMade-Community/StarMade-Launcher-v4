@@ -62,6 +62,8 @@ const LauncherSettings: React.FC = () => {
     const [legacyFound, setLegacyFound] = useState<string[]>([]);
     const [isScanning, setIsScanning] = useState(false);
     const [importedPaths, setImportedPaths] = useState<Set<string>>(new Set());
+    const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+    const [updateCheckResult, setUpdateCheckResult] = useState<string | null>(null);
 
     const languageOptions = [
         { value: 'English (US)', label: 'English (US)' },
@@ -220,6 +222,29 @@ const LauncherSettings: React.FC = () => {
         });
     };
 
+    const handleCheckForUpdates = async () => {
+        if (typeof window === 'undefined' || !window.launcher?.updater) return;
+        setIsCheckingUpdate(true);
+        setUpdateCheckResult(null);
+        try {
+            const info = await window.launcher.updater.checkForUpdates();
+            if (info.available) {
+                setUpdateCheckResult(`Update available: v${info.latestVersion}`);
+                window.open(info.downloadUrl, '_blank');
+            } else {
+                setUpdateCheckResult(`You're up to date! (v${info.currentVersion})`);
+            }
+        } catch (error) {
+            console.error('Failed to check for launcher updates:', error);
+            setUpdateCheckResult('Failed to check for updates. Please try again later.');
+        } finally {
+            setIsCheckingUpdate(false);
+            // Clear the result message after a short delay
+            const UPDATE_MESSAGE_DISPLAY_DURATION_MS = 6_000;
+            setTimeout(() => setUpdateCheckResult(null), UPDATE_MESSAGE_DISPLAY_DURATION_MS);
+        }
+    };
+
     return (
         <div className="h-full flex flex-col">
             <h2 className="flex-shrink-0 font-display text-xl font-bold uppercase tracking-wider text-white mb-4 pb-2 border-b-2 border-white/10">
@@ -255,9 +280,18 @@ const LauncherSettings: React.FC = () => {
                             <ToggleSwitch checked={settings.checkForUpdates} onChange={(v) => update('checkForUpdates', v)} />
                         </SettingRow>
                          <SettingRow title="Check for updates now" description="Manually check for a new version of the launcher.">
-                            <button className="px-4 py-2 rounded-md bg-slate-700 hover:bg-slate-600 transition-colors text-sm font-semibold uppercase tracking-wider">
-                                Check Now
-                            </button>
+                            <div className="flex flex-col items-end gap-1">
+                                <button
+                                    onClick={handleCheckForUpdates}
+                                    disabled={isCheckingUpdate}
+                                    className="px-4 py-2 rounded-md bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-semibold uppercase tracking-wider"
+                                >
+                                    {isCheckingUpdate ? 'Checking…' : 'Check Now'}
+                                </button>
+                                {updateCheckResult && (
+                                    <span className="text-xs text-gray-400">{updateCheckResult}</span>
+                                )}
+                            </div>
                         </SettingRow>
                     </div>
                 </div>

@@ -16,6 +16,8 @@ import { startDownload, cancelDownload } from './downloader.js';
 import type { DownloadProgress } from './downloader.js';
 import { downloadJava, detectSystemJava, resolveJavaPath, getDefaultJavaPaths, findJavaExecutableInDir } from './java.js';
 import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, getGraphicsInfo } from './launcher.js';
+import { checkForUpdates } from './updater.js';
+import type { UpdateInfo } from './updater.js';
 
 // ─── ES Module compatibility ─────────────────────────────────────────────────
 
@@ -481,14 +483,42 @@ ipcMain.handle(IPC.LEGACY_SCAN_FOLDER, async (_event, folderPath: string) => {
   return findLegacyInstalls(folderPath);
 });
 
-// ─── Auto-updater stub ───────────────────────────────────────────────────────
-// Full auto-update logic (electron-updater) will be wired in Phase 7/8.
-// The stub is kept here so Phase 7 only needs to uncomment/expand it.
-//
-// import { autoUpdater } from 'electron-updater';
-// function initAutoUpdater(): void {
-//   autoUpdater.checkForUpdatesAndNotify();
-// }
+// ─── Auto-updater ────────────────────────────────────────────────────────────
+
+ipcMain.handle(IPC.UPDATER_GET_VERSION, () => app.getVersion());
+
+ipcMain.handle(IPC.UPDATER_CHECK, async (): Promise<UpdateInfo> => {
+  return checkForUpdates();
+});
+
+/** Milliseconds to wait after window creation before sending the update-available event. */
+const WINDOW_READY_DELAY_MS = 2_000;
+
+/**
+ * Perform a background update check on launch and push a notification to the
+ * renderer if a newer version is available.  Respects the user's
+ * `checkForUpdates` launcher setting.
+ */
+async function runStartupUpdateCheck(): Promise<void> {
+  try {
+    const stored = storeGet('launcherSettings');
+    if (stored && typeof stored === 'object') {
+      const settings = stored as Record<string, unknown>;
+      if (settings.checkForUpdates === false) return;
+    }
+
+    const info = await checkForUpdates();
+    if (info.available) {
+      // Delay so the window is fully loaded before the modal appears.
+      setTimeout(() => {
+        mainWindow?.webContents.send(IPC.UPDATER_UPDATE_AVAILABLE, info);
+      }, WINDOW_READY_DELAY_MS);
+    }
+  } catch (err) {
+    // Non-fatal: silently swallow network / API errors on startup.
+    console.warn('[updater] Startup check failed:', err);
+  }
+}
 
 // ─── App lifecycle ───────────────────────────────────────────────────────────
 
@@ -496,6 +526,7 @@ app.whenReady().then(() => {
   copyPresetsToUserData();
   buildMenu();
   createWindow();
+  runStartupUpdateCheck();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

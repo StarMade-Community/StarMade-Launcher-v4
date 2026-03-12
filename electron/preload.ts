@@ -194,6 +194,47 @@ const launcherApi = {
     scanFolder: (folderPath: string): Promise<string[]> =>
       ipcRenderer.invoke(IPC.LEGACY_SCAN_FOLDER, folderPath),
   },
+
+  /** Launcher auto-updater APIs */
+  updater: {
+    /** Get the current running launcher version string (e.g. "4.0.0"). */
+    getVersion: (): Promise<string> =>
+      ipcRenderer.invoke(IPC.UPDATER_GET_VERSION),
+
+    /**
+     * Manually trigger an update check against GitHub releases.
+     * Resolves with update info (available, latestVersion, etc.).
+     */
+    checkForUpdates: (): Promise<{
+      available: boolean;
+      latestVersion: string;
+      currentVersion: string;
+      releaseNotes: string;
+      downloadUrl: string;
+    }> => ipcRenderer.invoke(IPC.UPDATER_CHECK),
+
+    /**
+     * Subscribe to update-available events pushed by the main process on
+     * startup.  Returns a cleanup function.
+     */
+    onUpdateAvailable: (cb: (info: {
+      available: boolean;
+      latestVersion: string;
+      currentVersion: string;
+      releaseNotes: string;
+      downloadUrl: string;
+    }) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, info: {
+        available: boolean;
+        latestVersion: string;
+        currentVersion: string;
+        releaseNotes: string;
+        downloadUrl: string;
+      }) => cb(info);
+      ipcRenderer.on(IPC.UPDATER_UPDATE_AVAILABLE, listener);
+      return () => ipcRenderer.removeListener(IPC.UPDATER_UPDATE_AVAILABLE, listener);
+    },
+  },
 };
 
 export type LauncherApi = typeof launcherApi;
