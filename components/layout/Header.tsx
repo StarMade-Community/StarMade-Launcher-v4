@@ -137,8 +137,8 @@ const Header: React.FC = () => {
   const { navigate } = useApp();
   return (
     <header className="relative z-30 flex justify-between items-center px-6 py-3 bg-black/20 backdrop-blur-sm border-b border-white/5" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
-      <div className="flex-1 flex justify-start" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-        <div className="flex items-center gap-3">
+      <div className="flex-1 flex justify-start">
+        <div className="flex items-center gap-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
             <UserProfile />
             <button 
               onClick={() => navigate('Settings')}
@@ -149,11 +149,15 @@ const Header: React.FC = () => {
             </button>
         </div>
       </div>
-      <div className="flex-1 flex justify-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-        <Navigation />
+      <div className="flex-1 flex justify-center">
+        <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          <Navigation />
+        </div>
       </div>
-      <div className="flex-1 flex justify-end" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-        <WindowControls />
+      <div className="flex-1 flex justify-end">
+        <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          <WindowControls />
+        </div>
       </div>
     </header>
   );

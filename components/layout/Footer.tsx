@@ -61,64 +61,115 @@ const DiscordButton: React.FC = () => {
     );
 };
 
-const VersionSelector: React.FC = () => {
+const InstallationSelector: React.FC = () => {
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
     useOnClickOutside(dropdownRef, () => setIsOpen(false));
-    const { versions, selectedVersion, setSelectedVersion } = useData();
+    const { installations } = useData();
+    const { navigate } = useApp();
+    
+    // Use first installed installation as default
+    const installedInstallations = installations.filter(inst => inst.installed !== false);
+    const selectedInstallation = installedInstallations[0] || installations[0] || null;
 
-    const getIconForType = (type: Version['type']) => {
+    const getIconForType = (type: string) => {
         switch(type) {
-            case 'release': return <CheckIcon className="w-5 h-5 text-green-400" />;
+            case 'release':
+            case 'latest': return <CheckIcon className="w-5 h-5 text-green-400" />;
             case 'pre': return <BugIcon className="w-5 h-5 text-green-400" />;
             case 'dev': return <DevIcon className="w-5 h-5 text-orange-400" />;
             case 'archive': return <ArchiveIcon className="w-5 h-5 text-gray-400" />;
-            default: return null;
+            default: return <CheckIcon className="w-5 h-5 text-green-400" />;
         }
     }
 
-    if (!selectedVersion) {
-        return null;
+    // No installations at all - prompt to create one
+    if (installations.length === 0) {
+        return (
+            <button
+                onClick={() => navigate('Installations', { initialTab: 'installations' })}
+                className="flex items-center gap-3 px-4 py-2 bg-amber-900/20 rounded-md hover:bg-amber-900/30 transition-colors border border-amber-600/50"
+            >
+                <div className="text-left">
+                    <p className="text-sm font-medium text-amber-400">No Installations</p>
+                    <p className="text-xs text-amber-300/70">Click to create one</p>
+                </div>
+                <ChevronRightIcon className="w-4 h-4 text-amber-400" />
+            </button>
+        );
     }
 
-  return (
-    <div className="relative" ref={dropdownRef}>
-      <button 
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-3 pl-4 pr-3 py-2 bg-black/20 rounded-md hover:bg-black/40 transition-colors border border-white/10"
-      >
-        <div className="flex items-center gap-2">
-            {getIconForType(selectedVersion.type)}
-            <div className="text-left">
-                <p className="text-sm font-medium text-white">{selectedVersion.name.split(' ').slice(0, 2).join(' ')}</p>
-                <p className="text-xs text-gray-400">{selectedVersion.name.split(' ').slice(2).join(' ')}</p>
-            </div>
-        </div>
-        <ChevronDownIcon className={`w-5 h-5 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-      </button>
+    // No installed installations - prompt to download
+    if (installedInstallations.length === 0) {
+        return (
+            <button
+                onClick={() => navigate('Installations', { initialTab: 'installations' })}
+                className="flex items-center gap-3 px-4 py-2 bg-blue-900/20 rounded-md hover:bg-blue-900/30 transition-colors border border-blue-600/50"
+            >
+                <div className="text-left">
+                    <p className="text-sm font-medium text-blue-400">Download Required</p>
+                    <p className="text-xs text-blue-300/70">Install {selectedInstallation?.name || 'a version'}</p>
+                </div>
+                <ChevronRightIcon className="w-4 h-4 text-blue-400" />
+            </button>
+        );
+    }
 
-        {isOpen && (
-            <div className="absolute bottom-full mb-2 w-full bg-slate-900/90 backdrop-blur-sm border border-slate-700 rounded-md shadow-lg overflow-hidden z-20">
-                <ul>
-                    {versions.map(version => (
-                        <li key={version.id}>
-                            <button 
-                                onClick={() => {
-                                    setSelectedVersion(version);
-                                    setIsOpen(false);
-                                }}
-                                className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-700/50 transition-colors"
-                            >
-                               {getIconForType(version.type)}
-                               <span className="text-sm text-white">{version.name}</span>
-                            </button>
-                        </li>
-                    ))}
-                </ul>
-            </div>
-        )}
-    </div>
-  );
+    // Has installed installations - show selector
+    return (
+        <div className="relative" ref={dropdownRef}>
+            <button 
+                onClick={() => setIsOpen(!isOpen)}
+                className="flex items-center gap-3 pl-4 pr-3 py-2 bg-black/20 rounded-md hover:bg-black/40 transition-colors border border-white/10"
+            >
+                <div className="flex items-center gap-2">
+                    {getIconForType(selectedInstallation.type)}
+                    <div className="text-left">
+                        <p className="text-sm font-medium text-white">{selectedInstallation.name}</p>
+                        <p className="text-xs text-gray-400">{selectedInstallation.version}</p>
+                    </div>
+                </div>
+                <ChevronDownIcon className={`w-5 h-5 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {isOpen && (
+                <div className="absolute bottom-full mb-2 w-64 bg-slate-900/90 backdrop-blur-sm border border-slate-700 rounded-md shadow-lg overflow-hidden z-20">
+                    <ul>
+                        {installedInstallations.map(installation => (
+                            <li key={installation.id}>
+                                <button 
+                                    onClick={() => {
+                                        setIsOpen(false);
+                                    }}
+                                    className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-700/50 transition-colors"
+                                >
+                                    {getIconForType(installation.type)}
+                                    <div className="flex-1">
+                                        <p className="text-sm text-white">{installation.name}</p>
+                                        <p className="text-xs text-gray-400">{installation.version}</p>
+                                    </div>
+                                    {installation.id === selectedInstallation?.id && (
+                                        <CheckIcon className="w-4 h-4 text-starmade-accent" />
+                                    )}
+                                </button>
+                            </li>
+                        ))}
+                    </ul>
+                    <hr className="border-slate-700/50" />
+                    <button
+                        onClick={() => {
+                            navigate('Installations', { initialTab: 'installations' });
+                            setIsOpen(false);
+                        }}
+                        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-700/50 transition-colors text-sm text-gray-300"
+                    >
+                        <span>Manage Installations</span>
+                        <ChevronRightIcon className="w-4 h-4 ml-auto" />
+                    </button>
+                </div>
+            )}
+        </div>
+    );
 };
 
 interface SciFiPlayButtonProps {
@@ -225,7 +276,7 @@ const Footer: React.FC = () => {
         </div>
         
         <div className="flex items-center justify-center gap-6">
-            <VersionSelector />
+            <InstallationSelector />
 
             <SciFiPlayButton 
                 isUpdating={isLaunching}

@@ -9,7 +9,7 @@ import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { shell } from 'electron';
-import { getRequiredJavaVersion, getJvmArgsForJava, resolveJavaPath } from './java';
+import { getRequiredJavaVersion, getJvmArgsForJava, resolveJavaPath } from './java.js';
 import { BrowserWindow } from 'electron';
 
 // ─── Process tracking ─────────────────────────────────────────────────────────

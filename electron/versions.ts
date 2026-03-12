@@ -7,7 +7,7 @@
  * Reference: v2 launcher `src/services/updater.coffee` — getVersions()
  */
 
-import { getRequiredJavaVersion } from './java';
+import { getRequiredJavaVersion } from './java.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 

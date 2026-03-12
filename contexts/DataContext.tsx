@@ -1,13 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import type { DataContextType, ManagedItem, Account, Version, DownloadStatus, DownloadProgress } from '../types';
-import { 
-    accountsData, 
-    versionsData, 
-    initialInstallationsData, 
-    initialServersData,
-    defaultInstallationData,
-    defaultServerData
-} from '../data/mockData';
 
 // ─── Store keys ──────────────────────────────────────────────────────────────
 
@@ -15,8 +7,29 @@ const SK_ACCOUNTS          = 'accounts';
 const SK_ACTIVE_ACCOUNT_ID = 'activeAccountId';
 const SK_INSTALLATIONS     = 'installations';
 const SK_SERVERS           = 'servers';
-const SK_VERSIONS          = 'versions';
 const SK_SELECTED_VER_ID   = 'selectedVersionId';
+
+// ─── Default values ──────────────────────────────────────────────────────────
+
+const DEFAULT_INSTALLATION: Omit<ManagedItem, 'id'> = {
+  name: 'New Installation',
+  version: '0.203.175',
+  type: 'release',
+  icon: 'release',
+  path: '/home/user/starmade/installations/new-installation',
+  lastPlayed: 'Never',
+  installed: false,
+};
+
+const DEFAULT_SERVER: Omit<ManagedItem, 'id'> = {
+  name: 'New Server',
+  version: '0.203.175',
+  type: 'release',
+  icon: 'server',
+  path: '/home/user/starmade/servers/new-server',
+  lastPlayed: 'Never',
+  port: '4242',
+};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -30,12 +43,12 @@ const hasDownload = (): boolean => typeof window !== 'undefined' && typeof windo
 const DataContext = createContext<DataContextType | undefined>(undefined);
 
 export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-    const [accounts,       setAccounts]       = useState<Account[]>(accountsData);
-    const [activeAccount,  setActiveAccount]  = useState<Account | null>(accountsData[0] || null);
-    const [installations,  setInstallations]  = useState<ManagedItem[]>(initialInstallationsData);
-    const [servers,        setServers]        = useState<ManagedItem[]>(initialServersData);
-    const [versions,       setVersions]       = useState<Version[]>(versionsData);
-    const [selectedVersion, setSelectedVersion] = useState<Version | null>(versionsData[0] || null);
+    const [accounts,       setAccounts]       = useState<Account[]>([]);
+    const [activeAccount,  setActiveAccount]  = useState<Account | null>(null);
+    const [installations,  setInstallations]  = useState<ManagedItem[]>([]);
+    const [servers,        setServers]        = useState<ManagedItem[]>([]);
+    const [versions,       setVersions]       = useState<Version[]>([]);
+    const [selectedVersion, setSelectedVersion] = useState<Version | null>(null);
     const [isLoaded,       setIsLoaded]       = useState(false);
     const [isVersionsLoading, setIsVersionsLoading] = useState(false);
     const [downloadStatuses, setDownloadStatuses] = useState<Record<string, DownloadStatus>>({});
@@ -50,36 +63,57 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             window.launcher.store.get(SK_ACTIVE_ACCOUNT_ID),
             window.launcher.store.get(SK_INSTALLATIONS),
             window.launcher.store.get(SK_SERVERS),
-            window.launcher.store.get(SK_VERSIONS),
             window.launcher.store.get(SK_SELECTED_VER_ID),
         ]).then(([
             storedAccounts,
             storedActiveAccountId,
             storedInstallations,
             storedServers,
-            storedVersions,
             storedSelectedVersionId,
         ]) => {
-            const accts = Array.isArray(storedAccounts) ? (storedAccounts as Account[]) : accountsData;
-            const vers  = Array.isArray(storedVersions) ? (storedVersions as Version[]) : versionsData;
-
-            if (Array.isArray(storedAccounts))      setAccounts(accts);
-            if (Array.isArray(storedInstallations)) setInstallations(storedInstallations as ManagedItem[]);
-            if (Array.isArray(storedServers))       setServers(storedServers as ManagedItem[]);
-            if (Array.isArray(storedVersions))      setVersions(vers);
-
-            if (typeof storedActiveAccountId === 'string') {
-                const account = accts.find(a => a.id === storedActiveAccountId);
-                if (account) setActiveAccount(account);
+            // Load accounts
+            if (Array.isArray(storedAccounts) && storedAccounts.length > 0) {
+                setAccounts(storedAccounts as Account[]);
+                
+                // Set active account
+                if (typeof storedActiveAccountId === 'string') {
+                    const account = (storedAccounts as Account[]).find(a => a.id === storedActiveAccountId);
+                    if (account) setActiveAccount(account);
+                } else {
+                    // Default to first account if none selected
+                    setActiveAccount((storedAccounts as Account[])[0]);
+                }
+            } else {
+                // First run - create a default guest account
+                const defaultAccount: Account = {
+                    id: Date.now().toString(),
+                    name: 'Guest',
+                };
+                setAccounts([defaultAccount]);
+                setActiveAccount(defaultAccount);
             }
 
+            // Load installations
+            if (Array.isArray(storedInstallations)) {
+                setInstallations(storedInstallations as ManagedItem[]);
+            }
+
+            // Load servers
+            if (Array.isArray(storedServers)) {
+                setServers(storedServers as ManagedItem[]);
+            }
+
+            // Selected version ID (we'll resolve it after fetching versions)
             if (typeof storedSelectedVersionId === 'string') {
-                const version = vers.find(v => v.id === storedSelectedVersionId);
-                if (version) setSelectedVersion(version);
+                // Store for later use after versions are fetched
+                setSelectedVersion({ id: storedSelectedVersionId } as Version);
             }
 
             setIsLoaded(true);
-        }).catch(() => setIsLoaded(true));
+        }).catch(err => {
+            console.error('[DataContext] Failed to load from store:', err);
+            setIsLoaded(true);
+        });
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -92,9 +126,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             const liveVersions = await window.launcher.versions.fetch(invalidate);
             if (Array.isArray(liveVersions) && liveVersions.length > 0) {
                 setVersions(liveVersions as Version[]);
-                // Keep selected version in sync; fall back to first release
+                
+                // Resolve selected version
                 setSelectedVersion(prev => {
-                    const still = (liveVersions as Version[]).find(v => v.id === prev?.id && v.type === prev?.type);
+                    // If we have a stored ID (from initial load), find it in live versions
+                    if (prev?.id && !prev.name) {
+                        const stored = (liveVersions as Version[]).find(v => v.id === prev.id);
+                        if (stored) return stored;
+                    }
+                    // Otherwise check if previous selection still exists
+                    const still = (liveVersions as Version[]).find(v => v.id === prev?.id);
+                    // Fall back to first version
                     return still ?? ((liveVersions as Version[])[0] ?? null);
                 });
             }
@@ -179,9 +221,6 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (isLoaded && hasStore()) window.launcher.store.set(SK_SERVERS, servers);
     }, [servers, isLoaded]);
 
-    useEffect(() => {
-        if (isLoaded && hasStore()) window.launcher.store.set(SK_VERSIONS, versions);
-    }, [versions, isLoaded]);
 
     useEffect(() => {
         if (isLoaded && hasStore()) window.launcher.store.set(SK_SELECTED_VER_ID, selectedVersion?.id ?? null);
@@ -197,8 +236,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const updateServer = (item: ManagedItem) => setServers(prev => prev.map(s => s.id === item.id ? item : s));
     const deleteServer = (id: string)        => setServers(prev => prev.filter(s => s.id !== id));
 
-    const getInstallationDefaults = () => ({ ...defaultInstallationData, id: Date.now().toString() });
-    const getServerDefaults       = () => ({ ...defaultServerData,       id: Date.now().toString() });
+    const getInstallationDefaults = () => ({ ...DEFAULT_INSTALLATION, id: Date.now().toString() });
+    const getServerDefaults       = () => ({ ...DEFAULT_SERVER,       id: Date.now().toString() });
 
     // ── Download actions ──────────────────────────────────────────────────────
 
