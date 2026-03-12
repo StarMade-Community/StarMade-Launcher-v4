@@ -1,5 +1,25 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import CustomDropdown from '../../common/CustomDropdown';
+
+// ─── Store key ───────────────────────────────────────────────────────────────
+
+const STORE_KEY = 'launcherSettings';
+
+interface LauncherSettingsData {
+    checkForUpdates: boolean;
+    showLog: boolean;
+    language: string;
+    closeBehavior: string;
+}
+
+const DEFAULT_SETTINGS: LauncherSettingsData = {
+    checkForUpdates: true,
+    showLog: false,
+    language: 'English (US)',
+    closeBehavior: 'Close launcher',
+};
+
+// ─── Sub-components ──────────────────────────────────────────────────────────
 
 const SettingRow: React.FC<{ title: string; description: string; children: React.ReactNode }> = ({ title, description, children }) => (
     <div className="flex justify-between items-center bg-black/20 p-4 rounded-lg border border-white/10">
@@ -24,11 +44,11 @@ const ToggleSwitch: React.FC<{ checked: boolean; onChange: (checked: boolean) =>
     </button>
 );
 
+// ─── Main component ──────────────────────────────────────────────────────────
+
 const LauncherSettings: React.FC = () => {
-    const [checkForUpdates, setCheckForUpdates] = useState(true);
-    const [showLog, setShowLog] = useState(false);
-    const [language, setLanguage] = useState('English (US)');
-    const [closeBehavior, setCloseBehavior] = useState('Close launcher');
+    const [isLoaded, setIsLoaded] = useState(false);
+    const [settings, setSettings] = useState<LauncherSettingsData>(DEFAULT_SETTINGS);
 
     const languageOptions = [
         { value: 'English (US)', label: 'English (US)' },
@@ -42,6 +62,31 @@ const LauncherSettings: React.FC = () => {
         { value: 'Keep the launcher open', label: 'Keep the launcher open' },
     ];
 
+    // Load persisted settings on mount
+    useEffect(() => {
+        if (typeof window === 'undefined' || !window.launcher?.store) {
+            setIsLoaded(true);
+            return;
+        }
+        window.launcher.store.get(STORE_KEY).then((stored) => {
+            if (stored && typeof stored === 'object') {
+                setSettings({ ...DEFAULT_SETTINGS, ...(stored as Partial<LauncherSettingsData>) });
+            }
+            setIsLoaded(true);
+        }).catch(() => setIsLoaded(true));
+    }, []);
+
+    // Persist whenever settings change (skip the initial default render)
+    useEffect(() => {
+        if (isLoaded && typeof window !== 'undefined' && window.launcher?.store) {
+            window.launcher.store.set(STORE_KEY, settings);
+        }
+    }, [settings, isLoaded]);
+
+    const update = <K extends keyof LauncherSettingsData>(key: K, value: LauncherSettingsData[K]) => {
+        setSettings(prev => ({ ...prev, [key]: value }));
+    };
+
     return (
         <div className="h-full flex flex-col">
             <h2 className="flex-shrink-0 font-display text-xl font-bold uppercase tracking-wider text-white mb-4 pb-2 border-b-2 border-white/10">
@@ -54,16 +99,16 @@ const LauncherSettings: React.FC = () => {
                         <CustomDropdown 
                             className="w-64"
                             options={languageOptions} 
-                            value={language} 
-                            onChange={setLanguage} 
+                            value={settings.language} 
+                            onChange={(v) => update('language', v)} 
                         />
                     </SettingRow>
                     <SettingRow title="After Launching Game" description="Control what happens to the launcher after the game starts.">
                          <CustomDropdown 
                             className="w-64"
                             options={closeBehaviorOptions} 
-                            value={closeBehavior} 
-                            onChange={setCloseBehavior} 
+                            value={settings.closeBehavior} 
+                            onChange={(v) => update('closeBehavior', v)} 
                         />
                     </SettingRow>
                 </div>
@@ -74,7 +119,7 @@ const LauncherSettings: React.FC = () => {
                     </h2>
                     <div className="space-y-4">
                         <SettingRow title="Check for launcher updates" description="Automatically check for updates when the launcher starts.">
-                            <ToggleSwitch checked={checkForUpdates} onChange={setCheckForUpdates} />
+                            <ToggleSwitch checked={settings.checkForUpdates} onChange={(v) => update('checkForUpdates', v)} />
                         </SettingRow>
                          <SettingRow title="Check for updates now" description="Manually check for a new version of the launcher.">
                             <button className="px-4 py-2 rounded-md bg-slate-700 hover:bg-slate-600 transition-colors text-sm font-semibold uppercase tracking-wider">
@@ -95,7 +140,7 @@ const LauncherSettings: React.FC = () => {
                     </h2>
                     <div className="space-y-4">
                         <SettingRow title="Show StarMade Log" description="Shows a window that streams the log after the game has started.">
-                            <ToggleSwitch checked={showLog} onChange={setShowLog} />
+                            <ToggleSwitch checked={settings.showLog} onChange={(v) => update('showLog', v)} />
                         </SettingRow>
                     </div>
                 </div>
