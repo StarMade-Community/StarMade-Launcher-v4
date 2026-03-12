@@ -22,19 +22,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setPageProps(props);
     };
 
-    const openLaunchModal = (installation?: ManagedItem, sessionArgs?: SessionLaunchArgs) => {
+    const openLaunchModal = useCallback((installation?: ManagedItem, sessionArgs?: SessionLaunchArgs) => {
         if (!isLaunching) {
             setPendingLaunchInstallation(installation || null);
             setPendingSessionArgs(sessionArgs || null);
             setIsLaunchModalOpen(true);
         }
-    };
-    const closeLaunchModal = () => {
+    }, [isLaunching]);
+
+    const closeLaunchModal = useCallback(() => {
         setIsLaunchModalOpen(false);
         setLaunchError(null);
         setPendingLaunchInstallation(null);
         setPendingSessionArgs(null);
-    };
+    }, []);
 
     const startLaunching = async () => {
         const installation = pendingLaunchInstallation;
@@ -185,8 +186,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             uplinkPort: session.serverPort,
             modIds:     session.modIds,
         });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [installations, isLaunching]);
+    }, [installations, openLaunchModal]);
 
     const value: AppContextType = {
         activePage,
