@@ -14,7 +14,7 @@ import { storeGet, storeSet, storeDelete } from './store.js';
 import { fetchAllVersions, invalidateVersionCache } from './versions.js';
 import { startDownload, cancelDownload } from './downloader.js';
 import type { DownloadProgress } from './downloader.js';
-import { downloadJava, detectSystemJava, resolveJavaPath } from './java.js';
+import { downloadJava, detectSystemJava, resolveJavaPath, getDefaultJavaPaths } from './java.js';
 import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, getGraphicsInfo } from './launcher.js';
 
 // ─── ES Module compatibility ─────────────────────────────────────────────────
@@ -183,6 +183,11 @@ ipcMain.handle(IPC.JAVA_DOWNLOAD, async (_event, version: 8 | 25) => {
 ipcMain.handle(IPC.JAVA_DETECT, async () => {
   const system = await detectSystemJava();
   return system.map(j => ({ ...j, source: 'system' }));
+});
+
+ipcMain.handle(IPC.JAVA_GET_DEFAULT_PATHS, () => {
+  const launcherDir = app.isPackaged ? path.dirname(app.getPath('exe')) : app.getAppPath();
+  return getDefaultJavaPaths(launcherDir);
 });
 
 // ─── Game launch IPC handlers ─────────────────────────────────────────────────

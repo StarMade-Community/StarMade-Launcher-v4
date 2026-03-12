@@ -88,6 +88,10 @@ const launcherApi = {
     /** Scan for system-installed Java versions. */
     detect: (): Promise<Array<{ version: string; path: string; source: string }>> =>
       ipcRenderer.invoke(IPC.JAVA_DETECT),
+
+    /** Get default Java paths for jre8 and jre25. */
+    getDefaultPaths: (): Promise<{ jre8Path: string; jre25Path: string }> =>
+      ipcRenderer.invoke(IPC.JAVA_GET_DEFAULT_PATHS),
   },
 
   // ─── Phase 5: Game launching ──────────────────────────────────────────────
@@ -137,6 +141,13 @@ const launcherApi = {
       ipcRenderer.on(IPC.GAME_LOG, listener);
       return () => ipcRenderer.removeListener(IPC.GAME_LOG, listener);
     },
+  },
+
+  /** Dialog APIs (folder picker, etc.) */
+  dialog: {
+    /** Open folder picker dialog. Returns selected path or null if canceled. */
+    openFolder: (defaultPath?: string): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.DIALOG_OPEN_FOLDER, defaultPath),
   },
 };
 

@@ -65,6 +65,8 @@ declare global {
         download: (version: 8 | 25) => Promise<{ success: boolean; path?: string; error?: string }>;
         /** Scan for system-installed Java versions. */
         detect: () => Promise<Array<{ version: string; path: string; source: string }>>;
+        /** Get default Java paths for jre8 and jre25. */
+        getDefaultPaths: () => Promise<{ jre8Path: string; jre25Path: string }>;
       };
 
       /** Game launching API — Phase 5. */
@@ -95,6 +97,12 @@ declare global {
         getGraphicsInfo: (installationPath: string) => Promise<string | null>;
         /** Subscribe to game log events. Returns a cleanup function. */
         onLog: (cb: (data: { installationId: string; level: string; message: string }) => void) => () => void;
+      };
+
+      /** Dialog APIs */
+      dialog: {
+        /** Open folder picker dialog. Returns selected path or null if canceled. */
+        openFolder: (defaultPath?: string) => Promise<string | null>;
       };
     };
   }

@@ -245,9 +245,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
               <div className="col-span-2 -mt-2">
                 <p className="text-xs text-gray-400">
                   <span className="font-semibold">Requires Java {requiredJavaVersion}</span>
-                  {requiredJavaVersion === 25 && (
-                    <span className="ml-2 text-amber-400">(will be auto-downloaded in Phase 4)</span>
-                  )}
+                  {requiredJavaVersion === 25}
                 </p>
               </div>
             )}

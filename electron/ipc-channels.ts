@@ -45,6 +45,8 @@ export const IPC = {
   JAVA_DOWNLOAD: 'java:download',
   /** Renderer → Main (invoke): scan for system-installed Java versions. */
   JAVA_DETECT: 'java:detect',
+  /** Renderer → Main (invoke): get default Java paths for jre8 and jre25. */
+  JAVA_GET_DEFAULT_PATHS: 'java:get-default-paths',
 
   // ─── Phase 5: Game launching ──────────────────────────────────────────────
 

@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import CustomDropdown from '../../common/CustomDropdown';
-import { FolderIcon, MonitorIcon } from '../../common/icons';
+import { FolderIcon } from '../../common/icons';
 import MemorySlider from '../../common/MemorySlider';
 
 // ─── Store keys ──────────────────────────────────────────────────────────────
@@ -10,29 +9,44 @@ const STORE_KEY_SERVER       = 'defaultServerSettings';
 
 interface DefaultSettingsData {
     gameDir: string;
-    resolution: string;
     port: string;
     javaMemory: number;
     jvmArgs: string;
-    javaPath: string;
+    javaPath8: string;
+    javaPath25: string;
 }
 
+/**
+ * Get the default game directory (launcher directory + /StarMade)
+ */
+const getDefaultGameDirectory = (isServer: boolean): string => {
+    // In Electron, we can get the app path
+    if (typeof window !== 'undefined' && window.launcher) {
+        // For now, use a sensible default until we can get the actual app path
+        // This will be the current working directory + /StarMade
+        const subdir = isServer ? 'Servers' : 'Installations';
+        return `./StarMade/${subdir}`;
+    }
+    // Browser fallback
+    return isServer ? './StarMade/Servers' : './StarMade/Installations';
+};
+
 const DEFAULT_INSTALLATION_SETTINGS: DefaultSettingsData = {
-    gameDir:    'C:\\Games\\StarMade\\Instances\\default',
-    resolution: '1920x1080',
+    gameDir:    getDefaultGameDirectory(false),
     port:       '4242',
-    javaMemory: 4096,
+    javaMemory: 8192,
     jvmArgs:    '-Xms4G -Xmx4G',
-    javaPath:   'C:\\Program Files\\Java\\jdk-17\\bin\\javaw.exe',
+    javaPath8:  '',
+    javaPath25: '',
 };
 
 const DEFAULT_SERVER_SETTINGS: DefaultSettingsData = {
-    gameDir:    'C:\\Games\\StarMade\\Servers\\default',
-    resolution: '1920x1080',
+    gameDir:    getDefaultGameDirectory(true),
     port:       '4242',
-    javaMemory: 4096,
+    javaMemory: 8192,
     jvmArgs:    '-Xms4G -Xmx4G',
-    javaPath:   'C:\\Program Files\\Java\\jdk-17\\bin\\javaw.exe',
+    javaPath8:  '',
+    javaPath25: '',
 };
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
@@ -50,8 +64,6 @@ const SettingRow: React.FC<{ title: string; description: string; children: React
     </div>
 );
 
-const resolutions = ["1280x720", "1920x1080", "2560x1440", "3840x2160"];
-const resolutionOptions = resolutions.map(res => ({ value: res, label: res }));
 
 // ─── Form component ──────────────────────────────────────────────────────────
 
@@ -88,6 +100,22 @@ const DefaultSettingsForm: React.FC<{ isServer: boolean }> = ({ isServer }) => {
         });
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [storeKey]);
+
+    // Populate default Java paths from Electron on mount
+    useEffect(() => {
+        if (typeof window === 'undefined' || !window.launcher?.java) {
+            return;
+        }
+        window.launcher.java.getDefaultPaths().then((paths) => {
+            setSettings(prev => ({
+                ...prev,
+                javaPath8: prev.javaPath8 || paths.jre8Path,
+                javaPath25: prev.javaPath25 || paths.jre25Path,
+            }));
+        }).catch((error) => {
+            console.error('Failed to get default Java paths:', error);
+        });
+    }, []);
 
     // Persist whenever settings change, but only after the current key is loaded
     useEffect(() => {
@@ -128,26 +156,35 @@ const DefaultSettingsForm: React.FC<{ isServer: boolean }> = ({ isServer }) => {
         setSettings(prev => ({ ...prev, [key]: value }));
     };
 
+    const handleFolderPicker = async () => {
+        if (typeof window === 'undefined' || !window.launcher?.dialog) {
+            return;
+        }
+        
+        const selectedPath = await window.launcher.dialog.openFolder(settings.gameDir);
+        if (selectedPath) {
+            update('gameDir', selectedPath);
+        }
+    };
+
     return (
         <div className="space-y-4">
-            <SettingRow title="Game Directory" description="The default folder where new installations will be created.">
+            <SettingRow title="Game Directory" description={`The default folder where new ${isServer ? 'servers' : 'installations'} will be created.`}>
                 <div className="flex w-full">
-                  <input type="text" value={settings.gameDir} onChange={e => update('gameDir', e.target.value)} className="flex-1 bg-slate-900/80 border border-slate-700 rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
-                  <button className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80"><FolderIcon className="w-5 h-5 text-gray-400" /></button>
+                  <input 
+                    type="text" 
+                    value={settings.gameDir} 
+                    onChange={e => update('gameDir', e.target.value)} 
+                    className="flex-1 bg-slate-900/80 border border-slate-700 rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" 
+                  />
+                  <button 
+                    onClick={handleFolderPicker}
+                    className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80 transition-colors"
+                  >
+                    <FolderIcon className="w-5 h-5 text-gray-400" />
+                  </button>
                 </div>
             </SettingRow>
-
-            {!isServer && (
-                <SettingRow title="Resolution" description="The default screen resolution for new installations.">
-                    <CustomDropdown
-                        className="w-full"
-                        options={resolutionOptions}
-                        value={settings.resolution}
-                        onChange={(v) => update('resolution', v)}
-                        icon={<MonitorIcon className="w-5 h-5 text-gray-400" />}
-                    />
-                </SettingRow>
-            )}
 
             {isServer && (
                  <SettingRow title="Port" description="The default network port for new servers.">
@@ -163,9 +200,16 @@ const DefaultSettingsForm: React.FC<{ isServer: boolean }> = ({ isServer }) => {
                 <textarea value={settings.jvmArgs} onChange={e => handleJvmArgsChange(e.target.value)} rows={2} className="w-full bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent font-mono text-sm"></textarea>
             </SettingRow>
 
-            <SettingRow title="Java Executable Path" description="The default Java executable used for new instances.">
+            <SettingRow title="Java 8 Executable Path" description="Path to Java 8 (for StarMade versions < 0.3.x). Defaults to bundled jre8.">
                  <div className="flex w-full">
-                  <input type="text" value={settings.javaPath} onChange={e => update('javaPath', e.target.value)} className="flex-1 bg-slate-900/80 border border-slate-700 rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
+                  <input type="text" value={settings.javaPath8} onChange={e => update('javaPath8', e.target.value)} className="flex-1 bg-slate-900/80 border border-slate-700 rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
+                  <button className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80"><FolderIcon className="w-5 h-5 text-gray-400" /></button>
+                </div>
+            </SettingRow>
+
+            <SettingRow title="Java 25 Executable Path" description="Path to Java 25 (for StarMade versions >= 0.3.x). Defaults to bundled jre25.">
+                 <div className="flex w-full">
+                  <input type="text" value={settings.javaPath25} onChange={e => update('javaPath25', e.target.value)} className="flex-1 bg-slate-900/80 border border-slate-700 rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
                   <button className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80"><FolderIcon className="w-5 h-5 text-gray-400" /></button>
                 </div>
             </SettingRow>

@@ -425,3 +425,20 @@ export async function resolveJavaPath(requiredVersion: 8 | 25, launcherDir: stri
   return null;
 }
 
+/**
+ * Get the default Java executable paths for jre8 and jre25 from the launcher directory.
+ * These paths may not exist yet if the JREs haven't been downloaded.
+ * @returns Object with jre8Path and jre25Path strings.
+ */
+export function getDefaultJavaPaths(launcherDir: string): { jre8Path: string; jre25Path: string } {
+  const jre8Path = process.platform === 'win32'
+    ? path.join(launcherDir, 'jre8', 'bin', 'javaw.exe')
+    : path.join(launcherDir, 'jre8', 'bin', 'java');
+  
+  const jre25Path = process.platform === 'win32'
+    ? path.join(launcherDir, 'jre25', 'bin', 'javaw.exe')
+    : path.join(launcherDir, 'jre25', 'bin', 'java');
+  
+  return { jre8Path, jre25Path };
+}
+
