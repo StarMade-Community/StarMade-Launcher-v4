@@ -309,6 +309,14 @@ ipcMain.handle(IPC.DIALOG_OPEN_FILE, async (_event, defaultPath?: string, type?:
   return result.filePaths[0];
 });
 
+// ─── Shell handlers ──────────────────────────────────────────────────────────
+
+ipcMain.handle(IPC.SHELL_OPEN_PATH, async (_event, targetPath: string) => {
+  const err = await shell.openPath(targetPath);
+  // openPath returns an empty string on success, or an error message on failure
+  return err === '' ? { success: true } : { success: false, error: err };
+});
+
 // ─── Auto-updater stub ───────────────────────────────────────────────────────
 // Full auto-update logic (electron-updater) will be wired in Phase 7/8.
 // The stub is kept here so Phase 7 only needs to uncomment/expand it.

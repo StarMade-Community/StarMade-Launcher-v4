@@ -160,6 +160,11 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
                             downloadStatus={downloadStatuses[item.id]}
                             onDownload={activeTab === 'installations' ? () => downloadVersion(item.id) : undefined}
                             onCancelDownload={activeTab === 'installations' ? () => cancelDownload(item.id) : undefined}
+                             onOpenFolder={
+                                typeof window !== 'undefined' && window.launcher?.shell
+                                    ? (path) => window.launcher.shell!.openPath(path)
+                                    : undefined
+                            }
                         />
                     ))}
                 </div>

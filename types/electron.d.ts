@@ -106,6 +106,12 @@ declare global {
         /** Open file picker dialog. Returns selected path or null if canceled. */
         openFile: (defaultPath?: string, type?: 'image') => Promise<string | null>;
       };
+
+      /** Shell APIs */
+      shell: {
+        /** Open a path in the native file manager. */
+        openPath: (targetPath: string) => Promise<{ success: boolean; error?: string }>;
+      };
     };
   }
 }

@@ -73,6 +73,11 @@ export const IPC = {
   DIALOG_OPEN_FOLDER: 'dialog:open-folder',
   /** Renderer → Main (invoke): open file picker dialog. Returns selected path or null. */
   DIALOG_OPEN_FILE: 'dialog:open-file',
+
+  // ─── Shell ──────────────────────────────────────────────────────────────────
+
+  /** Renderer → Main (invoke): open a path in the native file manager. */
+  SHELL_OPEN_PATH: 'shell:open-path',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

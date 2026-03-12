@@ -266,7 +266,16 @@ const Footer: React.FC = () => {
   const { installations } = useData();
   
   // Use the first installed installation as the default
-  const defaultInstallation = installations.find(inst => inst.installed !== false) || installations[0];
+  const defaultInstallation = installations.find(inst => inst.installed !== false);
+
+  const handleLaunchClick = () => {
+    if (!defaultInstallation) {
+      // No installed installation — send the user to the Installations page
+      navigate('Installations', { initialTab: 'installations' });
+      return;
+    }
+    openLaunchModal(defaultInstallation);
+  };
 
   return (
     <footer className="relative z-20 px-6 py-4 bg-black/20 backdrop-blur-sm border-t border-white/5">
@@ -280,7 +289,7 @@ const Footer: React.FC = () => {
 
             <SciFiPlayButton 
                 isUpdating={isLaunching}
-                onClick={() => openLaunchModal(defaultInstallation)}
+                onClick={handleLaunchClick}
                 onUpdateComplete={completeLaunching}
             />
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { CogIcon, FolderIcon, TrashIcon, PlayIcon, DownloadIcon, DocumentTextIcon } from './icons';
 import { getIconComponent } from '../../utils/getIconComponent';
 import type { ManagedItem, DownloadStatus } from '../../types';
@@ -11,6 +11,7 @@ interface ItemCardProps {
   onDelete?: (id: string) => void;
   onDownload?: () => void;
   onCancelDownload?: () => void;
+  onOpenFolder?: (path: string) => void;
   onViewLogs?: (item: ManagedItem) => void;
   actionButtonText: string;
   statusLabel: string;
@@ -24,13 +25,44 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
+function formatSpeed(bytesPerSec: number): string {
+  if (bytesPerSec >= 1e6) return `${(bytesPerSec / 1e6).toFixed(1)} MB/s`;
+  if (bytesPerSec >= 1e3) return `${(bytesPerSec / 1e3).toFixed(0)} KB/s`;
+  return `${Math.floor(bytesPerSec)} B/s`;
+}
+
 const ItemCard: React.FC<ItemCardProps> = ({
   item, isFeatured, onEdit, onDelete,
-  onDownload, onCancelDownload, onViewLogs,
+  onDownload, onCancelDownload, onOpenFolder, onViewLogs,
   actionButtonText, statusLabel,
   downloadStatus,
 }) => {
   const [isRunning, setIsRunning] = useState(false);
+  
+  // ── Download speed calculation (3-second rolling window) ──────────────────
+  const speedSamplesRef = useRef<{ bytes: number; time: number }[]>([]);
+  const [downloadSpeed, setDownloadSpeed] = useState(0);
+
+  useEffect(() => {
+    if (downloadStatus?.state !== 'downloading') {
+      speedSamplesRef.current = [];
+      setDownloadSpeed(0);
+      return;
+    }
+    const now = Date.now();
+    const bytes = downloadStatus.bytesReceived;
+    speedSamplesRef.current.push({ bytes, time: now });
+    // Keep only the last 3 seconds of samples
+    const cutoff = now - 3000;
+    speedSamplesRef.current = speedSamplesRef.current.filter(s => s.time >= cutoff);
+    const samples = speedSamplesRef.current;
+    if (samples.length >= 2) {
+      const oldest = samples[0];
+      const newest = samples[samples.length - 1];
+      const dt = (newest.time - oldest.time) / 1000;
+      if (dt > 0) setDownloadSpeed((newest.bytes - oldest.bytes) / dt);
+    }
+  }, [downloadStatus?.bytesReceived, downloadStatus?.state]);
   
   // Check if this installation is currently running
   useEffect(() => {
@@ -146,7 +178,12 @@ const ItemCard: React.FC<ItemCardProps> = ({
           )}
 
           <Tooltip text="Open Directory">
-            <button className="p-2 rounded-md hover:bg-white/10 transition-colors" aria-label="Open Folder">
+            <button
+              onClick={() => onOpenFolder?.(item.path)}
+              disabled={!onOpenFolder}
+              className="p-2 rounded-md hover:bg-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              aria-label="Open Folder"
+            >
               <FolderIcon className="w-5 h-5 text-gray-400" />
             </button>
           </Tooltip>
@@ -182,10 +219,15 @@ const ItemCard: React.FC<ItemCardProps> = ({
       {isActivelyDownloading && (
         <div className="flex flex-col gap-1">
           <div className="flex justify-between items-center text-xs text-gray-500">
-            <span className="font-mono truncate max-w-[65%]">{downloadStatus!.currentFile}</span>
-            {downloadStatus!.totalBytes > 0 && (
-              <span>{formatBytes(downloadStatus!.bytesReceived)} / {formatBytes(downloadStatus!.totalBytes)}</span>
-            )}
+            <span className="font-mono truncate max-w-[55%]">{downloadStatus!.currentFile}</span>
+            <div className="flex items-center gap-3 flex-shrink-0">
+              {downloadSpeed > 0 && (
+                <span className="text-starmade-accent font-semibold">{formatSpeed(downloadSpeed)}</span>
+              )}
+              {downloadStatus!.totalBytes > 0 && (
+                <span>{formatBytes(downloadStatus!.bytesReceived)} / {formatBytes(downloadStatus!.totalBytes)}</span>
+              )}
+            </div>
           </div>
           <div className="h-1.5 bg-black/50 rounded-full overflow-hidden">
             <div

@@ -152,6 +152,13 @@ const launcherApi = {
     openFile: (defaultPath?: string, type?: 'image'): Promise<string | null> =>
       ipcRenderer.invoke(IPC.DIALOG_OPEN_FILE, defaultPath, type),
   },
+
+  /** Shell APIs */
+  shell: {
+    /** Open a path in the native file manager. */
+    openPath: (targetPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.SHELL_OPEN_PATH, targetPath),
+  },
 };
 
 export type LauncherApi = typeof launcherApi;
