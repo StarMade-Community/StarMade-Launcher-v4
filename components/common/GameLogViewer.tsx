@@ -14,7 +14,6 @@ interface LogEntry {
   timestamp: string;
   level: 'INFO' | 'WARNING' | 'ERROR' | 'FATAL' | 'DEBUG' | 'stdout' | 'stderr';
   message: string;
-  isCrash?: boolean;
 }
 
 const GameLogViewer: React.FC<GameLogViewerProps> = ({ 
@@ -115,32 +114,53 @@ const GameLogViewer: React.FC<GameLogViewerProps> = ({
       if (data.installationId === installationId) {
         const timestamp = new Date().toLocaleTimeString();
         
-        // Detect crash messages
-        const isCrash = /exiting|crash|fatal error|segmentation fault|exception|stack trace/i.test(data.message);
-        
         const newLog: LogEntry = {
           timestamp,
           level: data.level as LogEntry['level'],
           message: data.message,
-          isCrash,
         };
         
         setLogs(prev => {
           const updated = [...prev, newLog];
           
-          // If crash detected, generate report and show modal
-          if (isCrash && !crashDetected) {
-            setCrashDetected(true);
-            // Generate report asynchronously
-            generateCrashReport(updated).then(report => {
-              setCrashReport(report);
-              setShowCrashReportModal(true);
-            }).catch(err => {
-              console.error('[Crash Report] Failed to generate report:', err);
-              // Fallback: still show modal with basic report
-              setCrashReport('Failed to generate full crash report. Check console logs.');
-              setShowCrashReportModal(true);
-            });
+          if (!crashDetected) {
+            // Only detect a crash when the game process has actually stopped.
+            //
+            // The launcher emits:
+            //   INFO  "Process exited with code <N>[, signal <S>]"  on normal/abnormal exit
+            //   ERROR "Process error: ..."                           if the JVM couldn't start
+            //
+            // We treat it as a crash only when:
+            //   a) the JVM itself errored out (always a crash), or
+            //   b) the exit code was non-zero AND the last ≤20 game-output lines
+            //      contained at least one ERROR or FATAL entry.
+            //
+            // This avoids false positives from mid-game FileNotFoundExceptions,
+            // OpenGL warnings, or any other non-fatal error printed to stderr.
+
+            const processExitMatch = data.message.match(/Process exited with code (-?\d+)/);
+            const isProcessError = data.level === 'ERROR' && /^Process error:/.test(data.message);
+
+            let shouldCrash = false;
+
+            if (isProcessError) {
+              shouldCrash = true;
+            } else if (processExitMatch) {
+              const exitCode = parseInt(processExitMatch[1], 10);
+              shouldCrash = exitCode !== 0;
+            }
+
+            if (shouldCrash) {
+              setCrashDetected(true);
+              generateCrashReport(updated).then(report => {
+                setCrashReport(report);
+                setShowCrashReportModal(true);
+              }).catch(err => {
+                console.error('[Crash Report] Failed to generate report:', err);
+                setCrashReport('Failed to generate full crash report. Check console logs.');
+                setShowCrashReportModal(true);
+              });
+            }
           }
           
           return updated;
@@ -215,23 +235,21 @@ const GameLogViewer: React.FC<GameLogViewerProps> = ({
     return true;
   });
 
-  const getLogLevelColor = (level: LogEntry['level'], isCrash?: boolean) => {
-    if (isCrash) return 'text-red-500 font-bold animate-pulse';
-    
+  const getLogLevelColor = (level: LogEntry['level']) => {
     switch (level) {
       case 'FATAL':
         return 'text-red-600 font-bold';
       case 'ERROR':
         return 'text-red-400';
-      case 'stderr':
-        // Routine JVM stderr output — neutral colour.  Real errors from stderr
-        // are promoted to 'ERROR' level before reaching the viewer.
-        return 'text-gray-400';
       case 'WARNING':
         return 'text-yellow-400';
       case 'INFO':
       case 'stdout':
         return 'text-blue-300';
+      case 'stderr':
+        // Routine JVM stderr output — neutral colour.  Real errors from stderr
+        // are promoted to 'ERROR' level before reaching the viewer.
+        return 'text-gray-400';
       case 'DEBUG':
         return 'text-gray-400';
       default:
@@ -366,10 +384,10 @@ const GameLogViewer: React.FC<GameLogViewerProps> = ({
               {filteredLogs.map((log, index) => (
                 <div key={index} className="flex gap-3 hover:bg-white/5 px-2 py-1 rounded">
                   <span className="text-gray-500 flex-shrink-0">{log.timestamp}</span>
-                  <span className={`flex-shrink-0 font-semibold ${getLogLevelColor(log.level, log.isCrash)}`}>
+                  <span className={`flex-shrink-0 font-semibold ${getLogLevelColor(log.level)}`}>
                     [{log.level.toUpperCase()}]
                   </span>
-                  <span className={`break-all ${log.isCrash ? 'text-red-300 font-semibold' : 'text-gray-300'}`}>
+                  <span className="break-all text-gray-300">
                     {log.message}
                   </span>
                 </div>
