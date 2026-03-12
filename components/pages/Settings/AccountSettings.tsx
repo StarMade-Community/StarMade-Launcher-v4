@@ -49,7 +49,8 @@ const AccountSettings: React.FC = () => {
         if (result.success) {
             goTo('list');
         } else {
-            setLoginError(result.error ?? 'Login failed.');
+            const failResult = result as { success: false; error: string };
+            setLoginError(failResult.error);
         }
     };
 

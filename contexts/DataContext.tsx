@@ -311,12 +311,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const loginAccount = useCallback(async (username: string, password: string): Promise<LoginResult> => {
         if (!hasAuth()) return { success: false, error: 'Auth API not available.' };
 
-        const result = await window.launcher.auth.login(username, password);
-        if (result.success && result.accountId && result.username) {
+        const raw = await window.launcher.auth.login(username, password);
+        if (raw.success && raw.accountId && raw.username) {
             const newAccount: Account = {
-                id:   result.accountId,
-                name: result.username,
-                uuid: result.uuid,
+                id:   raw.accountId,
+                name: raw.username,
+                uuid: raw.uuid,
             };
             setAccounts(prev => {
                 // Replace if already exists (re-login), otherwise prepend
@@ -326,8 +326,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 return [newAccount, ...prev];
             });
             setActiveAccount(newAccount);
+            return { success: true, accountId: raw.accountId, username: raw.username, uuid: raw.uuid, expiresIn: raw.expiresIn ?? 3600 };
         }
-        return result as LoginResult;
+        return { success: false, error: raw.error ?? 'Login failed.' };
     }, []);
 
     const logoutAccount = useCallback(async (accountId: string): Promise<void> => {
