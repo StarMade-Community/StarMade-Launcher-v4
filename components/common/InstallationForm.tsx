@@ -105,12 +105,58 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
   const [jvmArgs, setJvmArgs] = useState('-Xms4G -Xmx8G');
   const [showMoreOptions, setShowMoreOptions] = useState(false);
   const [isIconPickerOpen, setIconPickerOpen] = useState(false);
+  const [defaultsLoaded, setDefaultsLoaded] = useState(false);
 
   // Versions filtered to the currently selected branch
   const filteredVersions: Version[] = allVersions.filter(v => v.type === type);
   const versionOptions = filteredVersions.length > 0
     ? filteredVersions.map(v => ({ value: v.id, label: v.id }))
     : [{ value: version, label: version }]; // fallback while loading
+
+  // Load default settings from store when creating a new installation/server
+  useEffect(() => {
+    if (!isNew || defaultsLoaded || typeof window === 'undefined' || !window.launcher?.store) {
+      return;
+    }
+
+    const storeKey = itemTypeName === 'Server' 
+      ? 'defaultServerSettings' 
+      : 'defaultInstallationSettings';
+
+    window.launcher.store.get(storeKey).then((stored) => {
+      if (stored && typeof stored === 'object') {
+        const defaults = stored as {
+          gameDir?: string;
+          port?: string;
+          javaMemory?: number;
+          jvmArgs?: string;
+          javaPath8?: string;
+          javaPath25?: string;
+        };
+
+        if (defaults.gameDir) setGameDir(defaults.gameDir);
+        if (defaults.port && itemTypeName === 'Server') setPort(defaults.port);
+        if (defaults.javaMemory) setJavaMemory(defaults.javaMemory);
+        if (defaults.jvmArgs) setJvmArgs(defaults.jvmArgs);
+        
+        // Set the appropriate Java path based on required version
+        if (requiredJavaVersion === 8 && defaults.javaPath8) {
+          setJavaPath(defaults.javaPath8);
+        } else if (requiredJavaVersion === 25 && defaults.javaPath25) {
+          setJavaPath(defaults.javaPath25);
+        } else if (requiredJavaVersion === 8 && defaults.javaPath8) {
+          setJavaPath(defaults.javaPath8);
+        } else if (defaults.javaPath8) {
+          // Fallback to Java 8 path if no specific version is required yet
+          setJavaPath(defaults.javaPath8);
+        }
+      }
+      setDefaultsLoaded(true);
+    }).catch((error) => {
+      console.error('Failed to load default settings:', error);
+      setDefaultsLoaded(true);
+    });
+  }, [isNew, itemTypeName, requiredJavaVersion, defaultsLoaded]);
 
   // When branch changes, auto-select the first available version in that branch
   const handleTypeChange = (newType: string) => {
@@ -140,6 +186,35 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
     if (entry?.requiredJavaVersion !== undefined) setRequiredJavaVersion(entry.requiredJavaVersion);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allVersions]);
+
+  // Update Java path when required Java version changes
+  useEffect(() => {
+    if (!isNew || !defaultsLoaded || typeof window === 'undefined' || !window.launcher?.store) {
+      return;
+    }
+
+    const storeKey = itemTypeName === 'Server' 
+      ? 'defaultServerSettings' 
+      : 'defaultInstallationSettings';
+
+    window.launcher.store.get(storeKey).then((stored) => {
+      if (stored && typeof stored === 'object') {
+        const defaults = stored as {
+          javaPath8?: string;
+          javaPath25?: string;
+        };
+
+        // Update Java path based on the new required version
+        if (requiredJavaVersion === 8 && defaults.javaPath8) {
+          setJavaPath(defaults.javaPath8);
+        } else if (requiredJavaVersion === 25 && defaults.javaPath25) {
+          setJavaPath(defaults.javaPath25);
+        }
+      }
+    }).catch((error) => {
+      console.error('Failed to update Java path:', error);
+    });
+  }, [requiredJavaVersion, isNew, itemTypeName, defaultsLoaded]);
 
   useEffect(() => {
     const memoryInGB = javaMemory / 1024;
