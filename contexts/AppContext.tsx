@@ -9,6 +9,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const [isLaunchModalOpen, setIsLaunchModalOpen] = useState(false);
     const [isLaunching, setIsLaunching] = useState(false);
     const [launchError, setLaunchError] = useState<string | null>(null);
+    const [launchStatus, setLaunchStatus] = useState<string | null>(null);
     const [pendingLaunchInstallation, setPendingLaunchInstallation] = useState<ManagedItem | null>(null);
     const [logViewerOpen, setLogViewerOpen] = useState(false);
     const [logViewerInstallation, setLogViewerInstallation] = useState<ManagedItem | null>(null);
@@ -37,6 +38,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setIsLaunchModalOpen(false);
         setIsLaunching(true);
         setLaunchError(null);
+        setLaunchStatus(null);
 
         if (!installation) {
             console.error("No installation selected to launch");
@@ -51,6 +53,35 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             setLaunchError("Game launch API not available. Running in browser mode?");
             setIsLaunching(false);
             return;
+        }
+
+        // ── Pre-launch: ensure the required Java version is available ────────
+        const requiredJava = installation.requiredJavaVersion;
+        if (requiredJava && window.launcher.java) {
+            try {
+                const runtimes = await window.launcher.java.list();
+                const allRuntimes = [...runtimes.bundled, ...runtimes.system];
+                const hasJava = allRuntimes.some(j => {
+                    const v = parseInt(j.version, 10);
+                    return requiredJava === 8 ? (v >= 8 && v < 9) : (v >= requiredJava);
+                });
+
+                if (!hasJava) {
+                    setLaunchStatus(`Downloading Java ${requiredJava}…`);
+                    const result = await window.launcher.java.download(requiredJava);
+                    if (!result.success) {
+                        setLaunchError(`Java ${requiredJava} is required but could not be downloaded: ${result.error ?? 'unknown error'}`);
+                        setIsLaunching(false);
+                        setLaunchStatus(null);
+                        return;
+                    }
+                }
+            } catch (err) {
+                // Non-fatal — proceed and let the launcher handle missing Java
+                console.warn('[AppContext] Java pre-check failed:', err);
+            } finally {
+                setLaunchStatus(null);
+            }
         }
 
         try {
@@ -113,6 +144,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         isLaunchModalOpen,
         isLaunching,
         launchError,
+        launchStatus,
         logViewerOpen,
         logViewerInstallation,
         navigate,

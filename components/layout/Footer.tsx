@@ -161,11 +161,12 @@ const InstallationSelector: React.FC = () => {
 
 interface SciFiPlayButtonProps {
     isUpdating: boolean;
+    statusLabel?: string | null;
     onClick: () => void;
     onUpdateComplete: () => void;
 }
 
-const SciFiPlayButton: React.FC<SciFiPlayButtonProps> = ({ isUpdating, onClick, onUpdateComplete }) => {
+const SciFiPlayButton: React.FC<SciFiPlayButtonProps> = ({ isUpdating, statusLabel, onClick, onUpdateComplete }) => {
     const [progress, setProgress] = useState(0);
 
     useEffect(() => {
@@ -240,7 +241,7 @@ const SciFiPlayButton: React.FC<SciFiPlayButtonProps> = ({ isUpdating, onClick, 
 
             <div className="relative z-10 flex items-center justify-center h-full w-full">
                 <span className="text-2xl">
-                    {isUpdating ? `Updating... ${Math.floor(progress)}%` : 'Launch'}
+                    {isUpdating ? (statusLabel || 'Launching…') : 'Launch'}
                 </span>
             </div>
         </button>
@@ -249,7 +250,7 @@ const SciFiPlayButton: React.FC<SciFiPlayButtonProps> = ({ isUpdating, onClick, 
 
 
 const Footer: React.FC = () => {
-  const { navigate, isLaunching, openLaunchModal, completeLaunching } = useApp();
+  const { navigate, isLaunching, launchStatus, openLaunchModal, completeLaunching } = useApp();
   const { installations } = useData();
   
   // Use the first installed installation as the default
@@ -276,6 +277,7 @@ const Footer: React.FC = () => {
 
             <SciFiPlayButton 
                 isUpdating={isLaunching}
+                statusLabel={launchStatus}
                 onClick={handleLaunchClick}
                 onUpdateComplete={completeLaunching}
             />
