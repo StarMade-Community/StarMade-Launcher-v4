@@ -383,6 +383,53 @@ ipcMain.handle(IPC.ICONS_LIST, async () => {
   return [...listImagesInDir(bundledDir), ...listImagesInDir(userDir)];
 });
 
+// ─── Legacy installation detection ───────────────────────────────────────────
+
+/**
+ * Recursively walk `dir` looking for folders that contain `StarMade.jar`.
+ * Stops recursing once `depth` exceeds `maxDepth` to avoid scanning the
+ * whole file system.
+ */
+function findLegacyInstalls(dir: string, maxDepth = 4, depth = 0): string[] {
+  if (depth > maxDepth) return [];
+  try {
+    if (!fs.existsSync(dir)) return [];
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const results: string[] = [];
+    let hasJar = false;
+
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name === 'StarMade.jar') {
+        hasJar = true;
+      } else if (entry.isDirectory() && entry.name !== 'node_modules') {
+        results.push(...findLegacyInstalls(path.join(dir, entry.name), maxDepth, depth + 1));
+      }
+    }
+
+    if (hasJar) results.unshift(dir);
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+ipcMain.handle(IPC.LEGACY_SCAN, async () => {
+  const searchRoots = new Set<string>([
+    process.cwd(),
+    app.getAppPath(),
+  ]);
+
+  const found = new Set<string>();
+  for (const root of searchRoots) {
+    findLegacyInstalls(root).forEach(p => found.add(p));
+  }
+  return Array.from(found);
+});
+
+ipcMain.handle(IPC.LEGACY_SCAN_FOLDER, async (_event, folderPath: string) => {
+  return findLegacyInstalls(folderPath);
+});
+
 // ─── Auto-updater stub ───────────────────────────────────────────────────────
 // Full auto-update logic (electron-updater) will be wired in Phase 7/8.
 // The stub is kept here so Phase 7 only needs to uncomment/expand it.
