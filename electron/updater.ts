@@ -255,7 +255,9 @@ export async function downloadUpdate(
 /**
  * Install (execute) a downloaded update file.
  *
- * • Windows NSIS .exe  → run the installer silently (/S flag) then quit.
+ * • Windows portable .exe → wait for the current process to exit via a
+ *                           PowerShell helper script, copy the new exe over
+ *                           the current one, then relaunch.
  * • Linux AppImage     → make executable, replace the running binary with
  *                         the new one (via a shell wrapper), then relaunch.
  * • macOS              → opens the GitHub releases page in the browser so
@@ -278,14 +280,44 @@ export async function installUpdate(installerPath: string): Promise<void> {
 
   try {
     if (plat === 'win32') {
-      // NSIS installers accept /S for a silent install.  The installer will
-      // overwrite the existing files and (optionally) relaunch the app.
-      spawn(installerPath, ['/S'], {
+      // The Windows build is a portable executable — there is no installer to
+      // run silently.  Instead, write a PowerShell helper script that waits
+      // for the current process to exit, copies the new exe over the current
+      // one, then relaunches it.
+      //
+      // Paths are passed via environment variables to avoid any shell-injection
+      // risk from special characters in file paths.  A random suffix on the
+      // script name prevents predictable temp-file collisions.
+      const currentExe = app.getPath('exe');
+
+      const uniqueSuffix = Math.random().toString(36).slice(2);
+      const scriptPath = path.join(os.tmpdir(), `starmade-update-${uniqueSuffix}.ps1`);
+      const script = [
+        `$src    = $env:UPDATE_SRC`,
+        `$dst    = $env:UPDATE_DST`,
+        `$procId = [int]$env:UPDATE_PID`,
+        `while (Get-Process -Id $procId -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500 }`,
+        `Copy-Item -Force $src $dst`,
+        `Start-Process $dst`,
+      ].join('\n');
+
+      fs.writeFileSync(scriptPath, script);
+
+      spawn('powershell.exe', [
+        '-WindowStyle', 'Hidden',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', scriptPath,
+      ], {
         detached: true,
         stdio: 'ignore',
+        env: {
+          ...process.env,
+          UPDATE_SRC: installerPath,
+          UPDATE_DST: currentExe,
+          UPDATE_PID: String(process.pid),
+        },
       }).unref();
 
-      // Quit so the installer can overwrite our files
       app.quit();
       return;
     }
