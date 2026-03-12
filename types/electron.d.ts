@@ -90,6 +90,8 @@ declare global {
           customJavaPath?: string;
           isServer?: boolean;
           serverPort?: number;
+          /** Active account id — used to inject the registry auth token into the game process. */
+          activeAccountId?: string;
         }) => Promise<{ success: boolean; pid?: number; error?: string }>;
         /** Stop a running game or server. */
         stop: (installationId: string) => Promise<{ success: boolean }>;
@@ -131,6 +133,43 @@ declare global {
       icons: {
         /** List available icon image paths (file:// URLs). */
         list: () => Promise<string[]>;
+      };
+
+      /** Account authentication APIs */
+      auth: {
+        /**
+         * Authenticate with the StarMade registry.
+         * Returns a safe summary — the raw token is held only in the main process.
+         */
+        login: (username: string, password: string) => Promise<{
+          success: boolean;
+          accountId?: string;
+          username?: string;
+          uuid?: string;
+          expiresIn?: number;
+          error?: string;
+        }>;
+        /** Log out an account and clear its stored tokens. */
+        logout: (accountId: string) => Promise<{ success: boolean }>;
+        /** Refresh the access token for an account. */
+        refresh: (accountId: string) => Promise<{
+          success: boolean;
+          accountId?: string;
+          username?: string;
+          expiresIn?: number;
+          error?: string;
+        }>;
+        /** Register a new StarMade registry account. */
+        register: (
+          username: string,
+          email: string,
+          password: string,
+          subscribeToNewsletter: boolean,
+        ) => Promise<{ success: boolean; error?: string }>;
+        /**
+         * Get the current auth status for an account without a network call.
+         */
+        getStatus: (accountId: string) => Promise<{ authenticated: boolean; expired: boolean }>;
       };
 
       /** Legacy installation detection APIs */

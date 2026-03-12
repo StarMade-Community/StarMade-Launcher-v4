@@ -178,6 +178,8 @@ export interface LaunchOptions {
   isServer?: boolean;
   serverPort?: number;
   launcherDir: string;
+  /** Access token from the StarMade registry. Passed as `-auth <token>` when present. */
+  authToken?: string;
 }
 
 export interface LaunchResult {
@@ -201,6 +203,7 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
     isServer = false,
     serverPort,
     launcherDir,
+    authToken,
   } = options;
 
   // Check if already running
@@ -274,6 +277,14 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
       if (serverPort) {
         args.push('-port', String(serverPort));
       }
+    }
+
+    // Pass the authentication token to the game so players don't need to
+    // log in again through the in-game menu (mirrors v2 launcher behaviour).
+    if (authToken) {
+      // The game expects the token as a single combined argument: "-auth <token>"
+      args.push(`-auth ${authToken}`);
+      sendLogEvent(installationId, 'INFO', 'Auth token injected.');
     }
 
     console.log(`[Launcher] Launching: ${javaPath} ${args.join(' ')}`);

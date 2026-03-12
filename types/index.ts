@@ -30,6 +30,25 @@ export interface Account {
     id: string;
     name: string;
     uuid?: string;
+    /** True for local/offline-only accounts (no registry token). */
+    isGuest?: boolean;
+}
+
+// ─── Auth types ───────────────────────────────────────────────────────────────
+
+export type LoginResult =
+  | {
+      success: true;
+      accountId: string;
+      username: string;
+      uuid?: string;
+      expiresIn: number;
+    }
+  | { success: false; error: string };
+
+export interface RegisterResult {
+  success: boolean;
+  error?: string;
 }
 
 export interface Version {
@@ -117,6 +136,14 @@ export interface DataContextType {
     // Installation / server mutations
     setActiveAccount: (account: Account | null) => void;
     setAccounts: (accounts: Account[]) => void;
+    /** Log in to the StarMade registry and add the account (main-process call). */
+    loginAccount: (username: string, password: string) => Promise<LoginResult>;
+    /** Log out an account, clear its tokens, and remove it from the accounts list. */
+    logoutAccount: (accountId: string) => Promise<void>;
+    /** Register a new StarMade registry account (main-process call). */
+    registerAccount: (username: string, email: string, password: string, subscribeToNewsletter: boolean) => Promise<RegisterResult>;
+    /** Add an offline/guest account that plays without registry authentication. */
+    addGuestAccount: (playerName: string) => void;
     setSelectedVersion: (version: Version) => void;
     addInstallation: (item: ManagedItem) => void;
     updateInstallation: (item: ManagedItem) => void;

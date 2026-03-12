@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
-import type { DataContextType, ManagedItem, Account, Version, DownloadStatus, DownloadProgress } from '../types';
+import type { DataContextType, ManagedItem, Account, Version, DownloadStatus, DownloadProgress, LoginResult, RegisterResult } from '../types';
 
 // ─── Store keys ──────────────────────────────────────────────────────────────
 
@@ -37,6 +37,7 @@ const DEFAULT_SERVER: Omit<ManagedItem, 'id'> = {
 const hasStore    = (): boolean => typeof window !== 'undefined' && typeof window.launcher?.store    !== 'undefined';
 const hasVersions = (): boolean => typeof window !== 'undefined' && typeof window.launcher?.versions !== 'undefined';
 const hasDownload = (): boolean => typeof window !== 'undefined' && typeof window.launcher?.download !== 'undefined';
+const hasAuth     = (): boolean => typeof window !== 'undefined' && typeof window.launcher?.auth     !== 'undefined';
 
 // ─── Context ─────────────────────────────────────────────────────────────────
 
@@ -305,6 +306,60 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         });
     }, []);
 
+    // ── Auth actions ─────────────────────────────────────────────────────────
+
+    const loginAccount = useCallback(async (username: string, password: string): Promise<LoginResult> => {
+        if (!hasAuth()) return { success: false, error: 'Auth API not available.' };
+
+        const result = await window.launcher.auth.login(username, password);
+        if (result.success && result.accountId && result.username) {
+            const newAccount: Account = {
+                id:   result.accountId,
+                name: result.username,
+                uuid: result.uuid,
+            };
+            setAccounts(prev => {
+                // Replace if already exists (re-login), otherwise prepend
+                if (prev.some(a => a.id === newAccount.id)) {
+                    return prev.map(a => a.id === newAccount.id ? newAccount : a);
+                }
+                return [newAccount, ...prev];
+            });
+            setActiveAccount(newAccount);
+        }
+        return result as LoginResult;
+    }, []);
+
+    const logoutAccount = useCallback(async (accountId: string): Promise<void> => {
+        if (hasAuth()) {
+            await window.launcher.auth.logout(accountId).catch(() => {});
+        }
+        setAccounts(prev => prev.filter(a => a.id !== accountId));
+        setActiveAccount(prev => (prev?.id === accountId ? null : prev));
+    }, []);
+
+    const registerAccount = useCallback(async (
+        username: string,
+        email: string,
+        password: string,
+        subscribeToNewsletter: boolean,
+    ): Promise<RegisterResult> => {
+        if (!hasAuth()) return { success: false, error: 'Auth API not available.' };
+        return window.launcher.auth.register(username, email, password, subscribeToNewsletter);
+    }, []);
+
+    const addGuestAccount = useCallback((playerName: string): void => {
+        const trimmed = playerName.trim();
+        if (!trimmed) return;
+        const guestAccount: Account = {
+            id:      `offline-${Date.now()}`,
+            name:    trimmed,
+            isGuest: true,
+        };
+        setAccounts(prev => [guestAccount, ...prev]);
+        setActiveAccount(guestAccount);
+    }, []);
+
     const value: DataContextType = {
         accounts,
         activeAccount,
@@ -316,6 +371,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         isVersionsLoading,
         setActiveAccount,
         setAccounts,
+        loginAccount,
+        logoutAccount,
+        registerAccount,
+        addGuestAccount,
         setSelectedVersion,
         addInstallation,
         updateInstallation,
