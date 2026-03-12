@@ -130,13 +130,7 @@ const GameLogViewer: React.FC<GameLogViewerProps> = ({
             //   INFO  "Process exited with code <N>[, signal <S>]"  on normal/abnormal exit
             //   ERROR "Process error: ..."                           if the JVM couldn't start
             //
-            // We treat it as a crash only when:
-            //   a) the JVM itself errored out (always a crash), or
-            //   b) the exit code was non-zero AND the last ≤20 game-output lines
-            //      contained at least one ERROR or FATAL entry.
-            //
-            // This avoids false positives from mid-game FileNotFoundExceptions,
-            // OpenGL warnings, or any other non-fatal error printed to stderr.
+            // A non-zero exit code = crash; exit code 0 = clean shutdown.
 
             const processExitMatch = data.message.match(/Process exited with code (-?\d+)/);
             const isProcessError = data.level === 'ERROR' && /^Process error:/.test(data.message);
