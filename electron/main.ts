@@ -366,7 +366,7 @@ function listImagesInDir(dir: string): string[] {
 
 ipcMain.handle(IPC.BACKGROUNDS_LIST, async () => {
   const userDir    = path.join(app.getPath('userData'), 'backgrounds');
-  const bundledDir = path.join(__dirname, '..', 'backgrounds');
+  const bundledDir = path.join(__dirname, '..', 'presets', 'backgrounds');
 
   try { fs.mkdirSync(userDir, { recursive: true }); } catch { /* ignore */ }
 
@@ -375,7 +375,7 @@ ipcMain.handle(IPC.BACKGROUNDS_LIST, async () => {
 
 ipcMain.handle(IPC.ICONS_LIST, async () => {
   const userDir    = path.join(app.getPath('userData'), 'icons');
-  const bundledDir = path.join(__dirname, '..', 'icons');
+  const bundledDir = path.join(__dirname, '..', 'presets', 'icons');
 
   // Ensure the user icons folder exists so they know where to put images
   try { fs.mkdirSync(userDir, { recursive: true }); } catch { /* ignore */ }
@@ -392,7 +392,7 @@ ipcMain.handle(IPC.ICONS_LIST, async () => {
  * `presetsInitialized`).
  */
 function copyPresetsToUserData(): void {
-  if (storeGet('presetsInitialized')) return;
+  if (storeGet('presetsInitialized') === true) return;
 
   const presetsDir = path.join(__dirname, '..', 'presets');
   const userDataDir = app.getPath('userData');
@@ -401,6 +401,8 @@ function copyPresetsToUserData(): void {
     { src: path.join(presetsDir, 'backgrounds'), dest: path.join(userDataDir, 'backgrounds') },
     { src: path.join(presetsDir, 'icons'),       dest: path.join(userDataDir, 'icons') },
   ];
+
+  let hadError = false;
 
   for (const { src, dest } of categories) {
     if (!fs.existsSync(src)) continue;
@@ -418,10 +420,14 @@ function copyPresetsToUserData(): void {
       }
     } catch (err) {
       console.error(`[presets] Failed to copy presets from ${src} to ${dest}:`, err);
+      hadError = true;
     }
   }
 
-  storeSet('presetsInitialized', true);
+  // Only mark as done when all copies succeeded so a transient error retries on next launch
+  if (!hadError) {
+    storeSet('presetsInitialized', true);
+  }
 }
 
 // ─── Auto-updater stub ───────────────────────────────────────────────────────
