@@ -123,10 +123,30 @@ See **[RELEASE.md](RELEASE.md)** for the full release process.
 
 ## 🧪 Testing
 
-Currently, there is no automated test suite. Phase 7 will add:
-- Unit tests with Vitest
-- E2E tests with Playwright
-- CI test runs before releases
+The project uses [Vitest](https://vitest.dev/) for unit tests and [React Testing Library](https://testing-library.com/docs/react-testing-library/intro/) for component tests.
+
+### Running tests
+
+```bash
+npm test              # run all tests once
+npm run test:watch    # run tests in watch mode
+npm run test:coverage # run tests and generate coverage report
+```
+
+### Test structure
+
+```
+tests/
+  setup.ts                          # global test setup (@testing-library/jest-dom)
+  unit/
+    java.test.ts                    # getRequiredJavaVersion, getJvmArgsForJava, parseJavaVersion
+    versions.test.ts                # parseBuildIndex (parsing, dedup, branch prefixes)
+    launcher.test.ts                # parseStarMadeLogLine, isStderrError
+    store.test.ts                   # storeGet, storeSet, storeDelete, disk persistence
+  components/
+    AboutSection.test.tsx           # rendering, links, attributes
+    MemorySlider.test.tsx           # rendering, clamping, snapping, callbacks
+```
 
 **Manual smoke testing:**
 1. Launch the app
