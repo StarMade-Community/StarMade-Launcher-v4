@@ -59,7 +59,7 @@ async function fetchText(url: string): Promise<string> {
 
 // ─── Parsing ─────────────────────────────────────────────────────────────────
 
-function parseBuildIndex(text: string, branch: string): FetchedVersion[] {
+export function parseBuildIndex(text: string, branch: string): FetchedVersion[] {
   const versions: FetchedVersion[] = [];
   const seen = new Set<string>();
 

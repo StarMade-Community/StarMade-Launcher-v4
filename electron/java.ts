@@ -297,7 +297,7 @@ export function findJavaExecutableInDir(dir: string): string | null {
  * Parse Java version from `java -version` output.
  * Returns the major version number (e.g. 8, 11, 17, 25).
  */
-function parseJavaVersion(versionOutput: string): number | null {
+export function parseJavaVersion(versionOutput: string): number | null {
   // Example outputs:
   // openjdk version "1.8.0_362"
   // openjdk version "11.0.18"

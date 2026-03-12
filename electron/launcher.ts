@@ -42,7 +42,7 @@ function sendLogEvent(installationId: string, level: 'INFO' | 'WARNING' | 'ERROR
  * Parse a StarMade log line to extract level and message.
  * Example format: "[2024-03-11 14:23:45] [INFO] Loading game data..."
  */
-function parseStarMadeLogLine(line: string): { level: 'INFO' | 'WARNING' | 'ERROR' | 'FATAL' | 'DEBUG'; message: string } | null {
+export function parseStarMadeLogLine(line: string): { level: 'INFO' | 'WARNING' | 'ERROR' | 'FATAL' | 'DEBUG'; message: string } | null {
   // Match: [timestamp] [LEVEL] message
   const match = line.match(/^\[([^\]]+)\]\s+\[([^\]]+)\]\s+(.+)$/);
   if (!match) return null;
@@ -148,7 +148,7 @@ function tailStarMadeLog(installationId: string, installationPath: string): fs.F
  *   - A stack-trace frame     ("  at com.example.Foo.bar(Foo.java:42)")
  *   - An explicit [ERROR]/[FATAL] prefix in the text
  */
-function isStderrError(line: string): boolean {
+export function isStderrError(line: string): boolean {
   // "SomeException:" or "SomeException " — catches NullPointerException, etc.
   if (/\w+Exception[:\s]/.test(line)) return true;
   // "Exception in thread "main" …"
