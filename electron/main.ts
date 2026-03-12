@@ -18,6 +18,7 @@ import { downloadJava, detectSystemJava, resolveJavaPath, getDefaultJavaPaths, f
 import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, getGraphicsInfo } from './launcher.js';
 import type { UpdateInfo } from './updater.js';
 import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from './updater.js';
+import { loginWithPassword, refreshAccessToken, registerAccount, logoutAccount, getAuthStatus, getAccessTokenForLaunch } from './auth.js';
 
 // ─── ES Module compatibility ─────────────────────────────────────────────────
 
@@ -233,9 +234,22 @@ ipcMain.handle(IPC.GAME_LAUNCH, async (_event, options: {
   customJavaPath?: string;
   isServer?: boolean;
   serverPort?: number;
+  /** The active account id — used to retrieve the stored auth token. */
+  activeAccountId?: string;
 }) => {
   const launcherDir = getLauncherDir();
-  return launchGame({ ...options, launcherDir });
+
+  // Resolve the auth token for the active account (returns null for guests/offline)
+  let authToken: string | null = null;
+  if (options.activeAccountId) {
+    try {
+      authToken = await getAccessTokenForLaunch(options.activeAccountId);
+    } catch (err) {
+      console.warn('[main] Failed to retrieve auth token for launch:', err);
+    }
+  }
+
+  return launchGame({ ...options, launcherDir, authToken: authToken ?? undefined });
 });
 
 ipcMain.handle(IPC.GAME_STOP, (_event, installationId: string) => {
@@ -481,6 +495,40 @@ ipcMain.handle(IPC.LEGACY_SCAN, async () => {
 
 ipcMain.handle(IPC.LEGACY_SCAN_FOLDER, async (_event, folderPath: string) => {
   return findLegacyInstalls(folderPath);
+});
+
+// ─── Auth IPC handlers ────────────────────────────────────────────────────────
+
+ipcMain.handle(IPC.AUTH_LOGIN, async (_event, { username, password }: { username: string; password: string }) => {
+  return loginWithPassword(username, password);
+});
+
+ipcMain.handle(IPC.AUTH_LOGOUT, (_event, { accountId }: { accountId: string }) => {
+  logoutAccount(accountId);
+  return { success: true };
+});
+
+ipcMain.handle(IPC.AUTH_REFRESH, async (_event, { accountId }: { accountId: string }) => {
+  return refreshAccessToken(accountId);
+});
+
+ipcMain.handle(
+  IPC.AUTH_REGISTER,
+  async (
+    _event,
+    {
+      username,
+      email,
+      password,
+      subscribeToNewsletter,
+    }: { username: string; email: string; password: string; subscribeToNewsletter: boolean },
+  ) => {
+    return registerAccount(username, email, password, subscribeToNewsletter);
+  },
+);
+
+ipcMain.handle(IPC.AUTH_GET_STATUS, (_event, { accountId }: { accountId: string }) => {
+  return getAuthStatus(accountId);
 });
 
 // ─── Auto-updater ────────────────────────────────────────────────────────────

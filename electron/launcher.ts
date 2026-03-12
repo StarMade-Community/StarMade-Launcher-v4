@@ -178,6 +178,8 @@ export interface LaunchOptions {
   isServer?: boolean;
   serverPort?: number;
   launcherDir: string;
+  /** Access token from the StarMade registry. Passed as `-auth <token>` when present. */
+  authToken?: string;
 }
 
 export interface LaunchResult {
@@ -201,6 +203,7 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
     isServer = false,
     serverPort,
     launcherDir,
+    authToken,
   } = options;
 
   // Check if already running
@@ -276,10 +279,24 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
       }
     }
 
-    console.log(`[Launcher] Launching: ${javaPath} ${args.join(' ')}`);
+    // Pass the authentication token to the game so players don't need to
+    // log in again through the in-game menu (mirrors v2 launcher behaviour).
+    if (authToken) {
+      // The game expects the token as a single combined argument: "-auth <token>"
+      args.push(`-auth ${authToken}`);
+      sendLogEvent(installationId, 'INFO', 'Auth token injected.');
+    }
+
+    // Build a redacted copy of args for logging so the auth token is never
+    // written to any log in plaintext.
+    const safeArgs = authToken
+      ? args.map((a) => (a.includes(authToken) ? a.replaceAll(authToken, '[REDACTED]') : a))
+      : args;
+
+    console.log(`[Launcher] Launching: ${javaPath} ${safeArgs.join(' ')}`);
     console.log(`[Launcher] Working directory: ${installationPath}`);
 
-    sendLogEvent(installationId, 'INFO', `Command: ${args.join(' ')}`);
+    sendLogEvent(installationId, 'INFO', `Command: ${safeArgs.join(' ')}`);
 
     // Spawn the process
     const child = spawn(javaPath, args, {

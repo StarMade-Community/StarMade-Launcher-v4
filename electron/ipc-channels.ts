@@ -132,6 +132,43 @@ export const IPC = {
    * Used as the explicit fallback when the user chooses "Open in Browser".
    */
   UPDATER_OPEN_RELEASES_PAGE: 'updater:open-releases-page',
+
+  // ─── Account authentication ───────────────────────────────────────────────
+
+  /**
+   * Renderer → Main (invoke): authenticate with the StarMade registry.
+   * Payload: { username: string; password: string }
+   * Returns: LoginResult (see electron/auth.ts)
+   */
+  AUTH_LOGIN: 'auth:login',
+
+  /**
+   * Renderer → Main (invoke): log out / clear stored tokens for an account.
+   * Payload: { accountId: string }
+   * Returns: { success: true }
+   */
+  AUTH_LOGOUT: 'auth:logout',
+
+  /**
+   * Renderer → Main (invoke): refresh the access token for an account.
+   * Payload: { accountId: string }
+   * Returns: LoginResult
+   */
+  AUTH_REFRESH: 'auth:refresh',
+
+  /**
+   * Renderer → Main (invoke): register a new StarMade registry account.
+   * Payload: { username: string; email: string; password: string; subscribeToNewsletter: boolean }
+   * Returns: { success: boolean; error?: string }
+   */
+  AUTH_REGISTER: 'auth:register',
+
+  /**
+   * Renderer → Main (invoke): get the current auth status for an account (no network call).
+   * Payload: { accountId: string }
+   * Returns: { authenticated: boolean; expired: boolean }
+   */
+  AUTH_GET_STATUS: 'auth:get-status',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

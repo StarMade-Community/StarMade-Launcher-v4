@@ -1,9 +1,11 @@
 import React, { createContext, useContext, useState, ReactNode } from 'react';
 import type { AppContextType, Page, PageProps, ManagedItem } from '../types';
+import { useData } from './DataContext';
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+    const { activeAccount } = useData();
     const [activePage, setActivePage] = useState<Page>('Play');
     const [pageProps, setPageProps] = useState<PageProps>({});
     const [isLaunchModalOpen, setIsLaunchModalOpen] = useState(false);
@@ -94,6 +96,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 jvmArgs: installation.jvmArgs ?? '',
                 customJavaPath: installation.customJavaPath,
                 isServer: false,
+                // Pass the active account id so the main process can inject the
+                // registry auth token as a -auth <token> argument to the game.
+                activeAccountId: activeAccount?.id,
             });
 
             if (result.success) {

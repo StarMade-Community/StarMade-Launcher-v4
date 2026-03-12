@@ -172,6 +172,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
   const [showMoreOptions, setShowMoreOptions] = useState(false);
   const [isIconPickerOpen, setIconPickerOpen] = useState(false);
   const [defaultsLoaded, setDefaultsLoaded] = useState(false);
+  const [pathError, setPathError] = useState('');
 
   // Versions filtered to the currently selected branch
   const filteredVersions: Version[] = allVersions.filter(v => v.type === type);
@@ -301,17 +302,25 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
 
   // When creating a new item, the actual install path is baseDir/name.
   // When editing, the user controls the full path directly.
+  // Guard against empty gameDir so the hint doesn't show a bare "/name" path.
   const effectivePath = isNew
-    ? `${gameDir}/${toFolderName(name)}`
+    ? (gameDir ? `${gameDir}/${toFolderName(name)}` : '')
     : gameDir;
 
   const handleFolderPicker = async () => {
     if (typeof window === 'undefined' || !window.launcher?.dialog) return;
-    const selected = await window.launcher.dialog.openFolder(gameDir);
+    const selected = await window.launcher.dialog.openFolder(gameDir || undefined);
     if (selected) setGameDir(selected);
   };
 
   const handleSaveClick = () => {
+    // Require a directory to be set before saving
+    if (!gameDir.trim()) {
+      setPathError('Please choose a directory.');
+      return;
+    }
+    setPathError('');
+
     // Strip -Xms/-Xmx from jvmArgs before saving — the launcher applies those
     // separately via minMemory/maxMemory so we'd otherwise double-apply them.
     const extraJvmArgs = jvmArgs.split(/\s+/).filter(a => !a.startsWith('-Xm')).join(' ').trim();
@@ -414,12 +423,22 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         <div className="grid grid-cols-2 gap-x-8 gap-y-6">
           <FormField label={isNew ? 'Parent Directory' : 'Game Directory'} htmlFor="gameDir">
             <div className="flex">
-              <input id="gameDir" type="text" value={isNew ? gameDir : effectivePath} onChange={e => setGameDir(e.target.value)} className="flex-1 bg-slate-900/80 border border-slate-700 rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
+              <input
+                id="gameDir"
+                type="text"
+                value={isNew ? gameDir : effectivePath}
+                onChange={e => { setGameDir(e.target.value); setPathError(''); }}
+                placeholder="Click the folder icon to choose…"
+                className={`flex-1 bg-slate-900/80 border rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent ${pathError ? 'border-red-500' : 'border-slate-700'}`}
+              />
               <button onClick={handleFolderPicker} className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80 transition-colors"><FolderIcon className="w-5 h-5 text-gray-400" /></button>
             </div>
+            {pathError && <p className="text-xs text-red-400 mt-1">{pathError}</p>}
             {isNew && (
               <p className="text-xs text-gray-500 mt-1">
-                Will install to: <span className="text-gray-400 font-mono">{effectivePath}</span>
+                {effectivePath
+                  ? <>Will install to: <span className="text-gray-400 font-mono">{effectivePath}</span></>
+                  : 'Choose a parent directory — the game will be installed in a subfolder named after this installation.'}
               </p>
             )}
           </FormField>

@@ -118,6 +118,7 @@ const launcherApi = {
       customJavaPath?: string;
       isServer?: boolean;
       serverPort?: number;
+      activeAccountId?: string;
     }): Promise<{ success: boolean; pid?: number; error?: string }> =>
       ipcRenderer.invoke(IPC.GAME_LAUNCH, options),
 
@@ -193,6 +194,52 @@ const launcherApi = {
     /** Scan a specific folder (and its sub-directories) for legacy StarMade installations. */
     scanFolder: (folderPath: string): Promise<string[]> =>
       ipcRenderer.invoke(IPC.LEGACY_SCAN_FOLDER, folderPath),
+  },
+
+  /** Account authentication APIs */
+  auth: {
+    /**
+     * Authenticate with the StarMade registry (ROPC flow).
+     * Credentials are processed in the main process; the renderer only receives
+     * a safe summary (accountId, username, expiresIn) — never the raw token.
+     */
+    login: (username: string, password: string): Promise<{
+      success: boolean;
+      accountId?: string;
+      username?: string;
+      uuid?: string;
+      expiresIn?: number;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.AUTH_LOGIN, { username, password }),
+
+    /** Log out an account and clear its stored tokens. */
+    logout: (accountId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke(IPC.AUTH_LOGOUT, { accountId }),
+
+    /** Refresh the access token for an account. */
+    refresh: (accountId: string): Promise<{
+      success: boolean;
+      accountId?: string;
+      username?: string;
+      expiresIn?: number;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.AUTH_REFRESH, { accountId }),
+
+    /** Register a new StarMade registry account. */
+    register: (
+      username: string,
+      email: string,
+      password: string,
+      subscribeToNewsletter: boolean,
+    ): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.AUTH_REGISTER, { username, email, password, subscribeToNewsletter }),
+
+    /**
+     * Get the current auth status for an account without a network call.
+     * Returns { authenticated, expired }.
+     */
+    getStatus: (accountId: string): Promise<{ authenticated: boolean; expired: boolean }> =>
+      ipcRenderer.invoke(IPC.AUTH_GET_STATUS, { accountId }),
   },
 
   /** Launcher auto-updater APIs */
