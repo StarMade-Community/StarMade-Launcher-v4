@@ -197,6 +197,9 @@ const LauncherSettings: React.FC = () => {
     };
 
     const handleImport = (installPath: string) => {
+        // Guard against duplicate imports (e.g. rapid double-click before re-render)
+        if (existingPaths.has(installPath) || importedPaths.has(installPath)) return;
+
         // Extract the last path segment as a display name (works on both / and \ separators)
         const folderName = installPath.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? 'legacy-install';
         const newItem = {
@@ -210,8 +213,11 @@ const LauncherSettings: React.FC = () => {
             lastPlayed: 'Never',
             installed: true,
         };
-        addInstallation(newItem);
-        setImportedPaths(prev => new Set([...prev, installPath]));
+        setImportedPaths(prev => {
+            if (prev.has(installPath)) return prev;
+            addInstallation(newItem);
+            return new Set([...prev, installPath]);
+        });
     };
 
     return (
