@@ -48,7 +48,7 @@
     "appId": "org.starmade.launcher",
     "productName": "StarMade Launcher",
     "copyright": "Copyright © 2026 Schine, GmbH",
-    "artifactName": "${productName}.${ext}",
+    "artifactName": "StarMade-Launcher.${ext}",
     "files": [
       "dist/**/*",
       "dist-electron/**/*",

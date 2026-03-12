@@ -155,6 +155,41 @@ const IconPickerModal: React.FC<IconPickerModalProps> = ({ onSelect, onClose }) 
     );
 };
 
+/**
+ * Resolve the effective Java path for a given required version, merging the
+ * item-type-specific defaults with installation defaults as a fallback for
+ * java paths when creating a server (which may not yet have its own paths set).
+ */
+async function resolveJavaPaths(
+  itemTypeName: string,
+): Promise<{ javaPath8: string; javaPath25: string }> {
+  if (typeof window === 'undefined' || !window.launcher?.store) {
+    return { javaPath8: '', javaPath25: '' };
+  }
+
+  const storeKey = itemTypeName === 'Server' ? 'defaultServerSettings' : 'defaultInstallationSettings';
+
+  const stored = await window.launcher.store.get(storeKey).catch(() => null);
+  const defaults = (stored && typeof stored === 'object') ? stored as {
+    javaPath8?: string;
+    javaPath25?: string;
+  } : {};
+
+  // For servers, fall back to installation defaults when server-specific paths are empty
+  let installDefaults: { javaPath8?: string; javaPath25?: string } = {};
+  if (itemTypeName === 'Server' && !defaults.javaPath8 && !defaults.javaPath25) {
+    const instStored = await window.launcher.store.get('defaultInstallationSettings').catch(() => null);
+    if (instStored && typeof instStored === 'object') {
+      installDefaults = instStored as { javaPath8?: string; javaPath25?: string };
+    }
+  }
+
+  return {
+    javaPath8:  defaults.javaPath8  || installDefaults.javaPath8  || '',
+    javaPath25: defaults.javaPath25 || installDefaults.javaPath25 || '',
+  };
+}
+
 const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave, onCancel, itemTypeName }) => {
   const { versions: allVersions, isVersionsLoading } = useData();
 
@@ -190,34 +225,29 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
       ? 'defaultServerSettings' 
       : 'defaultInstallationSettings';
 
-    window.launcher.store.get(storeKey).then((stored) => {
-      if (stored && typeof stored === 'object') {
-        const defaults = stored as {
-          gameDir?: string;
-          port?: string;
-          javaMemory?: number;
-          jvmArgs?: string;
-          javaPath8?: string;
-          javaPath25?: string;
-        };
+    window.launcher.store.get(storeKey).then(async (stored) => {
+      const defaults = (stored && typeof stored === 'object') ? stored as {
+        gameDir?: string;
+        port?: string;
+        javaMemory?: number;
+        jvmArgs?: string;
+        javaPath8?: string;
+        javaPath25?: string;
+      } : {};
 
-        if (defaults.gameDir) setGameDir(defaults.gameDir);
-        if (defaults.port && itemTypeName === 'Server') setPort(defaults.port);
-        if (defaults.javaMemory) setJavaMemory(defaults.javaMemory);
-        if (defaults.jvmArgs) setJvmArgs(defaults.jvmArgs);
-        
-        // Set the appropriate Java path based on required version
-        if (requiredJavaVersion === 8 && defaults.javaPath8) {
-          setJavaPath(defaults.javaPath8);
-        } else if (requiredJavaVersion === 25 && defaults.javaPath25) {
-          setJavaPath(defaults.javaPath25);
-        } else if (requiredJavaVersion === 8 && defaults.javaPath8) {
-          setJavaPath(defaults.javaPath8);
-        } else if (defaults.javaPath8) {
-          // Fallback to Java 8 path if no specific version is required yet
-          setJavaPath(defaults.javaPath8);
-        }
+      if (defaults.gameDir) setGameDir(defaults.gameDir);
+      if (defaults.port && itemTypeName === 'Server') setPort(defaults.port);
+      if (defaults.javaMemory) setJavaMemory(defaults.javaMemory);
+      if (defaults.jvmArgs) setJvmArgs(defaults.jvmArgs);
+
+      // Resolve Java paths (with installation-defaults fallback for servers)
+      const { javaPath8, javaPath25 } = await resolveJavaPaths(itemTypeName);
+      if (requiredJavaVersion === 25 && javaPath25) {
+        setJavaPath(javaPath25);
+      } else if (javaPath8) {
+        setJavaPath(javaPath8);
       }
+
       setDefaultsLoaded(true);
     }).catch((error) => {
       console.error('Failed to load default settings:', error);
@@ -260,23 +290,11 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
       return;
     }
 
-    const storeKey = itemTypeName === 'Server' 
-      ? 'defaultServerSettings' 
-      : 'defaultInstallationSettings';
-
-    window.launcher.store.get(storeKey).then((stored) => {
-      if (stored && typeof stored === 'object') {
-        const defaults = stored as {
-          javaPath8?: string;
-          javaPath25?: string;
-        };
-
-        // Update Java path based on the new required version
-        if (requiredJavaVersion === 8 && defaults.javaPath8) {
-          setJavaPath(defaults.javaPath8);
-        } else if (requiredJavaVersion === 25 && defaults.javaPath25) {
-          setJavaPath(defaults.javaPath25);
-        }
+    resolveJavaPaths(itemTypeName).then(({ javaPath8, javaPath25 }) => {
+      if (requiredJavaVersion === 25 && javaPath25) {
+        setJavaPath(javaPath25);
+      } else if (javaPath8) {
+        setJavaPath(javaPath8);
       }
     }).catch((error) => {
       console.error('Failed to update Java path:', error);

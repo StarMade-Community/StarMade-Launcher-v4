@@ -66,6 +66,8 @@ export interface ManagedItem {
 export interface Account {
     id: string;
     name: string;
+    /** Optional user-defined display name shown in place of the registry username. */
+    displayName?: string;
     uuid?: string;
     /** True for local/offline-only accounts (no registry token). */
     isGuest?: boolean;
@@ -186,7 +188,7 @@ export interface DataContextType {
     setActiveAccount: (account: Account | null) => void;
     setAccounts: (accounts: Account[]) => void;
     /** Log in to the StarMade registry and add the account (main-process call). */
-    loginAccount: (username: string, password: string) => Promise<LoginResult>;
+    loginAccount: (username: string, password: string, displayName?: string) => Promise<LoginResult>;
     /** Log out an account, clear its tokens, and remove it from the accounts list. */
     logoutAccount: (accountId: string) => Promise<void>;
     /** Register a new StarMade registry account (main-process call). */

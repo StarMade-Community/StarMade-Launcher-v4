@@ -357,7 +357,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     // ── Auth actions ─────────────────────────────────────────────────────────
 
-    const loginAccount = useCallback(async (username: string, password: string): Promise<LoginResult> => {
+    const loginAccount = useCallback(async (username: string, password: string, displayName?: string): Promise<LoginResult> => {
         if (!hasAuth()) return { success: false, error: 'Auth API not available.' };
 
         const raw = await window.launcher.auth.login(username, password);
@@ -366,6 +366,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 id:   raw.accountId,
                 name: raw.username,
                 uuid: raw.uuid,
+                ...(displayName?.trim() ? { displayName: displayName.trim() } : {}),
             };
             setAccounts(prev => {
                 // Replace if already exists (re-login), otherwise prepend
