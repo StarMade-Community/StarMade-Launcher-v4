@@ -215,7 +215,7 @@ const DefaultSettingsForm: React.FC<{ isServer: boolean }> = ({ isServer }) => {
             <SettingRow title="JVM Arguments" description="Java arguments for advanced users. Memory is managed above.">
                 <textarea value={settings.jvmArgs} onChange={e => handleJvmArgsChange(e.target.value)} rows={2} className="w-full bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent font-mono text-sm"></textarea>
             </SettingRow>
-T
+
             <SettingRow title="Java 8 Executable Path" description="Path to Java 8 (for StarMade versions < 0.3.x). Defaults to bundled jre8.">
                  <div className="flex w-full">
                   <input type="text" value={settings.javaPath8} onChange={e => update('javaPath8', e.target.value)} className="flex-1 bg-slate-900/80 border border-slate-700 rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
