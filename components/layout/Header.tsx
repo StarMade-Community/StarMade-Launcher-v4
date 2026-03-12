@@ -183,15 +183,7 @@ const UserProfile: React.FC = () => {
                             </li>
                              <li>
                                 <button
-                                    onClick={() => {
-                                        // Remove temporary offline account from accounts list if present
-                                        if (activeAccount?.id.startsWith('offline-')) {
-                                            const { accounts, setAccounts } = useData();
-                                            setAccounts(accounts.filter(a => !a.id.startsWith('offline-')));
-                                        }
-                                        setActiveAccount(null);
-                                        setIsOpen(false);
-                                    }}
+                                    onClick={handleLogout}
                                     className="w-full flex items-center gap-3 px-2 py-2 text-left rounded-md hover:bg-red-900/20 transition-colors text-sm text-red-300 hover:text-red-200"
                                 >
                                     <ArrowRightOnRectangleIcon className="w-5 h-5" />

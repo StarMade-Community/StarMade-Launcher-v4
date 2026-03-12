@@ -104,7 +104,8 @@ export interface DataContextType {
     isVersionsLoading: boolean;
 
     // Installation / server mutations
-    setActiveAccount: (account: Account) => void;
+    setActiveAccount: (account: Account | null) => void;
+    setAccounts: (accounts: Account[]) => void;
     setSelectedVersion: (version: Version) => void;
     addInstallation: (item: ManagedItem) => void;
     updateInstallation: (item: ManagedItem) => void;

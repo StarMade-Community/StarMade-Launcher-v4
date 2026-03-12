@@ -197,11 +197,19 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // ── Persist on change (only after initial load) ──────────────────────────
 
     useEffect(() => {
-        if (isLoaded && hasStore()) window.launcher.store.set(SK_ACCOUNTS, accounts);
+        if (isLoaded && hasStore()) {
+            // Filter out temporary offline accounts before persisting
+            const persistableAccounts = accounts.filter(a => !a.id.startsWith('offline-'));
+            window.launcher.store.set(SK_ACCOUNTS, persistableAccounts);
+        }
     }, [accounts, isLoaded]);
 
     useEffect(() => {
-        if (isLoaded && hasStore()) window.launcher.store.set(SK_ACTIVE_ACCOUNT_ID, activeAccount?.id ?? null);
+        if (isLoaded && hasStore()) {
+            // Don't persist offline account IDs
+            const accountIdToPersist = activeAccount?.id.startsWith('offline-') ? null : activeAccount?.id ?? null;
+            window.launcher.store.set(SK_ACTIVE_ACCOUNT_ID, accountIdToPersist);
+        }
     }, [activeAccount, isLoaded]);
 
     useEffect(() => {
@@ -307,6 +315,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         downloadStatuses,
         isVersionsLoading,
         setActiveAccount,
+        setAccounts,
         setSelectedVersion,
         addInstallation,
         updateInstallation,
