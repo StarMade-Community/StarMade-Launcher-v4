@@ -135,33 +135,56 @@ async function extractTarGz(archivePath: string, targetDir: string): Promise<voi
   return new Promise((resolve, reject) => {
     const extract = tar.extract();
     const gunzip = createGunzip();
-    
     extract.on('entry', (header, stream, next) => {
       const filePath = path.join(targetDir, header.name);
-      
+
       if (header.type === 'directory') {
         fs.mkdirSync(filePath, { recursive: true });
-        stream.on('end', next);
         stream.resume();
+        stream.on('end', next);
+        stream.on('error', reject);
+
+      } else if (header.type === 'symlink' || header.type === 'link') {
+        // JDK archives contain many symlinks; create them instead of writing data.
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        try {
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+          fs.symlinkSync(header.linkname!, filePath);
+        } catch (err) {
+          // Non-fatal: symlink target may not exist yet in the archive order.
+          console.warn(`[Java] Warning: failed to create symlink ${filePath} -> ${header.linkname}:`, err);
+        }
+        stream.resume();
+        stream.on('end', next);
+        stream.on('error', reject);
+
       } else {
+        // Regular file — wait for the WriteStream to *finish* before chmod/next
+        // so the file is guaranteed to exist on disk.
         fs.mkdirSync(path.dirname(filePath), { recursive: true });
         const writeStream = fs.createWriteStream(filePath);
         stream.pipe(writeStream);
-        stream.on('end', () => {
-          // Set executable permissions on Unix
+
+        writeStream.on('finish', () => {
           if (header.mode && process.platform !== 'win32') {
-            fs.chmodSync(filePath, header.mode);
+            try {
+              fs.chmodSync(filePath, header.mode);
+            } catch (err) {
+              console.warn(`[Java] Warning: failed to chmod ${filePath}:`, err);
+            }
           }
           next();
         });
+
+        writeStream.on('error', reject);
+        stream.on('error', reject);
       }
-      
-      stream.on('error', reject);
     });
-    
+
     extract.on('finish', resolve);
     extract.on('error', reject);
-    
+    gunzip.on('error', reject);
+
     fs.createReadStream(archivePath).pipe(gunzip).pipe(extract);
   });
 }

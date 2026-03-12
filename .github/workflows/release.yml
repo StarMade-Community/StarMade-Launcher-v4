@@ -1,17 +1,13 @@
 name: Build and Release
 
 on:
-  # Trigger on version tags (e.g., v1.0.0, v0.1.0-beta)
-  push:
-    tags:
-      - 'v*'
   # Allow manual triggering from the Actions tab
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version number (e.g., 1.0.0)'
+        description: 'Version Number'
         required: true
-        default: '0.0.0'
+        default: '4.0.0'
 
 # Required for creating releases
 permissions:
