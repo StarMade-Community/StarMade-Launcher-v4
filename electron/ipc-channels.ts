@@ -78,6 +78,16 @@ export const IPC = {
 
   /** Renderer → Main (invoke): open a path in the native file manager. */
   SHELL_OPEN_PATH: 'shell:open-path',
+
+  // ─── Backgrounds ────────────────────────────────────────────────────────────
+
+  /** Renderer → Main (invoke): list available background image paths. */
+  BACKGROUNDS_LIST: 'backgrounds:list',
+
+  // ─── Icons ──────────────────────────────────────────────────────────────────
+
+  /** Renderer → Main (invoke): list available icon image paths. */
+  ICONS_LIST: 'icons:list',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

@@ -313,8 +313,41 @@ ipcMain.handle(IPC.DIALOG_OPEN_FILE, async (_event, defaultPath?: string, type?:
 
 ipcMain.handle(IPC.SHELL_OPEN_PATH, async (_event, targetPath: string) => {
   const err = await shell.openPath(targetPath);
-  // openPath returns an empty string on success, or an error message on failure
   return err === '' ? { success: true } : { success: false, error: err };
+});
+
+// ─── Backgrounds handler ─────────────────────────────────────────────────────
+
+const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
+
+function listImagesInDir(dir: string): string[] {
+  try {
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir)
+      .filter(f => IMAGE_EXTS.has(path.extname(f).toLowerCase()))
+      .map(f => `file://${path.join(dir, f)}`);
+  } catch {
+    return [];
+  }
+}
+
+ipcMain.handle(IPC.BACKGROUNDS_LIST, async () => {
+  const userDir    = path.join(app.getPath('userData'), 'backgrounds');
+  const bundledDir = path.join(__dirname, '..', 'backgrounds');
+
+  try { fs.mkdirSync(userDir, { recursive: true }); } catch { /* ignore */ }
+
+  return [...listImagesInDir(bundledDir), ...listImagesInDir(userDir)];
+});
+
+ipcMain.handle(IPC.ICONS_LIST, async () => {
+  const userDir    = path.join(app.getPath('userData'), 'icons');
+  const bundledDir = path.join(__dirname, '..', 'icons');
+
+  // Ensure the user icons folder exists so they know where to put images
+  try { fs.mkdirSync(userDir, { recursive: true }); } catch { /* ignore */ }
+
+  return [...listImagesInDir(bundledDir), ...listImagesInDir(userDir)];
 });
 
 // ─── Auto-updater stub ───────────────────────────────────────────────────────

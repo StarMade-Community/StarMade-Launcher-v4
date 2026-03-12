@@ -159,6 +159,20 @@ const launcherApi = {
     openPath: (targetPath: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC.SHELL_OPEN_PATH, targetPath),
   },
+
+  /** Background image APIs */
+  backgrounds: {
+    /** List available background image paths (file:// URLs). */
+    list: (): Promise<string[]> =>
+      ipcRenderer.invoke(IPC.BACKGROUNDS_LIST),
+  },
+
+  /** Icon image APIs */
+  icons: {
+    /** List available icon image paths (file:// URLs). */
+    list: (): Promise<string[]> =>
+      ipcRenderer.invoke(IPC.ICONS_LIST),
+  },
 };
 
 export type LauncherApi = typeof launcherApi;

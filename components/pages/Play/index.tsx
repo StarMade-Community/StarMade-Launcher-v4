@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { ChevronRightIcon } from '../../common/icons';
 import { useApp } from '../../../contexts/AppContext';
 import useNewsFetch from '../../hooks/useNewsFetch';
+import { getBackgroundList } from '../../hooks/useRandomBackground';
 
 interface DisplayNewsItem {
     id: string;
@@ -13,37 +14,29 @@ interface DisplayNewsItem {
 }
 
 /**
- * Categorize news based on title keywords
+ * Categorize a news item based on its title.
+ * Checks for version-number patterns (e.g. "0.204.703", "v3.0.9") first so
+ * that update posts aren't mis-filed as COMMUNITY.
  */
 const categorizeNews = (title: string): string => {
-    const lowerTitle = title.toLowerCase();
-    
-    if (lowerTitle.includes('update') || 
-        lowerTitle.includes('patch') || 
-        lowerTitle.includes('release') ||
-        lowerTitle.includes('version') ||
-        lowerTitle.includes('hotfix')) {
-        return 'GAME UPDATES';
-    }
-    
-    if (lowerTitle.includes('dev diary') || 
-        lowerTitle.includes('development') ||
-        lowerTitle.includes('dev blog')) {
-        return 'DEVELOPMENT';
-    }
-    
-    if (lowerTitle.includes('mod') || 
-        lowerTitle.includes('spotlight')) {
-        return 'MODS';
-    }
-    
-    if (lowerTitle.includes('guide') || 
-        lowerTitle.includes('tutorial') ||
-        lowerTitle.includes('how to')) {
-        return 'GUIDES';
-    }
-    
-    // Default to community for uncategorized
+    const t = title.toLowerCase();
+
+    // Any title containing a version-number-like token is an update
+    if (/v?\d+\.\d+[.\d]*/.test(t)) return 'GAME UPDATES';
+
+    if (t.includes('update') || t.includes('patch') ||
+        t.includes('release') || t.includes('hotfix')) return 'GAME UPDATES';
+
+    if (t.includes('launcher')) return 'GAME UPDATES';
+
+    if (t.includes('dev diary') || t.includes('development') ||
+        t.includes('dev blog')) return 'DEVELOPMENT';
+
+    if (t.includes('mod') || t.includes('spotlight')) return 'MODS';
+
+    if (t.includes('guide') || t.includes('tutorial') ||
+        t.includes('how to')) return 'GUIDES';
+
     return 'COMMUNITY';
 };
 
@@ -99,14 +92,24 @@ const SmallNewsCard: React.FC<{ item: DisplayNewsItem }> = ({ item }) => (
 const Play: React.FC = () => {
     const { navigate } = useApp();
     const { news, loading, error } = useNewsFetch();
+    const [fallbackImages, setFallbackImages] = useState<string[]>([]);
+
+    // Load the background pool once so we can assign random images to imageless news cards
+    useEffect(() => {
+        getBackgroundList().then(list => setFallbackImages(list));
+    }, []);
 
     // Convert RSS news to display format with categories
-    const displayNews: DisplayNewsItem[] = news.map(item => ({
+    // fallbackImages.slice(1) — index 0 is reserved for the app background
+    const newsBackgrounds = fallbackImages.slice(1);
+    const displayNews: DisplayNewsItem[] = news.map((item, i) => ({
         id: item.gid,
         title: item.title,
         category: categorizeNews(item.title),
         date: item.pubDate,
-        imageUrl: item.imageUrl || '',
+        imageUrl: item.imageUrl || (newsBackgrounds.length > 0
+            ? newsBackgrounds[i % newsBackgrounds.length]
+            : ''),
         link: item.link,
     }));
 

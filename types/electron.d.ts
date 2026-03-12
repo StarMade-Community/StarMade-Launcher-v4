@@ -112,6 +112,18 @@ declare global {
         /** Open a path in the native file manager. */
         openPath: (targetPath: string) => Promise<{ success: boolean; error?: string }>;
       };
+
+      /** Background image APIs */
+      backgrounds: {
+        /** List available background image paths (file:// URLs). */
+        list: () => Promise<string[]>;
+      };
+
+      /** Icon image APIs */
+      icons: {
+        /** List available icon image paths (file:// URLs). */
+        list: () => Promise<string[]>;
+      };
     };
   }
 }

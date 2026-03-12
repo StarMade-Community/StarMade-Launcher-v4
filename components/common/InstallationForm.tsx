@@ -59,6 +59,19 @@ interface IconPickerModalProps {
 }
 
 const IconPickerModal: React.FC<IconPickerModalProps> = ({ onSelect, onClose }) => {
+    const [folderIcons, setFolderIcons] = useState<{ path: string; name: string }[]>([]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined' || !window.launcher?.icons) return;
+        window.launcher.icons.list().then(paths => {
+            setFolderIcons(paths.map(p => ({
+                path: p,
+                // Strip directory and extension to use as display name
+                name: p.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, ''),
+            })));
+        }).catch(() => { /* silently ignore if unavailable */ });
+    }, []);
+
     const handleBrowse = async () => {
         if (typeof window === 'undefined' || !window.launcher?.dialog) return;
         const filePath = await window.launcher.dialog.openFile(undefined, 'image');
@@ -74,33 +87,61 @@ const IconPickerModal: React.FC<IconPickerModalProps> = ({ onSelect, onClose }) 
             onClick={onClose}
         >
             <div 
-                className="bg-slate-900/90 border border-slate-700 rounded-lg shadow-xl p-6 w-full max-w-2xl relative animate-fade-in-scale"
+                className="bg-slate-900/90 border border-slate-700 rounded-lg shadow-xl p-6 w-full max-w-2xl relative animate-fade-in-scale max-h-[85vh] flex flex-col"
                 onClick={(e) => e.stopPropagation()}
             >
-                <div className="flex justify-between items-center mb-6">
+                <div className="flex justify-between items-center mb-6 flex-shrink-0">
                     <h2 className="font-display text-2xl font-bold uppercase text-white tracking-wider">Choose an Icon</h2>
                     <button onClick={onClose} className="p-1.5 rounded-md hover:bg-starmade-danger/20 transition-colors">
                         <CloseIcon className="w-5 h-5 text-gray-400 hover:text-starmade-danger-light" />
                     </button>
                 </div>
-                <div className="grid grid-cols-4 gap-4">
-                    {availableIcons.map(({ icon, name }) => (
-                        <button 
-                            key={icon} 
-                            onClick={() => {
-                                onSelect(icon);
-                                onClose();
-                            }}
-                            className="flex flex-col items-center justify-center gap-3 p-4 bg-black/20 rounded-lg border border-white/10 hover:border-starmade-accent hover:bg-starmade-accent/10 transition-all group"
-                        >
-                            <div className="w-20 h-20 flex items-center justify-center">
-                                {getIconComponent(icon, 'large')}
+
+                <div className="overflow-y-auto flex-grow space-y-6 pr-1">
+                    {/* ── Icons from folder ── */}
+                    {folderIcons.length > 0 && (
+                        <div>
+                            <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">From Icons Folder</p>
+                            <div className="grid grid-cols-4 gap-4">
+                                {folderIcons.map(({ path: iconPath, name }) => (
+                                    <button
+                                        key={iconPath}
+                                        onClick={() => { onSelect(iconPath); onClose(); }}
+                                        className="flex flex-col items-center justify-center gap-3 p-4 bg-black/20 rounded-lg border border-white/10 hover:border-starmade-accent hover:bg-starmade-accent/10 transition-all group"
+                                    >
+                                        <div className="w-20 h-20 flex items-center justify-center">
+                                            {getIconComponent(iconPath, 'large')}
+                                        </div>
+                                        <span className="text-sm font-semibold text-gray-300 group-hover:text-white truncate w-full text-center">{name}</span>
+                                    </button>
+                                ))}
                             </div>
-                            <span className="text-sm font-semibold text-gray-300 group-hover:text-white">{name}</span>
-                        </button>
-                    ))}
+                        </div>
+                    )}
+
+                    {/* ── Built-in icons ── */}
+                    <div>
+                        {folderIcons.length > 0 && (
+                            <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">Built-in</p>
+                        )}
+                        <div className="grid grid-cols-4 gap-4">
+                            {availableIcons.map(({ icon, name }) => (
+                                <button 
+                                    key={icon} 
+                                    onClick={() => { onSelect(icon); onClose(); }}
+                                    className="flex flex-col items-center justify-center gap-3 p-4 bg-black/20 rounded-lg border border-white/10 hover:border-starmade-accent hover:bg-starmade-accent/10 transition-all group"
+                                >
+                                    <div className="w-20 h-20 flex items-center justify-center">
+                                        {getIconComponent(icon, 'large')}
+                                    </div>
+                                    <span className="text-sm font-semibold text-gray-300 group-hover:text-white">{name}</span>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
                 </div>
-                <div className="mt-6 pt-4 border-t border-white/10">
+
+                <div className="mt-6 pt-4 border-t border-white/10 flex-shrink-0">
                     <button
                         onClick={handleBrowse}
                         className="flex items-center gap-3 w-full px-4 py-3 bg-black/20 rounded-lg border border-white/10 hover:border-starmade-accent hover:bg-starmade-accent/10 transition-all group"

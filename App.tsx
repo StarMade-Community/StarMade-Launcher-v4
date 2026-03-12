@@ -8,6 +8,7 @@ import Settings from './components/pages/Settings';
 import LaunchConfirmModal from './components/common/LaunchConfirmModal';
 import GameLogViewer from './components/common/GameLogViewer';
 import { useApp } from './contexts/AppContext';
+import useRandomBackground from './components/hooks/useRandomBackground';
 
 const App: React.FC = () => {
   const { 
@@ -20,6 +21,8 @@ const App: React.FC = () => {
     logViewerInstallation,
     closeLogViewer,
   } = useApp();
+
+  const { url: bgUrl, loaded: bgLoaded } = useRandomBackground();
 
   const renderContent = () => {
     switch (activePage) {
@@ -55,8 +58,12 @@ const App: React.FC = () => {
       )}
       
       <div 
-        className="absolute inset-0 bg-cover bg-center z-0" 
-        style={{ backgroundImage: "url('https://www.star-made.org/images/bg1.jpg')" }}
+        className="absolute inset-0 bg-cover bg-center z-0"
+        style={{
+          backgroundImage: bgUrl ? `url('${bgUrl}')` : undefined,
+          opacity: bgLoaded ? 1 : 0,
+          transition: 'opacity 1.2s ease-in-out',
+        }}
       >
         <div 
           className="absolute inset-0"
