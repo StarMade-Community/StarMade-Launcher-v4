@@ -136,6 +136,35 @@ function tailStarMadeLog(installationId: string, installationPath: string): fs.F
   return watcher;
 }
 
+/**
+ * Heuristically decide whether a line written to stderr represents a genuine
+ * Java exception / error or just routine JVM diagnostic output.
+ *
+ * StarMade (and the JVM itself) writes a lot of normal informational content
+ * to stderr (OpenGL driver messages, Lwjgl probes, GC stats, etc.).  We only
+ * want to surface lines as ERROR when they look like:
+ *   - A Java exception class  ("NullPointerException: …", "Exception in thread …")
+ *   - A "Caused by:" chain entry
+ *   - A stack-trace frame     ("  at com.example.Foo.bar(Foo.java:42)")
+ *   - An explicit [ERROR]/[FATAL] prefix in the text
+ */
+function isStderrError(line: string): boolean {
+  // "SomeException:" or "SomeException " — catches NullPointerException, etc.
+  if (/\w+Exception[:\s]/.test(line)) return true;
+  // "Exception in thread "main" …"
+  if (/Exception in thread/.test(line)) return true;
+  // Caused-by chain
+  if (/^\s*Caused by:/.test(line)) return true;
+  // Stack-trace frame: "  at fully.qualified.ClassName.method(File.java:42)"
+  if (/^\s+at [\w$.<>]+\(/.test(line)) return true;
+  // "SomeError:" — OutOfMemoryError, StackOverflowError, etc.
+  if (/\w+Error:/.test(line)) return true;
+  // Explicit level markers that may appear in piped sub-process output
+  if (/\[ERROR]|\[FATAL]|^ERROR:|^FATAL:/i.test(line)) return true;
+
+  return false;
+}
+
 // ─── Launch game ──────────────────────────────────────────────────────────────
 
 export interface LaunchOptions {
@@ -299,7 +328,11 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
         if (line.trim()) {
           console.error(`[Game ${installationId}] ${line}`);
           logStream.write(`[STDERR] ${line}\n`);
-          sendLogEvent(installationId, 'stderr', line);
+          // Only elevate to ERROR when the line looks like a real Java
+          // exception or error; everything else stays as the neutral 'stderr'
+          // level so it doesn't pollute the errors filter in the log viewer.
+          const level = isStderrError(line) ? 'ERROR' : 'stderr';
+          sendLogEvent(installationId, level, line);
         }
       });
     });

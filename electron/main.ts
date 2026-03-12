@@ -14,7 +14,7 @@ import { storeGet, storeSet, storeDelete } from './store.js';
 import { fetchAllVersions, invalidateVersionCache } from './versions.js';
 import { startDownload, cancelDownload } from './downloader.js';
 import type { DownloadProgress } from './downloader.js';
-import { downloadJava, detectSystemJava, resolveJavaPath, getDefaultJavaPaths } from './java.js';
+import { downloadJava, detectSystemJava, resolveJavaPath, getDefaultJavaPaths, findJavaExecutableInDir } from './java.js';
 import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, getGraphicsInfo } from './launcher.js';
 
 // ─── ES Module compatibility ─────────────────────────────────────────────────
@@ -160,20 +160,22 @@ ipcMain.handle(IPC.JAVA_LIST, async () => {
   const bundled: Array<{ version: string; path: string; source: string }> = [];
   const launcherDir = getLauncherDir();
 
-  // Check for bundled JRE 8
-  const jre8Path = process.platform === 'win32'
-    ? path.join(launcherDir, 'jre8', 'bin', 'javaw.exe')
-    : path.join(launcherDir, 'jre8', 'bin', 'java');
-  if (fs.existsSync(jre8Path)) {
-    bundled.push({ version: '8', path: jre8Path, source: 'bundled' });
+  // Adoptium/Temurin archives nest the JRE under a versioned subdirectory
+  // (e.g. jre8/jdk8u362-b09-jre/bin/java), so we search recursively.
+  const jre8Dir = path.join(launcherDir, 'jre8');
+  if (fs.existsSync(jre8Dir)) {
+    const jre8Path = findJavaExecutableInDir(jre8Dir);
+    if (jre8Path) {
+      bundled.push({ version: '8', path: jre8Path, source: 'bundled' });
+    }
   }
-  
-  // Check for bundled JRE 25
-  const jre25Path = process.platform === 'win32'
-    ? path.join(launcherDir, 'jre25', 'bin', 'javaw.exe')
-    : path.join(launcherDir, 'jre25', 'bin', 'java');
-  if (fs.existsSync(jre25Path)) {
-    bundled.push({ version: '25', path: jre25Path, source: 'bundled' });
+
+  const jre25Dir = path.join(launcherDir, 'jre25');
+  if (fs.existsSync(jre25Dir)) {
+    const jre25Path = findJavaExecutableInDir(jre25Dir);
+    if (jre25Path) {
+      bundled.push({ version: '25', path: jre25Path, source: 'bundled' });
+    }
   }
   
   // Detect system Java

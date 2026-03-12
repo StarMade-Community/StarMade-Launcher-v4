@@ -128,12 +128,12 @@ const CrashReportModal: React.FC<CrashReportModalProps> = ({
                   <DiscordIcon className="w-5 h-5" />
                   Report on Discord
                 </button>
-                <button
+                {/*<button
                   onClick={handleOpenBugTracker}
                   className="px-4 py-2 rounded-md bg-starmade-accent hover:bg-starmade-accent/80 transition-colors text-sm font-semibold uppercase tracking-wider"
                 >
                   Open Bug Tracker
-                </button>
+                </button>*/}
               </div>
             </div>
             

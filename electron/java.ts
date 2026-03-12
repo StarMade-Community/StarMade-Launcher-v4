@@ -246,6 +246,7 @@ export async function downloadJava(
 
 /**
  * Recursively find the java/javaw executable in a directory.
+ * Throws if not found.
  */
 function findJavaExecutable(dir: string): string {
   const javaExe = process.platform === 'win32' ? 'javaw.exe' : 'java';
@@ -273,6 +274,23 @@ function findJavaExecutable(dir: string): string {
   }
   
   return result;
+}
+
+/**
+ * Recursively find the java/javaw executable in a JRE directory.
+ * Unlike `findJavaExecutable`, returns null instead of throwing when
+ * the executable is not found — safe for use in detection logic.
+ *
+ * Adoptium/Temurin archives are extracted with a versioned subdirectory
+ * inside the target folder (e.g. jre8/jdk8u362-b09-jre/bin/java), so a
+ * simple path.join(jreDir, 'bin', 'java') will always miss them.
+ */
+export function findJavaExecutableInDir(dir: string): string | null {
+  try {
+    return findJavaExecutable(dir);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -424,17 +442,20 @@ export async function detectSystemJava(): Promise<Array<{ version: string; path:
  *   3. Returns null if not found (caller should trigger download)
  */
 export async function resolveJavaPath(requiredVersion: 8 | 25, launcherDir: string): Promise<string | null> {
-  // 1. Check bundled JRE
+  // 1. Check bundled JRE.
+  // Adoptium/Temurin archives extract into a versioned subdirectory inside
+  // jreDir (e.g. jre8/jdk8u362-b09-jre/bin/java), so we must search
+  // recursively rather than assuming jreDir/bin/java exists directly.
   const jreDir = path.join(launcherDir, `jre${requiredVersion}`);
-  const bundledJavaPath = process.platform === 'win32'
-    ? path.join(jreDir, 'bin', 'javaw.exe')
-    : path.join(jreDir, 'bin', 'java');
-  
-  if (fs.existsSync(bundledJavaPath)) {
-    const result = await checkJavaExecutable(bundledJavaPath);
-    if (result && result.version === requiredVersion) {
-      console.log(`[Java] Using bundled Java ${requiredVersion}: ${bundledJavaPath}`);
-      return bundledJavaPath;
+
+  if (fs.existsSync(jreDir)) {
+    const bundledJavaPath = findJavaExecutableInDir(jreDir);
+    if (bundledJavaPath) {
+      const result = await checkJavaExecutable(bundledJavaPath);
+      if (result && result.version === requiredVersion) {
+        console.log(`[Java] Using bundled Java ${requiredVersion}: ${bundledJavaPath}`);
+        return bundledJavaPath;
+      }
     }
   }
   
