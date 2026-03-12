@@ -14,9 +14,15 @@ permissions:
   contents: write
 
 jobs:
+  # ─── Run tests first ──────────────────────────────────────────────────────
+  test:
+    name: Run Tests
+    uses: ./.github/workflows/test.yml
+
   # ─── Build for Windows ────────────────────────────────────────────────────
   build-windows:
     name: Build Windows
+    needs: test
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -48,6 +54,7 @@ jobs:
   # ─── Build for macOS ──────────────────────────────────────────────────────
   build-macos:
     name: Build macOS
+    needs: test
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -84,6 +91,7 @@ jobs:
   # ─── Build for Linux ──────────────────────────────────────────────────────
   build-linux:
     name: Build Linux
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
