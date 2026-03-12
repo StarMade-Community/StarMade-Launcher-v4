@@ -183,6 +183,17 @@ const launcherApi = {
     list: (): Promise<string[]> =>
       ipcRenderer.invoke(IPC.ICONS_LIST),
   },
+
+  /** Legacy installation detection APIs */
+  legacy: {
+    /** Scan the current and sub-directories for legacy StarMade installations (containing StarMade.jar). */
+    scan: (): Promise<string[]> =>
+      ipcRenderer.invoke(IPC.LEGACY_SCAN),
+
+    /** Scan a specific folder (and its sub-directories) for legacy StarMade installations. */
+    scanFolder: (folderPath: string): Promise<string[]> =>
+      ipcRenderer.invoke(IPC.LEGACY_SCAN_FOLDER, folderPath),
+  },
 };
 
 export type LauncherApi = typeof launcherApi;
