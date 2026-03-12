@@ -121,18 +121,6 @@ See **[RELEASE.md](RELEASE.md)** for the full release process.
 
 ---
 
-## 📚 Documentation
-
-- **[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)** — Phase-by-phase development roadmap
-- **[AGENTS.md](AGENTS.md)** — Codebase architecture and patterns
-- **[CHANGELOG.md](CHANGELOG.md)** — Version history and release notes
-- **[RELEASE.md](RELEASE.md)** — Release process and troubleshooting
-- **[PHASE_3_SUMMARY.md](PHASE_3_SUMMARY.md)** — Download system implementation details
-- **[PHASE_4_GUIDE.md](PHASE_4_GUIDE.md)** — Java auto-download implementation guide
-- **[.github/copilot-instructions.md](.github/copilot-instructions.md)** — Coding conventions for contributors
-
----
-
 ## 🧪 Testing
 
 Currently, there is no automated test suite. Phase 7 will add:
