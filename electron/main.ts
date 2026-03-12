@@ -376,12 +376,53 @@ ipcMain.handle(IPC.BACKGROUNDS_LIST, async () => {
 ipcMain.handle(IPC.ICONS_LIST, async () => {
   const userDir    = path.join(app.getPath('userData'), 'icons');
   const bundledDir = path.join(__dirname, '..', 'icons');
-0
+
   // Ensure the user icons folder exists so they know where to put images
   try { fs.mkdirSync(userDir, { recursive: true }); } catch { /* ignore */ }
 
   return [...listImagesInDir(bundledDir), ...listImagesInDir(userDir)];
 });
+
+// ─── Preset assets initialisation ───────────────────────────────────────────
+
+/**
+ * On the very first launch, copy the bundled preset backgrounds and icons into
+ * the user-writable data directory so that users have a set of defaults to
+ * start with.  Subsequent launches skip this step (tracked via the store key
+ * `presetsInitialized`).
+ */
+function copyPresetsToUserData(): void {
+  if (storeGet('presetsInitialized')) return;
+
+  const presetsDir = path.join(__dirname, '..', 'presets');
+  const userDataDir = app.getPath('userData');
+
+  const categories: Array<{ src: string; dest: string }> = [
+    { src: path.join(presetsDir, 'backgrounds'), dest: path.join(userDataDir, 'backgrounds') },
+    { src: path.join(presetsDir, 'icons'),       dest: path.join(userDataDir, 'icons') },
+  ];
+
+  for (const { src, dest } of categories) {
+    if (!fs.existsSync(src)) continue;
+
+    try {
+      fs.mkdirSync(dest, { recursive: true });
+      const files = fs.readdirSync(src);
+      for (const file of files) {
+        const srcFile  = path.join(src, file);
+        const destFile = path.join(dest, file);
+        // Never overwrite a file the user may have already customised
+        if (!fs.existsSync(destFile)) {
+          fs.copyFileSync(srcFile, destFile);
+        }
+      }
+    } catch (err) {
+      console.error(`[presets] Failed to copy presets from ${src} to ${dest}:`, err);
+    }
+  }
+
+  storeSet('presetsInitialized', true);
+}
 
 // ─── Auto-updater stub ───────────────────────────────────────────────────────
 // Full auto-update logic (electron-updater) will be wired in Phase 7/8.
@@ -395,6 +436,7 @@ ipcMain.handle(IPC.ICONS_LIST, async () => {
 // ─── App lifecycle ───────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
+  copyPresetsToUserData();
   buildMenu();
   createWindow();
 

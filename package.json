@@ -42,7 +42,8 @@
     "artifactName": "${productName}.${ext}",
     "files": [
       "dist/**/*",
-      "dist-electron/**/*"
+      "dist-electron/**/*",
+      "presets/**/*"
     ],
     "directories": {
       "buildResources": "build",
