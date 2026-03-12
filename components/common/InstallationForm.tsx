@@ -166,9 +166,9 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
   const [buildPath, setBuildPath] = useState(item.buildPath ?? '');
   const [requiredJavaVersion, setRequiredJavaVersion] = useState<8 | 25 | undefined>(item.requiredJavaVersion);
   const [gameDir, setGameDir] = useState(item.path);
-  const [javaMemory, setJavaMemory] = useState(8192);
-  const [javaPath, setJavaPath] = useState('');
-  const [jvmArgs, setJvmArgs] = useState('-Xms4G -Xmx8G');
+  const [javaMemory, setJavaMemory] = useState(item.maxMemory ?? 8192);
+  const [javaPath, setJavaPath] = useState(item.customJavaPath ?? '');
+  const [jvmArgs, setJvmArgs] = useState(item.jvmArgs ?? '-Xms4G -Xmx8G');
   const [showMoreOptions, setShowMoreOptions] = useState(false);
   const [isIconPickerOpen, setIconPickerOpen] = useState(false);
   const [defaultsLoaded, setDefaultsLoaded] = useState(false);
@@ -312,6 +312,10 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
   };
 
   const handleSaveClick = () => {
+    // Strip -Xms/-Xmx from jvmArgs before saving — the launcher applies those
+    // separately via minMemory/maxMemory so we'd otherwise double-apply them.
+    const extraJvmArgs = jvmArgs.split(/\s+/).filter(a => !a.startsWith('-Xm')).join(' ').trim();
+
     onSave({
         ...item,
         name,
@@ -322,6 +326,10 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         buildPath: buildPath || undefined,
         requiredJavaVersion: requiredJavaVersion,
         installed: isNew ? false : item.installed,
+        minMemory: javaMemory,
+        maxMemory: javaMemory,
+        jvmArgs: extraJvmArgs || undefined,
+        customJavaPath: javaPath || undefined,
         ...(itemTypeName === 'Server' && { port }),
     });
   };

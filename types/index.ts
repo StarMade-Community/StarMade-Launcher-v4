@@ -15,6 +15,15 @@ export interface ManagedItem {
   installed?: boolean;
   /** Which Java major version this installation requires (8 for < 0.3.x, 25 for >= 0.3.x). */
   requiredJavaVersion?: 8 | 25;
+  // ── Per-installation launch settings ──────────────────────────────────────
+  /** Minimum JVM heap in MB (passed as -Xms). */
+  minMemory?: number;
+  /** Maximum JVM heap in MB (passed as -Xmx). */
+  maxMemory?: number;
+  /** Extra JVM arguments (must NOT include -Xms/-Xmx; those come from min/maxMemory). */
+  jvmArgs?: string;
+  /** Override path to the java executable for this installation. */
+  customJavaPath?: string;
 }
 
 export interface Account {

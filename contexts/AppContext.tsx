@@ -89,8 +89,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 installationId: installation.id,
                 installationPath: installation.path,
                 starMadeVersion: installation.version,
-                minMemory: 1024, // TODO: Get from installation settings
-                maxMemory: 8192,  // TODO: Get from installation settings
+                minMemory: installation.minMemory ?? 1024,
+                maxMemory: installation.maxMemory ?? 8192,
+                jvmArgs: installation.jvmArgs ?? '',
+                customJavaPath: installation.customJavaPath,
                 isServer: false,
             });
 
