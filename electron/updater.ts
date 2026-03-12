@@ -11,6 +11,8 @@
  *
  * macOS is intentionally excluded from silent install because code-signing and
  * notarisation make DMG silent-install impractical without a paid certificate.
+ * On macOS, an update check that finds a newer version opens the releases page
+ * in the browser so the user can download the DMG manually.
  */
 
 import { app, shell } from 'electron';
@@ -256,8 +258,12 @@ export async function downloadUpdate(
  * • Windows NSIS .exe  → run the installer silently (/S flag) then quit.
  * • Linux AppImage     → make executable, replace the running binary with
  *                         the new one (via a shell wrapper), then relaunch.
+ * • macOS              → opens the GitHub releases page in the browser so
+ *                         the user can download the DMG manually (code-signing
+ *                         is required for silent DMG install and is not yet
+ *                         set up).
  *
- * Falls back to opening the releases page if the install cannot be performed.
+ * Falls back to opening the releases page on any unexpected error.
  */
 export async function installUpdate(installerPath: string): Promise<void> {
   const plat = process.platform;
