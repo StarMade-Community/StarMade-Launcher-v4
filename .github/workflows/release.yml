@@ -32,7 +32,7 @@ jobs:
         run: npm ci
 
       - name: Set version
-        run: npm version ${{ github.event.inputs.version }} --no-git-tag-version
+        run: node -e "try{const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${{ github.event.inputs.version }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');}catch(e){console.error(e);process.exit(1);}"
 
       - name: Build Electron app
         run: npm run electron:build
@@ -66,7 +66,7 @@ jobs:
         run: npm ci
 
       - name: Set version
-        run: npm version ${{ github.event.inputs.version }} --no-git-tag-version
+        run: node -e "try{const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${{ github.event.inputs.version }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');}catch(e){console.error(e);process.exit(1);}"
 
       - name: Build Electron app
         run: npm run electron:build
@@ -105,7 +105,7 @@ jobs:
         run: npm ci
 
       - name: Set version
-        run: npm version ${{ github.event.inputs.version }} --no-git-tag-version
+        run: node -e "try{const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${{ github.event.inputs.version }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');}catch(e){console.error(e);process.exit(1);}"
 
       - name: Build Electron app
         run: npm run electron:build

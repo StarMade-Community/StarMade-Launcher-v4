@@ -293,12 +293,32 @@ export async function installUpdate(installerPath: string): Promise<void> {
       const uniqueSuffix = Math.random().toString(36).slice(2);
       const scriptPath = path.join(os.tmpdir(), `starmade-update-${uniqueSuffix}.ps1`);
       const script = [
-        `$src    = $env:UPDATE_SRC`,
-        `$dst    = $env:UPDATE_DST`,
-        `$procId = [int]$env:UPDATE_PID`,
-        `while (Get-Process -Id $procId -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500 }`,
-        `Copy-Item -Force $src $dst`,
-        `Start-Process $dst`,
+        `$ErrorActionPreference = 'Stop'`,
+        `$src       = $env:UPDATE_SRC`,
+        `$dst       = $env:UPDATE_DST`,
+        `$procId    = [int]$env:UPDATE_PID`,
+        `$scriptPath = $env:UPDATE_SCRIPT`,
+        `$logPath   = Join-Path $env:TEMP 'starmade-update-error.log'`,
+        `try {`,
+        `  $intervalMs = 500`,
+        `  $maxWaitMs  = 300000`,
+        `  $elapsedMs  = 0`,
+        `  while ((Get-Process -Id $procId -ErrorAction SilentlyContinue) -and ($elapsedMs -lt $maxWaitMs)) {`,
+        `    Start-Sleep -Milliseconds $intervalMs`,
+        `    $elapsedMs += $intervalMs`,
+        `  }`,
+        `  if (Get-Process -Id $procId -ErrorAction SilentlyContinue) {`,
+        `    throw "Process $procId did not exit within timeout; aborting update."`,
+        `  }`,
+        `  Copy-Item -Force $src $dst`,
+        `  Start-Process $dst`,
+        `} catch {`,
+        `  $msg = "$(Get-Date -Format o) - $($_.Exception.Message)"`,
+        `  Add-Content -Path $logPath -Value $msg`,
+        `  Start-Process 'https://github.com/StarMade-Community/StarMade-Launcher-v4/releases/latest'`,
+        `} finally {`,
+        `  Remove-Item -Force $scriptPath -ErrorAction SilentlyContinue`,
+        `}`,
       ].join('\n');
 
       fs.writeFileSync(scriptPath, script);
@@ -315,6 +335,7 @@ export async function installUpdate(installerPath: string): Promise<void> {
           UPDATE_SRC: installerPath,
           UPDATE_DST: currentExe,
           UPDATE_PID: String(process.pid),
+          UPDATE_SCRIPT: scriptPath,
         },
       }).unref();
 
