@@ -14,7 +14,7 @@ const AboutSection: React.FC = () => {
         <div>
             <div className="text-center mb-8">
                 <h1 className="font-display text-4xl font-bold text-white">StarMade Launcher</h1>
-                <p className="text-lg text-gray-400 mt-1">Version 1.0.0</p>
+                <p className="text-lg text-gray-400 mt-1">Version 4.0.0</p>
             </div>
             
             <div className="bg-black/20 p-6 rounded-lg border border-white/10 max-w-lg mx-auto">

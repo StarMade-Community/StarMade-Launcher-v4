@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import CustomDropdown from '../../common/CustomDropdown';
+import { FolderIcon } from '../../common/icons';
 
 // ─── Store key ───────────────────────────────────────────────────────────────
 
@@ -49,6 +50,7 @@ const ToggleSwitch: React.FC<{ checked: boolean; onChange: (checked: boolean) =>
 const LauncherSettings: React.FC = () => {
     const [isLoaded, setIsLoaded] = useState(false);
     const [settings, setSettings] = useState<LauncherSettingsData>(DEFAULT_SETTINGS);
+    const [userDataPath, setUserDataPath] = useState<string>('');
     const [javaRuntimes, setJavaRuntimes] = useState<{
         bundled: Array<{ version: string; path: string; source: string }>;
         system: Array<{ version: string; path: string; source: string }>;
@@ -80,6 +82,13 @@ const LauncherSettings: React.FC = () => {
             }
             setIsLoaded(true);
         }).catch(() => setIsLoaded(true));
+
+        // Get userData path for display
+        if (window.launcher?.app) {
+            window.launcher.app.getUserDataPath()
+                .then(p => setUserDataPath(p))
+                .catch(() => {});
+        }
         
         // Load Java runtimes
         loadJavaRuntimes();
@@ -263,6 +272,38 @@ const LauncherSettings: React.FC = () => {
                     <div className="space-y-4">
                         <SettingRow title="Show StarMade Log" description="Shows a window that streams the log after the game has started.">
                             <ToggleSwitch checked={settings.showLog} onChange={(v) => update('showLog', v)} />
+                        </SettingRow>
+                    </div>
+                </div>
+
+                <div className="mt-8">
+                    <h2 className="font-display text-xl font-bold uppercase tracking-wider text-white mb-4 pb-2 border-b-2 border-white/10">
+                        Data Folder
+                    </h2>
+                    <div className="space-y-4">
+                        <SettingRow
+                            title="User Data Directory"
+                            description="Stores launcher config, backgrounds, and icons. Drop images into the backgrounds/ and icons/ subfolders."
+                        >
+                            <div className="flex items-center gap-2 min-w-0">
+                                {userDataPath && (
+                                    <span className="text-xs text-gray-400 font-mono truncate max-w-[260px]" title={userDataPath}>
+                                        {userDataPath}
+                                    </span>
+                                )}
+                                <button
+                                    onClick={() => {
+                                        if (userDataPath && window.launcher?.shell) {
+                                            window.launcher.shell.openPath(userDataPath);
+                                        }
+                                    }}
+                                    disabled={!userDataPath}
+                                    className="flex items-center gap-2 px-4 py-2 rounded-md bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-semibold uppercase tracking-wider flex-shrink-0"
+                                >
+                                    <FolderIcon className="w-4 h-4" />
+                                    Open Folder
+                                </button>
+                            </div>
                         </SettingRow>
                     </div>
                 </div>

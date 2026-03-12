@@ -8,6 +8,13 @@ import { IPC } from './ipc-channels.js';
  * call arbitrary Node APIs (context isolation is enforced).
  */
 const launcherApi = {
+  /** App-level APIs */
+  app: {
+    /** Returns the Electron userData directory path. */
+    getUserDataPath: (): Promise<string> =>
+      ipcRenderer.invoke(IPC.APP_GET_USER_DATA),
+  },
+
   window: {
     minimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
     maximize: () => ipcRenderer.send(IPC.WINDOW_MAXIMIZE),

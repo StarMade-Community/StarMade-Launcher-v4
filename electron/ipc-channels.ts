@@ -74,6 +74,11 @@ export const IPC = {
   /** Renderer → Main (invoke): open file picker dialog. Returns selected path or null. */
   DIALOG_OPEN_FILE: 'dialog:open-file',
 
+  // ─── App ────────────────────────────────────────────────────────────────────
+
+  /** Renderer → Main (invoke): get the app userData directory path. */
+  APP_GET_USER_DATA: 'app:get-user-data',
+
   // ─── Shell ──────────────────────────────────────────────────────────────────
 
   /** Renderer → Main (invoke): open a path in the native file manager. */

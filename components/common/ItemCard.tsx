@@ -12,6 +12,7 @@ interface ItemCardProps {
   onDownload?: () => void;
   onCancelDownload?: () => void;
   onOpenFolder?: (path: string) => void;
+  onAction?: (item: ManagedItem) => void;
   onViewLogs?: (item: ManagedItem) => void;
   actionButtonText: string;
   statusLabel: string;
@@ -33,7 +34,7 @@ function formatSpeed(bytesPerSec: number): string {
 
 const ItemCard: React.FC<ItemCardProps> = ({
   item, isFeatured, onEdit, onDelete,
-  onDownload, onCancelDownload, onOpenFolder, onViewLogs,
+  onDownload, onCancelDownload, onOpenFolder, onAction, onViewLogs,
   actionButtonText, statusLabel,
   downloadStatus,
 }) => {
@@ -165,7 +166,8 @@ const ItemCard: React.FC<ItemCardProps> = ({
             </button>
           ) : (
             <button
-              disabled={!isPlayable}
+              onClick={() => onAction?.(item)}
+              disabled={!isPlayable || !onAction}
               className="
                 flex items-center justify-center gap-2 px-4 py-2 rounded-md
                 bg-starmade-accent/80 text-white font-semibold uppercase tracking-wider text-sm

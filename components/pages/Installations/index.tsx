@@ -5,6 +5,7 @@ import ItemCard from '../../common/ItemCard';
 import type { ManagedItem, InstallationsTab } from '../../../types';
 import PageContainer from '../../common/PageContainer';
 import { useData } from '../../../contexts/DataContext';
+import { useApp } from '../../../contexts/AppContext';
 
 interface InstallationsProps {
   initialTab?: InstallationsTab;

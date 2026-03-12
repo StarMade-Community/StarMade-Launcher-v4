@@ -309,6 +309,10 @@ ipcMain.handle(IPC.DIALOG_OPEN_FILE, async (_event, defaultPath?: string, type?:
   return result.filePaths[0];
 });
 
+// ─── App handlers ────────────────────────────────────────────────────────────
+
+ipcMain.handle(IPC.APP_GET_USER_DATA, () => app.getPath('userData'));
+
 // ─── Shell handlers ──────────────────────────────────────────────────────────
 
 ipcMain.handle(IPC.SHELL_OPEN_PATH, async (_event, targetPath: string) => {
@@ -343,7 +347,7 @@ ipcMain.handle(IPC.BACKGROUNDS_LIST, async () => {
 ipcMain.handle(IPC.ICONS_LIST, async () => {
   const userDir    = path.join(app.getPath('userData'), 'icons');
   const bundledDir = path.join(__dirname, '..', 'icons');
-
+0
   // Ensure the user icons folder exists so they know where to put images
   try { fs.mkdirSync(userDir, { recursive: true }); } catch { /* ignore */ }
 

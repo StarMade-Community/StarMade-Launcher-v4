@@ -4,6 +4,12 @@ declare global {
   interface Window {
     /** IPC bridge exposed by the Electron preload script. Undefined in plain browser environments. */
     launcher: {
+      /** App-level APIs */
+      app: {
+        /** Returns the Electron userData directory path. */
+        getUserDataPath: () => Promise<string>;
+      };
+
       window: {
         /** Minimize the application window */
         minimize: () => void;
