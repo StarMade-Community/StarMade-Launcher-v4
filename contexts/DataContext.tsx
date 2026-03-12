@@ -16,7 +16,7 @@ const DEFAULT_INSTALLATION: Omit<ManagedItem, 'id'> = {
   version: '0.203.175',
   type: 'release',
   icon: 'release',
-  path: '/home/user/starmade/installations/new-installation',
+  path: '',
   lastPlayed: 'Never',
   installed: false,
 };
@@ -26,7 +26,7 @@ const DEFAULT_SERVER: Omit<ManagedItem, 'id'> = {
   version: '0.203.175',
   type: 'release',
   icon: 'server',
-  path: '/home/user/starmade/servers/new-server',
+  path: '',
   lastPlayed: 'Never',
   port: '4242',
 };
