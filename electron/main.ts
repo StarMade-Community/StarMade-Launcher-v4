@@ -19,6 +19,7 @@ import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, 
 import type { UpdateInfo } from './updater.js';
 import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from './updater.js';
 import { loginWithPassword, refreshAccessToken, registerAccount, logoutAccount, getAuthStatus, getAccessTokenForLaunch } from './auth.js';
+import { isRunningAsAppImage } from './appimage-detect.js';
 
 // ─── ES Module compatibility ─────────────────────────────────────────────────
 
@@ -36,10 +37,13 @@ const PRELOAD_PATH = path.join(__dirname, 'preload.js');
 // chrome-sandbox binary cannot have the required SUID-root permissions
 // (mode 4755, owned by root).  Electron aborts at startup with a fatal sandbox
 // error unless we explicitly disable the SUID sandbox.
-// The APPIMAGE env var is set by the AppImage runtime; we restrict the workaround
-// to AppImage launches so that deb/rpm installs (where the package manager can
-// grant the correct SUID permissions) still run with a full sandbox.
-if (process.platform === 'linux' && process.env.APPIMAGE) {
+//
+// We restrict the workaround to AppImage launches (not deb/rpm installs where
+// the package manager can grant the correct SUID permissions).  Detection uses
+// multiple indicators because the APPIMAGE env var is not always propagated
+// when the AppImage is launched from a file manager or desktop environment on
+// an external/non-OS drive.  See electron/appimage-detect.ts for full details.
+if (process.platform === 'linux' && isRunningAsAppImage(process.env, app.getPath('exe'))) {
   app.commandLine.appendSwitch('no-sandbox');
 }
 
