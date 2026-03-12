@@ -111,6 +111,27 @@ export const IPC = {
   UPDATER_GET_VERSION: 'updater:get-version',
   /** Main → Renderer: a newer launcher version was found during the startup check. */
   UPDATER_UPDATE_AVAILABLE: 'updater:update-available',
+  /**
+   * Renderer → Main (invoke): download the update asset.
+   * Payload: { assetUrl: string; assetName: string }
+   * Returns: { success: boolean; installerPath?: string; error?: string }
+   * Progress is pushed via UPDATER_DOWNLOAD_PROGRESS.
+   */
+  UPDATER_DOWNLOAD: 'updater:download',
+  /** Main → Renderer: live download progress for an update asset. */
+  UPDATER_DOWNLOAD_PROGRESS: 'updater:download-progress',
+  /**
+   * Renderer → Main (invoke): run the downloaded installer and quit.
+   * Payload: { installerPath: string }
+   * Returns: { success: boolean; error?: string }
+   * On success the app will quit; on failure the browser opens as fallback.
+   */
+  UPDATER_INSTALL: 'updater:install',
+  /**
+   * Renderer → Main (invoke): open the GitHub releases page in the browser.
+   * Used as the explicit fallback when the user chooses "Open in Browser".
+   */
+  UPDATER_OPEN_RELEASES_PAGE: 'updater:open-releases-page',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

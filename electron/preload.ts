@@ -211,7 +211,44 @@ const launcherApi = {
       currentVersion: string;
       releaseNotes: string;
       downloadUrl: string;
+      assetUrl?: string;
+      assetName?: string;
     }> => ipcRenderer.invoke(IPC.UPDATER_CHECK),
+
+    /**
+     * Download the update asset. Returns the local installer path on success.
+     * Progress events arrive via onDownloadProgress.
+     */
+    downloadUpdate: (
+      assetUrl: string,
+      assetName: string,
+    ): Promise<{ success: boolean; installerPath?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.UPDATER_DOWNLOAD, { assetUrl, assetName }),
+
+    /**
+     * Run the downloaded installer and quit the launcher.
+     * Falls back to opening the releases page in the browser if installation fails.
+     */
+    installUpdate: (
+      installerPath: string,
+    ): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.UPDATER_INSTALL, { installerPath }),
+
+    /** Open the GitHub releases page in the default browser. */
+    openReleasesPage: (): Promise<void> =>
+      ipcRenderer.invoke(IPC.UPDATER_OPEN_RELEASES_PAGE),
+
+    /** Subscribe to live download-progress events. Returns a cleanup function. */
+    onDownloadProgress: (
+      cb: (progress: { bytesReceived: number; totalBytes: number; percent: number }) => void,
+    ): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        progress: { bytesReceived: number; totalBytes: number; percent: number },
+      ) => cb(progress);
+      ipcRenderer.on(IPC.UPDATER_DOWNLOAD_PROGRESS, listener);
+      return () => ipcRenderer.removeListener(IPC.UPDATER_DOWNLOAD_PROGRESS, listener);
+    },
 
     /**
      * Subscribe to update-available events pushed by the main process on
@@ -223,6 +260,8 @@ const launcherApi = {
       currentVersion: string;
       releaseNotes: string;
       downloadUrl: string;
+      assetUrl?: string;
+      assetName?: string;
     }) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, info: {
         available: boolean;
@@ -230,6 +269,8 @@ const launcherApi = {
         currentVersion: string;
         releaseNotes: string;
         downloadUrl: string;
+        assetUrl?: string;
+        assetName?: string;
       }) => cb(info);
       ipcRenderer.on(IPC.UPDATER_UPDATE_AVAILABLE, listener);
       return () => ipcRenderer.removeListener(IPC.UPDATER_UPDATE_AVAILABLE, listener);

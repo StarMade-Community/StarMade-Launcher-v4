@@ -155,7 +155,33 @@ declare global {
           currentVersion: string;
           releaseNotes: string;
           downloadUrl: string;
+          /** Direct download URL for the platform installer asset, if available. */
+          assetUrl?: string;
+          /** Filename of the installer asset. */
+          assetName?: string;
         }>;
+        /**
+         * Download the update installer asset.
+         * Progress events arrive via onDownloadProgress.
+         * Resolves with the local path to the downloaded file on success.
+         */
+        downloadUpdate: (
+          assetUrl: string,
+          assetName: string,
+        ) => Promise<{ success: boolean; installerPath?: string; error?: string }>;
+        /**
+         * Execute the downloaded installer and quit the launcher.
+         * Falls back to opening the releases page in the browser on failure.
+         */
+        installUpdate: (
+          installerPath: string,
+        ) => Promise<{ success: boolean; error?: string }>;
+        /** Open the GitHub releases page in the default browser. */
+        openReleasesPage: () => Promise<void>;
+        /** Subscribe to live download-progress events. Returns a cleanup function. */
+        onDownloadProgress: (
+          cb: (progress: { bytesReceived: number; totalBytes: number; percent: number }) => void,
+        ) => () => void;
         /**
          * Subscribe to update-available events pushed by the main process on
          * startup.  Returns a cleanup function.
@@ -166,6 +192,8 @@ declare global {
           currentVersion: string;
           releaseNotes: string;
           downloadUrl: string;
+          assetUrl?: string;
+          assetName?: string;
         }) => void) => () => void;
       };
     };

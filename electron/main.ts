@@ -16,8 +16,8 @@ import { startDownload, cancelDownload } from './downloader.js';
 import type { DownloadProgress } from './downloader.js';
 import { downloadJava, detectSystemJava, resolveJavaPath, getDefaultJavaPaths, findJavaExecutableInDir } from './java.js';
 import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, getGraphicsInfo } from './launcher.js';
-import { checkForUpdates } from './updater.js';
 import type { UpdateInfo } from './updater.js';
+import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from './updater.js';
 
 // ─── ES Module compatibility ─────────────────────────────────────────────────
 
@@ -489,6 +489,51 @@ ipcMain.handle(IPC.UPDATER_GET_VERSION, () => app.getVersion());
 
 ipcMain.handle(IPC.UPDATER_CHECK, async (): Promise<UpdateInfo> => {
   return checkForUpdates();
+});
+
+ipcMain.handle(
+  IPC.UPDATER_DOWNLOAD,
+  async (
+    event,
+    { assetUrl, assetName }: { assetUrl: string; assetName: string },
+  ): Promise<{ success: boolean; installerPath?: string; error?: string }> => {
+    const { sender } = event;
+    try {
+      const installerPath = await downloadUpdate(
+        assetUrl,
+        assetName,
+        (progress) => {
+          if (!sender.isDestroyed()) {
+            sender.send(IPC.UPDATER_DOWNLOAD_PROGRESS, progress);
+          }
+        },
+      );
+      return { success: true, installerPath };
+    } catch (err) {
+      console.error('[Updater] Download failed:', err);
+      return { success: false, error: String(err) };
+    }
+  },
+);
+
+ipcMain.handle(
+  IPC.UPDATER_INSTALL,
+  async (
+    _event,
+    { installerPath }: { installerPath: string },
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      await installUpdate(installerPath);
+      return { success: true };
+    } catch (err) {
+      console.error('[Updater] Install failed:', err);
+      return { success: false, error: String(err) };
+    }
+  },
+);
+
+ipcMain.handle(IPC.UPDATER_OPEN_RELEASES_PAGE, () => {
+  openReleasesPage();
 });
 
 /** Milliseconds to wait after window creation before sending the update-available event. */

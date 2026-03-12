@@ -17,6 +17,8 @@ interface UpdateInfo {
   currentVersion: string;
   releaseNotes: string;
   downloadUrl: string;
+  assetUrl?: string;
+  assetName?: string;
 }
 
 const App: React.FC = () => {
@@ -49,13 +51,6 @@ const App: React.FC = () => {
     return cleanup;
   }, []);
 
-  const handleDownloadUpdate = () => {
-    if (updateInfo?.downloadUrl) {
-      // Open the GitHub releases page in the default browser
-      window.open(updateInfo.downloadUrl, '_blank');
-    }
-    setIsUpdateModalOpen(false);
-  };
 
   const handleDismissUpdate = () => {
     setIsUpdateModalOpen(false);
@@ -89,7 +84,6 @@ const App: React.FC = () => {
       <UpdateAvailableModal
         isOpen={isUpdateModalOpen}
         updateInfo={updateInfo}
-        onDownload={handleDownloadUpdate}
         onDismiss={handleDismissUpdate}
       />
       

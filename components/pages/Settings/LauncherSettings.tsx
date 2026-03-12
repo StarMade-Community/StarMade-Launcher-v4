@@ -2,6 +2,19 @@ import React, { useState, useEffect } from 'react';
 import CustomDropdown from '../../common/CustomDropdown';
 import { FolderIcon } from '../../common/icons';
 import { useData } from '../../../contexts/DataContext';
+import UpdateAvailableModal from '../../common/UpdateAvailableModal';
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface UpdateInfo {
+    available: boolean;
+    latestVersion: string;
+    currentVersion: string;
+    releaseNotes: string;
+    downloadUrl: string;
+    assetUrl?: string;
+    assetName?: string;
+}
 
 // ─── Store key ───────────────────────────────────────────────────────────────
 
@@ -64,6 +77,8 @@ const LauncherSettings: React.FC = () => {
     const [importedPaths, setImportedPaths] = useState<Set<string>>(new Set());
     const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
     const [updateCheckResult, setUpdateCheckResult] = useState<string | null>(null);
+    const [updateModalInfo, setUpdateModalInfo] = useState<UpdateInfo | null>(null);
+    const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
 
     const languageOptions = [
         { value: 'English (US)', label: 'English (US)' },
@@ -229,8 +244,9 @@ const LauncherSettings: React.FC = () => {
         try {
             const info = await window.launcher.updater.checkForUpdates();
             if (info.available) {
+                setUpdateModalInfo(info);
+                setIsUpdateModalOpen(true);
                 setUpdateCheckResult(`Update available: v${info.latestVersion}`);
-                window.open(info.downloadUrl, '_blank');
             } else {
                 setUpdateCheckResult(`You're up to date! (v${info.currentVersion})`);
             }
@@ -239,7 +255,6 @@ const LauncherSettings: React.FC = () => {
             setUpdateCheckResult('Failed to check for updates. Please try again later.');
         } finally {
             setIsCheckingUpdate(false);
-            // Clear the result message after a short delay
             const UPDATE_MESSAGE_DISPLAY_DURATION_MS = 6_000;
             setTimeout(() => setUpdateCheckResult(null), UPDATE_MESSAGE_DISPLAY_DURATION_MS);
         }
@@ -247,6 +262,11 @@ const LauncherSettings: React.FC = () => {
 
     return (
         <div className="h-full flex flex-col">
+            <UpdateAvailableModal
+                isOpen={isUpdateModalOpen}
+                updateInfo={updateModalInfo}
+                onDismiss={() => setIsUpdateModalOpen(false)}
+            />
             <h2 className="flex-shrink-0 font-display text-xl font-bold uppercase tracking-wider text-white mb-4 pb-2 border-b-2 border-white/10">
                 General
             </h2>
