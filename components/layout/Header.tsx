@@ -9,14 +9,106 @@ const UserProfile: React.FC = () => {
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
     const { navigate } = useApp();
-    const { accounts, activeAccount, setActiveAccount } = useData();
+    const { accounts, activeAccount, setActiveAccount, setAccounts } = useData();
 
     useOnClickOutside(dropdownRef, () => setIsOpen(false));
+    
+    const handleLogout = () => {
+        // Remove temporary offline account from accounts list if present
+        if (activeAccount?.id.startsWith('offline-')) {
+            setAccounts(accounts.filter(a => !a.id.startsWith('offline-')));
+        }
+        setActiveAccount(null);
+        setIsOpen(false);
+    };
 
+    // No active account - show prompt
     if (!activeAccount) {
-        return null;
+        return (
+            <div className="relative" ref={dropdownRef}>
+                <button
+                    onClick={() => setIsOpen(!isOpen)}
+                    className="flex items-center gap-2 px-3 py-2 bg-amber-900/20 rounded-md hover:bg-amber-900/30 transition-colors border border-amber-600/50"
+                >
+                    <UserIcon className="w-5 h-5 text-amber-400" />
+                    <div className="text-left">
+                        <p className="text-xs font-medium text-amber-400">Not Logged In</p>
+                        <p className="text-[10px] text-amber-300/70">Click to login or play offline</p>
+                    </div>
+                    <ChevronDownIcon className={`w-4 h-4 text-amber-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {isOpen && (
+                    <div className="absolute top-full mt-2 w-72 bg-slate-900/90 backdrop-blur-sm border border-slate-700 rounded-md shadow-lg overflow-hidden z-20">
+                        {accounts.length > 0 && (
+                            <>
+                                <div className="p-2">
+                                    <p className="px-2 py-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">SELECT ACCOUNT</p>
+                                    <ul>
+                                        {accounts.map(account => (
+                                            <li key={account.id}>
+                                                <button
+                                                    onClick={() => {
+                                                        setActiveAccount(account);
+                                                        setIsOpen(false);
+                                                    }}
+                                                    className="w-full flex items-center gap-3 px-2 py-2 text-left rounded-md hover:bg-slate-700/50 transition-colors"
+                                                >
+                                                    <div className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center border border-slate-600">
+                                                        <UserIcon className="w-5 h-5 text-slate-400" />
+                                                    </div>
+                                                    <span className="text-sm text-white flex-1">{account.name}</span>
+                                                </button>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                                <hr className="border-slate-700/50" />
+                            </>
+                        )}
+                        <div className="p-2">
+                            <ul>
+                                <li>
+                                    <button
+                                        onClick={() => {
+                                            // Play offline - create temporary offline account
+                                            const offlineAccount = {
+                                                id: 'offline-' + Date.now(),
+                                                name: 'Playing Offline',
+                                            };
+                                            setActiveAccount(offlineAccount);
+                                            setIsOpen(false);
+                                        }}
+                                        className="w-full flex items-center gap-3 px-2 py-2 text-left rounded-md hover:bg-slate-700/50 transition-colors text-sm text-white bg-slate-800/50"
+                                    >
+                                        <UserIcon className="w-5 h-5 text-gray-400" />
+                                        <div className="flex-1">
+                                            <p className="font-medium">Play Offline</p>
+                                            <p className="text-xs text-gray-400">No account required</p>
+                                        </div>
+                                    </button>
+                                </li>
+                                <li>
+                                    <button
+                                        onClick={() => {
+                                            navigate('Settings', { initialSection: 'accounts' });
+                                            setIsOpen(false);
+                                        }}
+                                        className="w-full flex items-center gap-3 px-2 py-2 text-left rounded-md hover:bg-slate-700/50 transition-colors text-sm text-gray-300 hover:text-white"
+                                    >
+                                        <UserPlusIcon className="w-5 h-5" />
+                                        <span>Add Account</span>
+                                    </button>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
     }
 
+    // Has active account - show normal dropdown
     return (
         <div className="relative" ref={dropdownRef}>
             <div onClick={() => setIsOpen(!isOpen)} className="flex items-center gap-3 cursor-pointer group">
@@ -25,38 +117,59 @@ const UserProfile: React.FC = () => {
                 </div>
                 <div>
                     <h3 className="font-semibold text-white">{activeAccount.name}</h3>
+                    {activeAccount.id.startsWith('offline-') && (
+                        <p className="text-xs text-gray-500">Offline Mode</p>
+                    )}
                 </div>
                 <ChevronDownIcon className={`w-4 h-4 text-gray-400 group-hover:text-white transition-all ${isOpen ? 'rotate-180' : ''}`} />
             </div>
 
             {isOpen && (
                 <div className="absolute top-full mt-2 w-72 bg-slate-900/90 backdrop-blur-sm border border-slate-700 rounded-md shadow-lg overflow-hidden z-20">
-                    <div className="p-2">
-                        <p className="px-2 py-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">ACCOUNTS</p>
-                        <ul>
-                            {accounts.map(account => (
-                                <li key={account.id}>
-                                    <button
-                                        onClick={() => {
-                                            setActiveAccount(account);
-                                            setIsOpen(false);
-                                        }}
-                                        className="w-full flex items-center gap-3 px-2 py-2 text-left rounded-md hover:bg-slate-700/50 transition-colors"
-                                    >
-                                        <div className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center border border-slate-600">
-                                            <UserIcon className="w-5 h-5 text-slate-400" />
-                                        </div>
-                                        <span className="text-sm text-white flex-1">{account.name}</span>
-                                        {activeAccount.id === account.id && <CheckCircleIcon className="w-5 h-5 text-starmade-accent" />}
-                                    </button>
-                                </li>
-                            ))}
-                        </ul>
-                    </div>
-                    <hr className="border-slate-700/50" />
+                    {accounts.filter(a => !a.id.startsWith('offline-')).length > 0 && (
+                        <>
+                            <div className="p-2">
+                                <p className="px-2 py-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">ACCOUNTS</p>
+                                <ul>
+                                    {accounts.filter(a => !a.id.startsWith('offline-')).map(account => (
+                                        <li key={account.id}>
+                                            <button
+                                                onClick={() => {
+                                                    setActiveAccount(account);
+                                                    setIsOpen(false);
+                                                }}
+                                                className="w-full flex items-center gap-3 px-2 py-2 text-left rounded-md hover:bg-slate-700/50 transition-colors"
+                                            >
+                                                <div className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center border border-slate-600">
+                                                    <UserIcon className="w-5 h-5 text-slate-400" />
+                                                </div>
+                                                <span className="text-sm text-white flex-1">{account.name}</span>
+                                                {activeAccount.id === account.id && <CheckCircleIcon className="w-5 h-5 text-starmade-accent" />}
+                                            </button>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                            <hr className="border-slate-700/50" />
+                        </>
+                    )}
                      <div className="p-2">
                          <ul>
-                            <li>
+                            {!activeAccount.id.startsWith('offline-') && accounts.filter(a => !a.id.startsWith('offline-')).length > 0 && (
+                                <li>
+                                    <button
+                                        onClick={() => {
+                                            navigate('Settings', { initialSection: 'accounts' });
+                                            setIsOpen(false);
+                                        }}
+                                        className="w-full flex items-center gap-3 px-2 py-2 text-left rounded-md hover:bg-slate-700/50 transition-colors text-sm text-gray-300 hover:text-white"
+                                    >
+                                        <CogIcon className="w-5 h-5" />
+                                        <span>Manage Accounts</span>
+                                    </button>
+                                </li>
+                            )}
+                             <li>
                                 <button
                                     onClick={() => {
                                         navigate('Settings', { initialSection: 'accounts' });
@@ -64,18 +177,23 @@ const UserProfile: React.FC = () => {
                                     }}
                                     className="w-full flex items-center gap-3 px-2 py-2 text-left rounded-md hover:bg-slate-700/50 transition-colors text-sm text-gray-300 hover:text-white"
                                 >
-                                    <CogIcon className="w-5 h-5" />
-                                    <span>Manage Accounts</span>
-                                </button>
-                            </li>
-                             <li>
-                                <button className="w-full flex items-center gap-3 px-2 py-2 text-left rounded-md hover:bg-slate-700/50 transition-colors text-sm text-gray-300 hover:text-white">
                                     <UserPlusIcon className="w-5 h-5" />
                                     <span>Add Account</span>
                                 </button>
                             </li>
                              <li>
-                                <button className="w-full flex items-center gap-3 px-2 py-2 text-left rounded-md hover:bg-slate-700/50 transition-colors text-sm text-gray-300 hover:text-white">
+                                <button
+                                    onClick={() => {
+                                        // Remove temporary offline account from accounts list if present
+                                        if (activeAccount?.id.startsWith('offline-')) {
+                                            const { accounts, setAccounts } = useData();
+                                            setAccounts(accounts.filter(a => !a.id.startsWith('offline-')));
+                                        }
+                                        setActiveAccount(null);
+                                        setIsOpen(false);
+                                    }}
+                                    className="w-full flex items-center gap-3 px-2 py-2 text-left rounded-md hover:bg-red-900/20 transition-colors text-sm text-red-300 hover:text-red-200"
+                                >
                                     <ArrowRightOnRectangleIcon className="w-5 h-5" />
                                     <span>Log Out</span>
                                 </button>

@@ -75,23 +75,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             if (Array.isArray(storedAccounts) && storedAccounts.length > 0) {
                 setAccounts(storedAccounts as Account[]);
                 
-                // Set active account
+                // Set active account if one was previously selected
                 if (typeof storedActiveAccountId === 'string') {
                     const account = (storedAccounts as Account[]).find(a => a.id === storedActiveAccountId);
                     if (account) setActiveAccount(account);
-                } else {
-                    // Default to first account if none selected
-                    setActiveAccount((storedAccounts as Account[])[0]);
+                    // If stored ID not found, leave activeAccount as null (user will see prompt)
                 }
-            } else {
-                // First run - create a default guest account
-                const defaultAccount: Account = {
-                    id: Date.now().toString(),
-                    name: 'Guest',
-                };
-                setAccounts([defaultAccount]);
-                setActiveAccount(defaultAccount);
             }
+            // If no accounts at all, leave empty - user will see "Not Logged In" prompt
 
             // Load installations
             if (Array.isArray(storedInstallations)) {

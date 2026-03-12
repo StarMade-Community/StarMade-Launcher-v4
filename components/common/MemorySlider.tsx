@@ -68,17 +68,19 @@ const MemorySlider: React.FC<MemorySliderProps> = ({ value, onChange }) => {
                         <div className="absolute inset-0 rounded-full bg-white/20" />
                     </div>
                 </div>
-                <div className="relative mt-2 h-4">
-                    {markers.map((marker) => {
+                <div className="relative mt-4 h-8">
+                    {markers.map((marker, index) => {
                         const markerPos = ((marker - MIN_MEMORY) / (MAX_MEMORY - MIN_MEMORY)) * 100;
+                        // Alternate labels above/below to prevent overlap
+                        const isEven = index % 2 === 0;
                         return (
                             <div
                                 key={marker}
                                 className="absolute flex flex-col items-center transform -translate-x-1/2"
-                                style={{ left: `${markerPos}%` }}
+                                style={{ left: `${markerPos}%`, top: isEven ? '0' : '12px' }}
                             >
-                                <div className="w-px h-2 bg-slate-600 mb-1" />
-                                <span className="text-xs text-gray-500">
+                                <div className="w-px h-3 bg-slate-600 mb-1" />
+                                <span className="text-xs text-gray-400 font-mono whitespace-nowrap">
                                     {marker / 1024}GB
                                 </span>
                             </div>
