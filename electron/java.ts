@@ -87,8 +87,10 @@ function downloadFile(url: string, targetPath: string, onProgress?: (percent: nu
     const file = fs.createWriteStream(targetPath);
     
     https.get(url, (response) => {
-      // Handle redirects
-      if (response.statusCode === 302 || response.statusCode === 301) {
+      // Handle redirects (301 Moved Permanently, 302 Found, 303 See Other,
+      //                    307 Temporary Redirect, 308 Permanent Redirect)
+      const status = response.statusCode ?? 0;
+      if (status === 301 || status === 302 || status === 303 || status === 307 || status === 308) {
         const redirectUrl = response.headers.location;
         if (redirectUrl) {
           file.close();

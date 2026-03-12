@@ -28,6 +28,18 @@ const isDev = !app.isPackaged;
 const RENDERER_URL = 'http://localhost:3000';
 const PRELOAD_PATH = path.join(__dirname, 'preload.js');
 
+/**
+ * Returns a user-writable directory for launcher data (downloaded JREs, etc.).
+ *
+ * When packaged we use app.getPath('userData') instead of the directory next
+ * to the executable.  On Linux the executable lives inside a read-only
+ * AppImage squashfs mount, so any write attempt there produces EROFS.
+ * userData (e.g. ~/.config/<appName>) is always writable.
+ */
+function getLauncherDir(): string {
+  return app.isPackaged ? app.getPath('userData') : app.getAppPath();
+}
+
 // ─── Window ──────────────────────────────────────────────────────────────────
 
 let mainWindow: BrowserWindow | null = null;
@@ -146,8 +158,8 @@ ipcMain.handle(IPC.DOWNLOAD_CANCEL, (_event, installationId: string) => {
 
 ipcMain.handle(IPC.JAVA_LIST, async () => {
   const bundled: Array<{ version: string; path: string; source: string }> = [];
-  const launcherDir = app.isPackaged ? path.dirname(app.getPath('exe')) : app.getAppPath();
-  
+  const launcherDir = getLauncherDir();
+
   // Check for bundled JRE 8
   const jre8Path = process.platform === 'win32'
     ? path.join(launcherDir, 'jre8', 'bin', 'javaw.exe')
@@ -172,7 +184,7 @@ ipcMain.handle(IPC.JAVA_LIST, async () => {
 
 ipcMain.handle(IPC.JAVA_DOWNLOAD, async (_event, version: 8 | 25) => {
   try {
-    const launcherDir = app.isPackaged ? path.dirname(app.getPath('exe')) : app.getAppPath();
+    const launcherDir = getLauncherDir();
     const javaPath = await downloadJava(version, launcherDir);
     return { success: true, path: javaPath };
   } catch (error) {
@@ -186,7 +198,7 @@ ipcMain.handle(IPC.JAVA_DETECT, async () => {
 });
 
 ipcMain.handle(IPC.JAVA_GET_DEFAULT_PATHS, () => {
-  const launcherDir = app.isPackaged ? path.dirname(app.getPath('exe')) : app.getAppPath();
+  const launcherDir = getLauncherDir();
   return getDefaultJavaPaths(launcherDir);
 });
 
@@ -218,7 +230,7 @@ ipcMain.handle(IPC.GAME_LAUNCH, async (_event, options: {
   isServer?: boolean;
   serverPort?: number;
 }) => {
-  const launcherDir = app.isPackaged ? path.dirname(app.getPath('exe')) : app.getAppPath();
+  const launcherDir = getLauncherDir();
   return launchGame({ ...options, launcherDir });
 });
 
