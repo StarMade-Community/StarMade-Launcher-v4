@@ -285,17 +285,25 @@ ipcMain.handle(IPC.GAME_GET_GRAPHICS_INFO, (_event, installationPath: string) =>
 
 // ─── Session file reader ─────────────────────────────────────────────────────
 
+/** Narrow a value to a plain (non-null, non-array) object. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
  * Read the `launcher-session.json` file that the game writes into the
- * installation directory after each play session.  Returns the parsed JSON
- * object, or `null` when the file is absent or cannot be parsed.
+ * installation directory after each play session.  Validates that the
+ * result is a plain object before returning it; returns `null` when the
+ * file is absent, cannot be parsed, or contains an unexpected type.
  */
 ipcMain.handle(IPC.GAME_READ_SESSION, (_event, installationPath: string) => {
   const sessionFilePath = path.join(installationPath, 'launcher-session.json');
   try {
     if (!fs.existsSync(sessionFilePath)) return null;
     const content = fs.readFileSync(sessionFilePath, 'utf8');
-    return JSON.parse(content) as unknown;
+    const parsed = JSON.parse(content) as unknown;
+    if (!isPlainObject(parsed)) return null;
+    return parsed;
   } catch {
     return null;
   }

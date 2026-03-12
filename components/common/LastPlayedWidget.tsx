@@ -73,12 +73,22 @@ const SessionCard: React.FC<SessionCardProps> = ({
 }) => {
     const [hovered, setHovered] = useState(false);
 
+    const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onPlay(session);
+        }
+    };
+
     return (
         <div
             className="relative flex flex-col gap-1 p-2.5 rounded-lg bg-black/50 border border-white/10 hover:border-white/20 hover:bg-black/60 transition-all cursor-pointer group min-w-[120px] max-w-[150px]"
             onMouseEnter={() => setHovered(true)}
             onMouseLeave={() => setHovered(false)}
             onClick={() => onPlay(session)}
+            onKeyDown={handleKeyDown}
+            role="button"
+            tabIndex={0}
             title={`${session.installationName} · ${session.sessionType === 'singleplayer' ? 'Singleplayer' : `Multiplayer (${session.serverAddress})`}`}
         >
             {/* Badge */}

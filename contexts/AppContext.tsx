@@ -113,8 +113,21 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 console.log(`Game launched successfully with PID ${result.pid}`);
 
                 // Record this as the last-played session.
+                // Use a stable, deterministic id derived from the session target
+                // (installationId + serverAddress + serverPort + modIds) so that
+                // repeated launches of the same target update the existing record
+                // rather than creating a new one, preserving pin/unpin identity.
+                const serverAddress = pendingSessionArgs?.uplink ?? 'localhost';
+                const serverPort    = pendingSessionArgs?.uplinkPort ?? 4242;
+                const modIds        = pendingSessionArgs?.modIds;
+                const stableId = [
+                    installation.id,
+                    serverAddress,
+                    String(serverPort),
+                    (modIds ?? []).slice().sort().join(','),
+                ].join('::');
                 const session: PlaySession = {
-                    id: `${installation.id}-${Date.now()}`,
+                    id: stableId,
                     installationId: installation.id,
                     installationName: installation.name,
                     installationPath: installation.path,
@@ -122,9 +135,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                     sessionType: pendingSessionArgs?.uplink && pendingSessionArgs.uplink !== 'localhost'
                         ? 'multiplayer'
                         : 'singleplayer',
-                    serverAddress: pendingSessionArgs?.uplink ?? 'localhost',
-                    serverPort: pendingSessionArgs?.uplinkPort ?? 4242,
-                    modIds: pendingSessionArgs?.modIds,
+                    serverAddress,
+                    serverPort,
+                    modIds,
                     timestamp: new Date().toISOString(),
                 };
                 recordSession(session);

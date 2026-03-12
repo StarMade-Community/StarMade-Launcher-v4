@@ -348,6 +348,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     const recordSession = useCallback((session: PlaySession) => {
         setLastPlayedSession(session);
+        // If this session target is already pinned, refresh its timestamp so
+        // the card shows the correct "time ago" on the next render.
+        setPinnedSessions(prev =>
+            prev.map(s => s.id === session.id ? { ...s, timestamp: session.timestamp } : s)
+        );
     }, []);
 
     // ── Auth actions ─────────────────────────────────────────────────────────
