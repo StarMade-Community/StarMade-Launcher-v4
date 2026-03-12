@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { isRunningAsAppImage } from '../../electron/appimage-detect.js';
+import { isRunningOnWayland } from '../../electron/wayland-detect.js';
 
 // ─── isRunningAsAppImage ──────────────────────────────────────────────────────
 
@@ -43,3 +44,37 @@ describe('isRunningAsAppImage', () => {
     expect(isRunningAsAppImage({ APPDIR: '' }, '/usr/lib/starmade-launcher/starmade-launcher')).toBe(false);
   });
 });
+
+// ─── isRunningOnWayland ───────────────────────────────────────────────────────
+
+describe('isRunningOnWayland', () => {
+  it('returns true when WAYLAND_DISPLAY is set', () => {
+    expect(isRunningOnWayland({ WAYLAND_DISPLAY: 'wayland-0' })).toBe(true);
+  });
+
+  it('returns true when XDG_SESSION_TYPE is "wayland"', () => {
+    expect(isRunningOnWayland({ XDG_SESSION_TYPE: 'wayland' })).toBe(true);
+  });
+
+  it('returns true when both WAYLAND_DISPLAY and XDG_SESSION_TYPE=wayland are set', () => {
+    expect(isRunningOnWayland({ WAYLAND_DISPLAY: 'wayland-0', XDG_SESSION_TYPE: 'wayland' })).toBe(true);
+  });
+
+  it('returns false when only XDG_SESSION_TYPE=x11 is set', () => {
+    expect(isRunningOnWayland({ XDG_SESSION_TYPE: 'x11' })).toBe(false);
+  });
+
+  it('returns false when no Wayland indicators are present', () => {
+    expect(isRunningOnWayland({})).toBe(false);
+  });
+
+  it('returns false when WAYLAND_DISPLAY is an empty string', () => {
+    expect(isRunningOnWayland({ WAYLAND_DISPLAY: '' })).toBe(false);
+  });
+
+  it('returns true when WAYLAND_DISPLAY is set even if XDG_SESSION_TYPE is x11', () => {
+    // WAYLAND_DISPLAY being set is the authoritative indicator
+    expect(isRunningOnWayland({ WAYLAND_DISPLAY: 'wayland-1', XDG_SESSION_TYPE: 'x11' })).toBe(true);
+  });
+});
+

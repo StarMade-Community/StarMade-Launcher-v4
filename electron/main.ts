@@ -20,6 +20,7 @@ import type { UpdateInfo } from './updater.js';
 import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from './updater.js';
 import { loginWithPassword, refreshAccessToken, registerAccount, logoutAccount, getAuthStatus, getAccessTokenForLaunch } from './auth.js';
 import { isRunningAsAppImage } from './appimage-detect.js';
+import { isRunningOnWayland } from './wayland-detect.js';
 
 // ─── ES Module compatibility ─────────────────────────────────────────────────
 
@@ -32,19 +33,35 @@ const isDev = !app.isPackaged;
 const RENDERER_URL = 'http://localhost:3000';
 const PRELOAD_PATH = path.join(__dirname, 'preload.js');
 
-// ─── Linux AppImage sandbox fix ───────────────────────────────────────────────
-// AppImages are mounted as a squashfs image by an unprivileged user, so the
-// chrome-sandbox binary cannot have the required SUID-root permissions
-// (mode 4755, owned by root).  Electron aborts at startup with a fatal sandbox
-// error unless we explicitly disable the SUID sandbox.
+// ─── Linux sandbox fix ───────────────────────────────────────────────────────
+// Two situations on Linux require the SUID sandbox to be disabled:
 //
-// We restrict the workaround to AppImage launches (not deb/rpm installs where
-// the package manager can grant the correct SUID permissions).  Detection uses
-// multiple indicators because the APPIMAGE env var is not always propagated
-// when the AppImage is launched from a file manager or desktop environment on
-// an external/non-OS drive.  See electron/appimage-detect.ts for full details.
-if (process.platform === 'linux' && isRunningAsAppImage(process.env, app.getPath('exe'))) {
-  app.commandLine.appendSwitch('no-sandbox');
+// 1. AppImage: The squashfs image is mounted by an unprivileged user, so the
+//    chrome-sandbox binary inside the mount cannot have the required SUID-root
+//    permissions (mode 4755, owned by root).  Detection uses multiple
+//    indicators because the APPIMAGE env var is not always propagated when the
+//    AppImage is launched from a file manager or desktop environment on an
+//    external/non-OS drive.  See electron/appimage-detect.ts for full details.
+//
+// 2. Root user: Electron/Chromium explicitly refuses to start when the process
+//    is running as root (uid 0) without --no-sandbox, regardless of packaging
+//    format.  This covers both `sudo ./StarMade-Launcher.AppImage` and any
+//    other root-level invocation.
+if (process.platform === 'linux') {
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  if (isRoot || isRunningAsAppImage(process.env, app.getPath('exe'))) {
+    app.commandLine.appendSwitch('no-sandbox');
+  }
+}
+
+// ─── Linux Wayland fix ───────────────────────────────────────────────────────
+// On Wayland-only systems (e.g. KDE Plasma on Kubuntu without XWayland),
+// Electron's default X11 backend cannot connect to a display and aborts at
+// startup.  We detect a Wayland session via the WAYLAND_DISPLAY /
+// XDG_SESSION_TYPE env vars and switch Electron to the Ozone/Wayland backend.
+// See electron/wayland-detect.ts for full detection details.
+if (process.platform === 'linux' && isRunningOnWayland(process.env)) {
+  app.commandLine.appendSwitch('ozone-platform', 'wayland');
 }
 
 /**
