@@ -103,6 +103,8 @@ declare global {
       dialog: {
         /** Open folder picker dialog. Returns selected path or null if canceled. */
         openFolder: (defaultPath?: string) => Promise<string | null>;
+        /** Open file picker dialog. Returns selected path or null if canceled. */
+        openFile: (defaultPath?: string, type?: 'image') => Promise<string | null>;
       };
     };
   }

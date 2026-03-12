@@ -27,7 +27,7 @@ export const JAVA_8_ARGS: string[] = [];
  * @returns 25 for versions >= 0.3.x, otherwise 8.
  */
 export function getRequiredJavaVersion(starMadeVersion: string): 8 | 25 {
-  // Parse version string (format: "0.203.175" or "0.3.0" or "1.0")
+  // Parse version string (format: "0.203.175" or "0.302.101" or "1.0")
   const parts = starMadeVersion.split('.').map(p => parseInt(p, 10));
   if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1])) {
     // Default to Java 8 for unparseable versions (legacy/archive)
@@ -36,12 +36,14 @@ export function getRequiredJavaVersion(starMadeVersion: string): 8 | 25 {
 
   const [major, minor] = parts;
 
-  // StarMade 0.3.x and above require Java 25
-  if (major === 0 && minor >= 3) return 25;
-  // StarMade 1.x and above would also require Java 25 (future-proofing)
+  // StarMade 1.x and above require Java 25
   if (major >= 1) return 25;
 
-  // Everything else (0.2.x, 0.1.x, 0.0.x) uses Java 8
+  // StarMade uses a 3-component minor number: 0.3xx.yyy = "0.3.x" era.
+  // Versions 0.300.x and above require Java 25.
+  // Legacy versions (0.200.x – 0.205.x, etc.) use Java 8.
+  if (major === 0 && minor >= 300) return 25;
+
   return 8;
 }
 

@@ -49,6 +49,15 @@ interface IconPickerModalProps {
 }
 
 const IconPickerModal: React.FC<IconPickerModalProps> = ({ onSelect, onClose }) => {
+    const handleBrowse = async () => {
+        if (typeof window === 'undefined' || !window.launcher?.dialog) return;
+        const filePath = await window.launcher.dialog.openFile(undefined, 'image');
+        if (filePath) {
+            onSelect(filePath);
+            onClose();
+        }
+    };
+
     return (
         <div 
             className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center"
@@ -80,6 +89,15 @@ const IconPickerModal: React.FC<IconPickerModalProps> = ({ onSelect, onClose }) 
                             <span className="text-sm font-semibold text-gray-300 group-hover:text-white">{name}</span>
                         </button>
                     ))}
+                </div>
+                <div className="mt-6 pt-4 border-t border-white/10">
+                    <button
+                        onClick={handleBrowse}
+                        className="flex items-center gap-3 w-full px-4 py-3 bg-black/20 rounded-lg border border-white/10 hover:border-starmade-accent hover:bg-starmade-accent/10 transition-all group"
+                    >
+                        <FolderIcon className="w-5 h-5 text-gray-400 group-hover:text-starmade-accent flex-shrink-0" />
+                        <span className="text-sm font-semibold text-gray-300 group-hover:text-white uppercase tracking-wider">Browse for custom image…</span>
+                    </button>
                 </div>
             </div>
         </div>

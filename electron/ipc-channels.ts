@@ -71,6 +71,8 @@ export const IPC = {
   
   /** Renderer → Main (invoke): open folder picker dialog. */
   DIALOG_OPEN_FOLDER: 'dialog:open-folder',
+  /** Renderer → Main (invoke): open file picker dialog. Returns selected path or null. */
+  DIALOG_OPEN_FILE: 'dialog:open-file',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

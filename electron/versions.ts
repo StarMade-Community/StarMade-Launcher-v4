@@ -114,7 +114,7 @@ async function fetchBranch(branch: string): Promise<FetchedVersion[]> {
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) return cached.data;
 
   const text = await fetchText(url);
-  const data = parseBuildIndex(text, branch);
+  const data = parseBuildIndex(text, branch).reverse();
   _cache.set(branch, { data, timestamp: Date.now() });
   return data;
 }

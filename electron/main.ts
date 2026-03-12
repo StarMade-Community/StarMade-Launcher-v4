@@ -35,7 +35,7 @@ let mainWindow: BrowserWindow | null = null;
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
-    height: 800,
+    height: 900,
     minWidth: 960,
     minHeight: 600,
     frame: false,
@@ -283,6 +283,29 @@ ipcMain.handle(IPC.DIALOG_OPEN_FOLDER, async (_event, defaultPath?: string) => {
     return null;
   }
   
+  return result.filePaths[0];
+});
+
+ipcMain.handle(IPC.DIALOG_OPEN_FILE, async (_event, defaultPath?: string, type?: 'image') => {
+  const imageFilters = [
+    { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'] },
+    { name: 'All Files', extensions: ['*'] },
+  ];
+  const exeFilters = [
+    { name: 'Java Executable', extensions: process.platform === 'win32' ? ['exe'] : ['*'] },
+    { name: 'All Files', extensions: ['*'] },
+  ];
+
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    defaultPath: defaultPath || app.getPath('home'),
+    filters: type === 'image' ? imageFilters : exeFilters,
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
   return result.filePaths[0];
 });
 

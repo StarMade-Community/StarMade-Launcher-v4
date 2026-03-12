@@ -148,6 +148,9 @@ const launcherApi = {
     /** Open folder picker dialog. Returns selected path or null if canceled. */
     openFolder: (defaultPath?: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.DIALOG_OPEN_FOLDER, defaultPath),
+    /** Open file picker dialog. Returns selected path or null if canceled. */
+    openFile: (defaultPath?: string, type?: 'image'): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.DIALOG_OPEN_FILE, defaultPath, type),
   },
 };
 

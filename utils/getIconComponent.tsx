@@ -7,7 +7,13 @@ import {
 
 export const getIconComponent = (icon: string, size: 'large' | 'small' = 'small') => {
     const sizeClass = size === 'large' ? "w-16 h-16" : "w-6 h-6";
-    
+
+    // Custom image: absolute path or already a file:// URL
+    if (icon.startsWith('file://') || icon.startsWith('/') || /^[A-Za-z]:[\\\/]/.test(icon)) {
+        const src = icon.startsWith('file://') ? icon : `file://${icon}`;
+        return <img src={src} className={`${sizeClass} object-contain rounded`} alt="Custom icon" />;
+    }
+
     switch(icon) {
         case 'latest': return <CheckIcon className={`${sizeClass} text-green-400`} />;
         case 'release': return <CheckIcon className={`${sizeClass} text-green-400`} />;

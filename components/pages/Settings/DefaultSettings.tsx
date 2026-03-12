@@ -167,6 +167,18 @@ const DefaultSettingsForm: React.FC<{ isServer: boolean }> = ({ isServer }) => {
         }
     };
 
+    const handleFilePicker = async (key: 'javaPath8' | 'javaPath25') => {
+        if (typeof window === 'undefined' || !window.launcher?.dialog) {
+            return;
+        }
+
+        const currentPath = settings[key] || undefined;
+        const selectedPath = await window.launcher.dialog.openFile(currentPath);
+        if (selectedPath) {
+            update(key, selectedPath);
+        }
+    };
+
     return (
         <div className="space-y-4">
             <SettingRow title="Game Directory" description={`The default folder where new ${isServer ? 'servers' : 'installations'} will be created.`}>
@@ -203,14 +215,14 @@ const DefaultSettingsForm: React.FC<{ isServer: boolean }> = ({ isServer }) => {
             <SettingRow title="Java 8 Executable Path" description="Path to Java 8 (for StarMade versions < 0.3.x). Defaults to bundled jre8.">
                  <div className="flex w-full">
                   <input type="text" value={settings.javaPath8} onChange={e => update('javaPath8', e.target.value)} className="flex-1 bg-slate-900/80 border border-slate-700 rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
-                  <button className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80"><FolderIcon className="w-5 h-5 text-gray-400" /></button>
+                  <button onClick={() => handleFilePicker('javaPath8')} className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80 transition-colors"><FolderIcon className="w-5 h-5 text-gray-400" /></button>
                 </div>
             </SettingRow>
 
             <SettingRow title="Java 25 Executable Path" description="Path to Java 25 (for StarMade versions >= 0.3.x). Defaults to bundled jre25.">
                  <div className="flex w-full">
                   <input type="text" value={settings.javaPath25} onChange={e => update('javaPath25', e.target.value)} className="flex-1 bg-slate-900/80 border border-slate-700 rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
-                  <button className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80"><FolderIcon className="w-5 h-5 text-gray-400" /></button>
+                  <button onClick={() => handleFilePicker('javaPath25')} className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80 transition-colors"><FolderIcon className="w-5 h-5 text-gray-400" /></button>
                 </div>
             </SettingRow>
         </div>
