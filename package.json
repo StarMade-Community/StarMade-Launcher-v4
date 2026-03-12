@@ -52,7 +52,7 @@
     "win": {
       "target": [
         {
-          "target": "nsis",
+          "target": "portable",
           "arch": [
             "x64"
           ]
@@ -85,11 +85,8 @@
       "category": "Game",
       "icon": "build/icon.png"
     },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+    "portable": {
+      "requestedExecutionLevel": "asInvoker"
     }
   }
 }
