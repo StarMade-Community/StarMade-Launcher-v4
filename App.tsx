@@ -6,6 +6,7 @@ import Installations from './components/pages/Installations';
 import Play from './components/pages/Play';
 import Settings from './components/pages/Settings';
 import LaunchConfirmModal from './components/common/LaunchConfirmModal';
+import GameLogViewer from './components/common/GameLogViewer';
 import { useApp } from './contexts/AppContext';
 
 const App: React.FC = () => {
@@ -14,7 +15,10 @@ const App: React.FC = () => {
     pageProps, 
     isLaunchModalOpen, 
     closeLaunchModal, 
-    startLaunching 
+    startLaunching,
+    logViewerOpen,
+    logViewerInstallation,
+    closeLogViewer,
   } = useApp();
 
   const renderContent = () => {
@@ -39,6 +43,16 @@ const App: React.FC = () => {
         onLaunchAnyway={startLaunching}
         onCancel={closeLaunchModal}
       />
+      
+      {logViewerInstallation && (
+        <GameLogViewer
+          installationId={logViewerInstallation.id}
+          installationName={logViewerInstallation.name}
+          installationPath={logViewerInstallation.path}
+          isOpen={logViewerOpen}
+          onClose={closeLogViewer}
+        />
+      )}
       
       <div 
         className="absolute inset-0 bg-cover bg-center z-0" 

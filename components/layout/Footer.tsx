@@ -1,5 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ChevronDownIcon, CheckIcon, BugIcon, ArchiveIcon, ChevronRightIcon, DiscordIcon } from '../common/icons';
+import {
+    ChevronDownIcon,
+    CheckIcon,
+    BugIcon,
+    ArchiveIcon,
+    ChevronRightIcon,
+    DiscordIcon,
+    DevIcon
+} from '../common/icons';
 import useOnClickOutside from '../hooks/useOnClickOutside';
 import type { Version } from '../../types';
 import { useApp } from '../../contexts/AppContext';
@@ -7,7 +15,7 @@ import { useData } from '../../contexts/DataContext';
 
 const DiscordButton: React.FC = () => {
     const [onlineCount, setOnlineCount] = useState<number | null>(null);
-    const [inviteUrl, setInviteUrl] = useState<string>('https://discord.gg/starmade');
+    const [inviteUrl, setInviteUrl] = useState<string>('hhttps://discord.gg/SXbkYpU');
 
     useEffect(() => {
         fetch('https://discordapp.com/api/guilds/100173352475303936/widget.json')
@@ -61,9 +69,9 @@ const VersionSelector: React.FC = () => {
 
     const getIconForType = (type: Version['type']) => {
         switch(type) {
-            case 'latest': return <CheckIcon className="w-5 h-5 text-green-400" />;
             case 'release': return <CheckIcon className="w-5 h-5 text-green-400" />;
-            case 'dev': return <BugIcon className="w-5 h-5 text-orange-400" />;
+            case 'pre': return <BugIcon className="w-5 h-5 text-green-400" />;
+            case 'dev': return <DevIcon className="w-5 h-5 text-orange-400" />;
             case 'archive': return <ArchiveIcon className="w-5 h-5 text-gray-400" />;
             default: return null;
         }
@@ -204,6 +212,10 @@ const SciFiPlayButton: React.FC<SciFiPlayButtonProps> = ({ isUpdating, onClick, 
 
 const Footer: React.FC = () => {
   const { navigate, isLaunching, openLaunchModal, completeLaunching } = useApp();
+  const { installations } = useData();
+  
+  // Use the first installed installation as the default
+  const defaultInstallation = installations.find(inst => inst.installed !== false) || installations[0];
 
   return (
     <footer className="relative z-20 px-6 py-4 bg-black/20 backdrop-blur-sm border-t border-white/5">
@@ -217,7 +229,7 @@ const Footer: React.FC = () => {
 
             <SciFiPlayButton 
                 isUpdating={isLaunching}
-                onClick={openLaunchModal}
+                onClick={() => openLaunchModal(defaultInstallation)}
                 onUpdateComplete={completeLaunching}
             />
 

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, ReactNode } from 'react';
-import type { AppContextType, Page, PageProps } from '../types';
+import type { AppContextType, Page, PageProps, ManagedItem } from '../types';
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
@@ -8,28 +8,103 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const [pageProps, setPageProps] = useState<PageProps>({});
     const [isLaunchModalOpen, setIsLaunchModalOpen] = useState(false);
     const [isLaunching, setIsLaunching] = useState(false);
+    const [launchError, setLaunchError] = useState<string | null>(null);
+    const [pendingLaunchInstallation, setPendingLaunchInstallation] = useState<ManagedItem | null>(null);
+    const [logViewerOpen, setLogViewerOpen] = useState(false);
+    const [logViewerInstallation, setLogViewerInstallation] = useState<ManagedItem | null>(null);
 
     const navigate = (page: Page, props: PageProps = {}) => {
         setActivePage(page);
         setPageProps(props);
     };
 
-    const openLaunchModal = () => {
+    const openLaunchModal = (installation?: ManagedItem) => {
         if (!isLaunching) {
+            setPendingLaunchInstallation(installation || null);
             setIsLaunchModalOpen(true);
         }
     };
-    const closeLaunchModal = () => setIsLaunchModalOpen(false);
+    const closeLaunchModal = () => {
+        setIsLaunchModalOpen(false);
+        setLaunchError(null);
+        setPendingLaunchInstallation(null);
+    };
 
-    const startLaunching = () => {
+    const startLaunching = async () => {
+        const installation = pendingLaunchInstallation;
+        
         console.log("Launch sequence started.");
         setIsLaunchModalOpen(false);
         setIsLaunching(true);
+        setLaunchError(null);
+
+        if (!installation) {
+            console.error("No installation selected to launch");
+            setLaunchError("No installation selected");
+            setIsLaunching(false);
+            return;
+        }
+
+        // Check if Electron API is available
+        if (typeof window === 'undefined' || !window.launcher?.game) {
+            console.error("Game launch API not available");
+            setLaunchError("Game launch API not available. Running in browser mode?");
+            setIsLaunching(false);
+            return;
+        }
+
+        try {
+            const result = await window.launcher.game.launch({
+                installationId: installation.id,
+                installationPath: installation.path,
+                starMadeVersion: installation.version,
+                minMemory: 1024, // TODO: Get from installation settings
+                maxMemory: 8192,  // TODO: Get from installation settings
+                isServer: false,
+            });
+
+            if (result.success) {
+                console.log(`Game launched successfully with PID ${result.pid}`);
+                
+                // Check if we should open log viewer automatically
+                if (typeof window !== 'undefined' && window.launcher?.store) {
+                    window.launcher.store.get('launcherSettings').then((settings: any) => {
+                        if (settings?.showLog) {
+                            setLogViewerInstallation(installation);
+                            setLogViewerOpen(true);
+                        }
+                    }).catch(() => {});
+                }
+                
+                // Keep isLaunching true for a moment to show progress
+                setTimeout(() => {
+                    setIsLaunching(false);
+                }, 2000);
+            } else {
+                console.error("Failed to launch game:", result.error);
+                setLaunchError(result.error || "Unknown error");
+                setIsLaunching(false);
+            }
+        } catch (error) {
+            console.error("Exception during launch:", error);
+            setLaunchError(String(error));
+            setIsLaunching(false);
+        }
     };
     
     const completeLaunching = () => {
         console.log("Launch sequence complete.");
         setIsLaunching(false);
+        setLaunchError(null);
+    };
+
+    const openLogViewer = (installation: ManagedItem) => {
+        setLogViewerInstallation(installation);
+        setLogViewerOpen(true);
+    };
+
+    const closeLogViewer = () => {
+        setLogViewerOpen(false);
     };
 
     const value: AppContextType = {
@@ -37,11 +112,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         pageProps,
         isLaunchModalOpen,
         isLaunching,
+        launchError,
+        logViewerOpen,
+        logViewerInstallation,
         navigate,
         openLaunchModal,
         closeLaunchModal,
         startLaunching,
         completeLaunching,
+        openLogViewer,
+        closeLogViewer,
     };
 
     return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

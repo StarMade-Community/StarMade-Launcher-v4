@@ -6,8 +6,20 @@ import {
   shell,
 } from 'electron';
 import path from 'path';
-import { IPC } from './ipc-channels';
-import { storeGet, storeSet, storeDelete } from './store';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
+import { IPC } from './ipc-channels.js';
+import { storeGet, storeSet, storeDelete } from './store.js';
+import { fetchAllVersions, invalidateVersionCache } from './versions.js';
+import { startDownload, cancelDownload } from './downloader.js';
+import type { DownloadProgress } from './downloader.js';
+import { downloadJava, detectSystemJava, resolveJavaPath } from './java.js';
+import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, getGraphicsInfo } from './launcher.js';
+
+// ─── ES Module compatibility ─────────────────────────────────────────────────
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -91,6 +103,129 @@ ipcMain.handle(IPC.STORE_GET, (_event, key: string) => storeGet(key));
 ipcMain.handle(IPC.STORE_SET, (_event, key: string, value: unknown) => { storeSet(key, value); });
 ipcMain.handle(IPC.STORE_DELETE, (_event, key: string) => { storeDelete(key); });
 
+// ─── Version manifest IPC handlers ───────────────────────────────────────────
+
+ipcMain.handle(IPC.VERSIONS_FETCH, async (_event, { invalidate = false } = {}) => {
+  if (invalidate) invalidateVersionCache();
+  return fetchAllVersions();
+});
+
+// ─── Download IPC handlers ────────────────────────────────────────────────────
+
+ipcMain.handle(
+  IPC.DOWNLOAD_START,
+  (event, installationId: string, buildPath: string, targetDir: string) => {
+    const { sender } = event;
+
+    const send = <T>(channel: string, payload: T) => {
+      if (!sender.isDestroyed()) sender.send(channel, payload);
+    };
+
+    // Fire-and-forget: progress/complete/error arrive via separate push events.
+    startDownload(
+      installationId,
+      buildPath,
+      targetDir,
+      (progress: DownloadProgress) => send(IPC.DOWNLOAD_PROGRESS, progress),
+      ()                           => send(IPC.DOWNLOAD_COMPLETE,  { installationId }),
+      (error: string)              => send(IPC.DOWNLOAD_ERROR,     { installationId, error }),
+    ).catch((err: unknown) => {
+      send(IPC.DOWNLOAD_ERROR, { installationId, error: String(err) });
+    });
+
+    return { started: true };
+  },
+);
+
+ipcMain.handle(IPC.DOWNLOAD_CANCEL, (_event, installationId: string) => {
+  cancelDownload(installationId);
+});
+
+// ─── Java IPC handlers ────────────────────────────────────────────────────────
+
+ipcMain.handle(IPC.JAVA_LIST, async () => {
+  const bundled: Array<{ version: string; path: string; source: string }> = [];
+  const launcherDir = app.isPackaged ? path.dirname(app.getPath('exe')) : app.getAppPath();
+  
+  // Check for bundled JRE 8
+  const jre8Path = process.platform === 'win32'
+    ? path.join(launcherDir, 'jre8', 'bin', 'javaw.exe')
+    : path.join(launcherDir, 'jre8', 'bin', 'java');
+  if (fs.existsSync(jre8Path)) {
+    bundled.push({ version: '8', path: jre8Path, source: 'bundled' });
+  }
+  
+  // Check for bundled JRE 25
+  const jre25Path = process.platform === 'win32'
+    ? path.join(launcherDir, 'jre25', 'bin', 'javaw.exe')
+    : path.join(launcherDir, 'jre25', 'bin', 'java');
+  if (fs.existsSync(jre25Path)) {
+    bundled.push({ version: '25', path: jre25Path, source: 'bundled' });
+  }
+  
+  // Detect system Java
+  const system = await detectSystemJava();
+  
+  return { bundled, system: system.map(j => ({ ...j, source: 'system' })) };
+});
+
+ipcMain.handle(IPC.JAVA_DOWNLOAD, async (_event, version: 8 | 25) => {
+  try {
+    const launcherDir = app.isPackaged ? path.dirname(app.getPath('exe')) : app.getAppPath();
+    const javaPath = await downloadJava(version, launcherDir);
+    return { success: true, path: javaPath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.JAVA_DETECT, async () => {
+  const system = await detectSystemJava();
+  return system.map(j => ({ ...j, source: 'system' }));
+});
+
+// ─── Game launch IPC handlers ─────────────────────────────────────────────────
+
+ipcMain.handle(IPC.GAME_LAUNCH, async (_event, options: {
+  installationId: string;
+  installationPath: string;
+  starMadeVersion: string;
+  minMemory?: number;
+  maxMemory?: number;
+  jvmArgs?: string;
+  customJavaPath?: string;
+  isServer?: boolean;
+  serverPort?: number;
+}) => {
+  const launcherDir = app.isPackaged ? path.dirname(app.getPath('exe')) : app.getAppPath();
+  return launchGame({ ...options, launcherDir });
+});
+
+ipcMain.handle(IPC.GAME_STOP, (_event, installationId: string) => {
+  return { success: stopGame(installationId) };
+});
+
+ipcMain.handle(IPC.GAME_STATUS, (_event, installationId: string) => {
+  return getGameStatus(installationId);
+});
+
+ipcMain.handle(IPC.GAME_LIST_RUNNING, () => {
+  return getAllRunningGames();
+});
+
+ipcMain.handle(IPC.GAME_GET_LOG_PATH, (_event, installationId: string) => {
+  return getLogPath(installationId);
+});
+
+ipcMain.handle(IPC.GAME_OPEN_LOG_LOCATION, (_event, installationPath: string) => {
+  openLogLocation(installationPath);
+  return { success: true };
+});
+
+ipcMain.handle(IPC.GAME_GET_GRAPHICS_INFO, (_event, installationPath: string) => {
+  return getGraphicsInfo(installationPath);
+});
+
 // ─── Application menu ────────────────────────────────────────────────────────
 
 function buildMenu(): void {
@@ -157,3 +292,9 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
+
+app.on('before-quit', () => {
+  // Stop all running game/server processes
+  stopAllGames();
+});
+

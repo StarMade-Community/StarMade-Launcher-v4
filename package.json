@@ -1,7 +1,9 @@
 {
-  "name": "starmade-modern-launcher-21",
+  "name": "starmade-launcher-v4",
   "private": true,
-  "version": "0.0.0",
+  "version": "4.0.0",
+  "description": "Modern cross-platform launcher for StarMade",
+  "author": "StarMade Community",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -10,14 +12,21 @@
     "preview": "vite preview",
     "electron:dev": "concurrently -k \"npm run dev\" \"wait-on http://localhost:3000 && tsc -p tsconfig.electron.json && electron .\"",
     "electron:build": "npm run build && tsc -p tsconfig.electron.json && electron-builder",
-    "electron:preview": "npm run build && tsc -p tsconfig.electron.json && electron ."
+    "electron:preview": "npm run build && tsc -p tsconfig.electron.json && electron .",
+    "version:patch": "npm version patch --no-git-tag-version",
+    "version:minor": "npm version minor --no-git-tag-version",
+    "version:major": "npm version major --no-git-tag-version"
   },
   "dependencies": {
+    "adm-zip": "^0.5.16",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "tar-stream": "^3.1.8"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.7",
     "@types/node": "^22.14.0",
+    "@types/tar-stream": "^3.1.4",
     "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.2.1",
     "electron": "^41.0.0",
@@ -29,42 +38,51 @@
   "build": {
     "appId": "org.starmade.launcher",
     "productName": "StarMade Launcher",
-    "copyright": "Copyright © 2024 StarMade Community",
+    "copyright": "Copyright © 2026 Schine, GmbH",
+    "artifactName": "${productName}.${ext}",
     "files": [
       "dist/**/*",
       "dist-electron/**/*"
     ],
     "directories": {
+      "buildResources": "build",
       "output": "release"
     },
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
-      "icon": "public/icon.ico"
+      "icon": "build/icon.ico"
     },
     "mac": {
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "category": "public.app-category.games",
-      "icon": "public/icon.icns"
+      "icon": "build/icon.icns"
     },
     "linux": {
       "target": [
         {
           "target": "AppImage",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "category": "Game",
-      "icon": "public/icon.png"
+      "icon": "build/icon.png"
     },
     "nsis": {
       "oneClick": false,

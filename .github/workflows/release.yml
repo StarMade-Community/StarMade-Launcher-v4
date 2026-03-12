@@ -1,0 +1,244 @@
+name: Build and Release
+
+on:
+  # Trigger on version tags (e.g., v1.0.0, v0.1.0-beta)
+  push:
+    tags:
+      - 'v*'
+  # Allow manual triggering from the Actions tab
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.0)'
+        required: true
+        default: '0.0.0'
+
+# Required for creating releases
+permissions:
+  contents: write
+
+jobs:
+  # ─── Build for Windows ────────────────────────────────────────────────────
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Electron app
+        run: npm run electron:build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-builds
+          path: |
+            release/*.exe
+            release/*.zip
+          retention-days: 7
+
+  # ─── Build for macOS ──────────────────────────────────────────────────────
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Electron app
+        run: npm run electron:build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Uncomment if you have Apple Developer credentials for code signing:
+          # CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
+          # CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-builds
+          path: |
+            release/*.dmg
+            release/*.zip
+          retention-days: 7
+
+  # ─── Build for Linux ──────────────────────────────────────────────────────
+  build-linux:
+    name: Build Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Electron app
+        run: npm run electron:build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-builds
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/*.rpm
+          retention-days: 7
+
+  # ─── Create Draft Release ─────────────────────────────────────────────────
+  create-release:
+    name: Create Draft Release
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-builds
+          path: artifacts/windows
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-builds
+          path: artifacts/macos
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-builds
+          path: artifacts/linux
+
+      # Extract version from tag or workflow input
+      - name: Set version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "TAG=v${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+            echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      # Read changelog from CHANGELOG.md or generate release notes
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          if [ -f "CHANGELOG.md" ]; then
+            # Extract notes for this version from CHANGELOG.md
+            awk '/^## \[?'"${{ steps.version.outputs.VERSION }}"'\]?/{flag=1;next}/^## \[?[0-9]/{flag=0}flag' CHANGELOG.md > notes.txt
+            if [ ! -s notes.txt ]; then
+              echo "Release ${{ steps.version.outputs.VERSION }}" > notes.txt
+            fi
+          else
+            cat > notes.txt <<EOF
+          ## StarMade Launcher v${{ steps.version.outputs.VERSION }}
+
+          ### What's Changed
+          - See commit history for full details
+
+          ### Downloads
+          - **Windows:** \`StarMade-Launcher-Setup-${{ steps.version.outputs.VERSION }}.exe\`
+          - **macOS:** \`StarMade-Launcher-${{ steps.version.outputs.VERSION }}.dmg\`
+          - **Linux:** \`StarMade-Launcher-${{ steps.version.outputs.VERSION }}.AppImage\`
+
+          ### Installation
+          1. Download the appropriate file for your platform
+          2. Run the installer (Windows/macOS) or make AppImage executable (Linux)
+          3. Launch StarMade Launcher
+
+          ---
+          **Full Changelog**: https://github.com/\${{ github.repository }}/compare/v${{ steps.version.outputs.VERSION }}...HEAD
+          EOF
+          fi
+
+      # Create draft release with all artifacts
+      - name: Create Draft Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.TAG }}
+          name: StarMade Launcher ${{ steps.version.outputs.VERSION }}
+          body_path: notes.txt
+          draft: true
+          prerelease: ${{ contains(steps.version.outputs.VERSION, 'alpha') || contains(steps.version.outputs.VERSION, 'beta') || contains(steps.version.outputs.VERSION, 'rc') }}
+          files: |
+            artifacts/windows/*
+            artifacts/macos/*
+            artifacts/linux/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Calculate checksums for all artifacts
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          find . -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.AppImage" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" \) -exec sh -c 'sha256sum "$1" | tee -a ../SHA256SUMS.txt' _ {} \;
+          cd ..
+          echo "## SHA-256 Checksums" >> notes.txt
+          echo "\`\`\`" >> notes.txt
+          cat SHA256SUMS.txt >> notes.txt
+          echo "\`\`\`" >> notes.txt
+
+      - name: Upload checksums as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: SHA256SUMS.txt
+          retention-days: 90
+
+      - name: Summary
+        run: |
+          echo "## 🚀 Release Created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** ${{ steps.version.outputs.TAG }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts Built" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Windows (x64)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ macOS (x64 + ARM64)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Linux (x64)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Review the draft release at https://github.com/${{ github.repository }}/releases" >> $GITHUB_STEP_SUMMARY
+          echo "2. Test the builds on each platform" >> $GITHUB_STEP_SUMMARY
+          echo "3. Update release notes if needed" >> $GITHUB_STEP_SUMMARY
+          echo "4. Publish the release when ready" >> $GITHUB_STEP_SUMMARY
+

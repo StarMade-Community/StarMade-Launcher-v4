@@ -1,3 +1,5 @@
+import type { Version, DownloadProgress } from './index';
+
 declare global {
   interface Window {
     /** IPC bridge exposed by the Electron preload script. Undefined in plain browser environments. */
@@ -15,6 +17,7 @@ declare global {
          */
         onMaximizedChanged: (cb: (isMaximized: boolean) => void) => () => void;
       };
+
       /** Persistent JSON store — backed by a file in Electron's userData directory. */
       store: {
         /** Retrieve a top-level value by key. Resolves to `undefined` if the key does not exist. */
@@ -24,8 +27,79 @@ declare global {
         /** Remove a key from the store. */
         delete: (key: string) => Promise<void>;
       };
+
+      /** Version manifest API — Phase 3. */
+      versions: {
+        /**
+         * Fetch all available StarMade versions from the CDN build indexes.
+         * @param invalidate  Pass `true` to bypass the in-process TTL cache.
+         */
+        fetch: (invalidate?: boolean) => Promise<Version[]>;
+      };
+
+      /** Game download API — Phase 3. */
+      download: {
+        /**
+         * Start downloading game files for the given build path into `targetDir`.
+         * Returns immediately; progress is delivered via `onProgress` / `onComplete` / `onError`.
+         */
+        start: (installationId: string, buildPath: string, targetDir: string) => Promise<{ started: boolean }>;
+        /** Cancel an in-progress download. Safe to call when no download is running. */
+        cancel: (installationId: string) => Promise<void>;
+        /** Subscribe to live progress events. Returns a cleanup function. */
+        onProgress: (cb: (progress: DownloadProgress) => void) => () => void;
+        /** Subscribe to download-complete events. Returns a cleanup function. */
+        onComplete: (cb: (payload: { installationId: string }) => void) => () => void;
+        /** Subscribe to download-error events. Returns a cleanup function. */
+        onError: (cb: (payload: { installationId: string; error: string }) => void) => () => void;
+      };
+
+      /** Java management API — Phase 4. */
+      java: {
+        /** List all detected Java runtimes (bundled + system). */
+        list: () => Promise<{
+          bundled: Array<{ version: string; path: string; source: string }>;
+          system: Array<{ version: string; path: string; source: string }>;
+        }>;
+        /** Download and install a Java runtime (8 or 25). */
+        download: (version: 8 | 25) => Promise<{ success: boolean; path?: string; error?: string }>;
+        /** Scan for system-installed Java versions. */
+        detect: () => Promise<Array<{ version: string; path: string; source: string }>>;
+      };
+
+      /** Game launching API — Phase 5. */
+      game: {
+        /** Launch a game or server. */
+        launch: (options: {
+          installationId: string;
+          installationPath: string;
+          starMadeVersion: string;
+          minMemory?: number;
+          maxMemory?: number;
+          jvmArgs?: string;
+          customJavaPath?: string;
+          isServer?: boolean;
+          serverPort?: number;
+        }) => Promise<{ success: boolean; pid?: number; error?: string }>;
+        /** Stop a running game or server. */
+        stop: (installationId: string) => Promise<{ success: boolean }>;
+        /** Check if a game/server is running. */
+        status: (installationId: string) => Promise<{ running: boolean; pid?: number; uptime?: number }>;
+        /** Get all running games/servers. */
+        listRunning: () => Promise<Array<{ installationId: string; pid?: number; isServer: boolean; uptime: number }>>;
+        /** Get log file path for a running game. */
+        getLogPath: (installationId: string) => Promise<string | null>;
+        /** Open log directory in file manager. */
+        openLogLocation: (installationPath: string) => Promise<{ success: boolean }>;
+        /** Get GraphicsInfo.txt content if it exists. */
+        getGraphicsInfo: (installationPath: string) => Promise<string | null>;
+        /** Subscribe to game log events. Returns a cleanup function. */
+        onLog: (cb: (data: { installationId: string; level: string; message: string }) => void) => () => void;
+      };
     };
   }
 }
 
 export {};
+
+

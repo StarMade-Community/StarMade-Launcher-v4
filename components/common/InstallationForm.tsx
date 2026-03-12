@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { FolderIcon, MonitorIcon, ChevronDownIcon, CloseIcon, PencilIcon } from './icons';
-import type { ManagedItem, ItemType } from '../../types';
+import type { ManagedItem, ItemType, Version } from '../../types';
 import { getIconComponent } from '../../utils/getIconComponent';
 import CustomDropdown from './CustomDropdown';
 import MemorySlider from './MemorySlider';
+import { useData } from '../../contexts/DataContext';
 
 interface InstallationFormProps {
   item: ManagedItem;
@@ -88,18 +89,57 @@ const IconPickerModal: React.FC<IconPickerModalProps> = ({ onSelect, onClose }) 
 };
 
 const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave, onCancel, itemTypeName }) => {
+  const { versions: allVersions, isVersionsLoading } = useData();
+
   const [name, setName] = useState(item.name);
   const [port, setPort] = useState(item.port ?? '4242');
   const [icon, setIcon] = useState(item.icon);
   const [type, setType] = useState<ItemType>(item.type === 'latest' ? 'release' : item.type);
   const [version, setVersion] = useState(item.version);
+  const [buildPath, setBuildPath] = useState(item.buildPath ?? '');
+  const [requiredJavaVersion, setRequiredJavaVersion] = useState<8 | 25 | undefined>(item.requiredJavaVersion);
   const [gameDir, setGameDir] = useState(item.path);
   const [resolution, setResolution] = useState('1920x1080');
-  const [javaMemory, setJavaMemory] = useState(4096);
-  const [javaPath, setJavaPath] = useState('C:\\Program Files\\Java\\jdk-17\\bin\\javaw.exe');
-  const [jvmArgs, setJvmArgs] = useState('-Xms4G -Xmx4G');
+  const [javaMemory, setJavaMemory] = useState(8192);
+  const [javaPath, setJavaPath] = useState('');
+  const [jvmArgs, setJvmArgs] = useState('-Xms4G -Xmx8G');
   const [showMoreOptions, setShowMoreOptions] = useState(false);
   const [isIconPickerOpen, setIconPickerOpen] = useState(false);
+
+  // Versions filtered to the currently selected branch
+  const filteredVersions: Version[] = allVersions.filter(v => v.type === type);
+  const versionOptions = filteredVersions.length > 0
+    ? filteredVersions.map(v => ({ value: v.id, label: v.id }))
+    : [{ value: version, label: version }]; // fallback while loading
+
+  // When branch changes, auto-select the first available version in that branch
+  const handleTypeChange = (newType: string) => {
+    const t = newType as ItemType;
+    setType(t);
+    const first = allVersions.find(v => v.type === t);
+    if (first) {
+      setVersion(first.id);
+      setBuildPath(first.buildPath ?? '');
+      setRequiredJavaVersion(first.requiredJavaVersion);
+    }
+  };
+
+  // When version changes, also carry the buildPath forward
+  const handleVersionChange = (newVersionId: string) => {
+    setVersion(newVersionId);
+    const entry = filteredVersions.find(v => v.id === newVersionId);
+    setBuildPath(entry?.buildPath ?? '');
+    setRequiredJavaVersion(entry?.requiredJavaVersion);
+  };
+
+  // When live versions arrive (or change), sync the buildPath for the current selection
+  useEffect(() => {
+    if (allVersions.length === 0) return;
+    const entry = allVersions.find(v => v.id === version && v.type === type);
+    if (entry?.buildPath) setBuildPath(entry.buildPath);
+    if (entry?.requiredJavaVersion !== undefined) setRequiredJavaVersion(entry.requiredJavaVersion);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allVersions]);
 
   useEffect(() => {
     const memoryInGB = javaMemory / 1024;
@@ -126,19 +166,16 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         icon,
         version,
         path: gameDir,
+        buildPath: buildPath || undefined,
+        requiredJavaVersion: requiredJavaVersion,
+        installed: isNew ? false : item.installed,
         ...(itemTypeName === 'Server' && { port }),
     });
-  }
+  };
 
   const title = isNew ? `New ${itemTypeName}` : `Edit ${itemTypeName}`;
   const saveButtonText = isNew ? 'Create' : 'Save';
 
-  const versions = [
-    { value: '0.203.175', label: '0.203.175' },
-    { value: '0.202.136', label: '0.202.136' },
-    { value: '0.203.176-dev', label: '0.203.176-dev' },
-    { value: '1.0', label: '1.0' },
-  ];
   const resolutionOptions = resolutions.map(res => ({ value: res, label: res }));
 
   return (
@@ -194,16 +231,26 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
               <CustomDropdown 
                 options={branches}
                 value={type}
-                onChange={(v) => setType(v as ItemType)}
+                onChange={handleTypeChange}
               />
             </FormField>
-            <FormField label="Version" htmlFor="itemVersion">
+            <FormField label={isVersionsLoading ? 'Version (loading…)' : 'Version'} htmlFor="itemVersion">
               <CustomDropdown
-                options={versions}
+                options={versionOptions}
                 value={version}
-                onChange={setVersion}
+                onChange={handleVersionChange}
               />
             </FormField>
+            {requiredJavaVersion && (
+              <div className="col-span-2 -mt-2">
+                <p className="text-xs text-gray-400">
+                  <span className="font-semibold">Requires Java {requiredJavaVersion}</span>
+                  {requiredJavaVersion === 25 && (
+                    <span className="ml-2 text-amber-400">(will be auto-downloaded in Phase 4)</span>
+                  )}
+                </p>
+              </div>
+            )}
           </div>
         </div>
 

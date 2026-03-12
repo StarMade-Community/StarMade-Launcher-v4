@@ -49,6 +49,12 @@ const ToggleSwitch: React.FC<{ checked: boolean; onChange: (checked: boolean) =>
 const LauncherSettings: React.FC = () => {
     const [isLoaded, setIsLoaded] = useState(false);
     const [settings, setSettings] = useState<LauncherSettingsData>(DEFAULT_SETTINGS);
+    const [javaRuntimes, setJavaRuntimes] = useState<{
+        bundled: Array<{ version: string; path: string; source: string }>;
+        system: Array<{ version: string; path: string; source: string }>;
+    }>({ bundled: [], system: [] });
+    const [isLoadingJava, setIsLoadingJava] = useState(false);
+    const [javaDownloadProgress, setJavaDownloadProgress] = useState<Record<string, string>>({});
 
     const languageOptions = [
         { value: 'English (US)', label: 'English (US)' },
@@ -74,7 +80,62 @@ const LauncherSettings: React.FC = () => {
             }
             setIsLoaded(true);
         }).catch(() => setIsLoaded(true));
+        
+        // Load Java runtimes
+        loadJavaRuntimes();
     }, []);
+
+    const loadJavaRuntimes = async () => {
+        if (typeof window === 'undefined' || !window.launcher?.java) {
+            return;
+        }
+        try {
+            const runtimes = await window.launcher.java.list();
+            setJavaRuntimes(runtimes);
+        } catch (error) {
+            console.error('Failed to load Java runtimes:', error);
+        }
+    };
+
+    const handleDetectJava = async () => {
+        if (typeof window === 'undefined' || !window.launcher?.java) {
+            return;
+        }
+        setIsLoadingJava(true);
+        try {
+            await window.launcher.java.detect();
+            await loadJavaRuntimes();
+        } catch (error) {
+            console.error('Failed to detect Java:', error);
+        } finally {
+            setIsLoadingJava(false);
+        }
+    };
+
+    const handleDownloadJava = async (version: 8 | 25) => {
+        if (typeof window === 'undefined' || !window.launcher?.java) {
+            return;
+        }
+        setJavaDownloadProgress(prev => ({ ...prev, [version]: 'Downloading...' }));
+        try {
+            const result = await window.launcher.java.download(version);
+            if (result.success) {
+                setJavaDownloadProgress(prev => ({ ...prev, [version]: 'Installed!' }));
+                await loadJavaRuntimes();
+                setTimeout(() => {
+                    setJavaDownloadProgress(prev => {
+                        const next = { ...prev };
+                        delete next[version];
+                        return next;
+                    });
+                }, 3000);
+            } else {
+                setJavaDownloadProgress(prev => ({ ...prev, [version]: `Error: ${result.error}` }));
+            }
+        } catch (error) {
+            setJavaDownloadProgress(prev => ({ ...prev, [version]: `Error: ${String(error)}` }));
+        }
+    };
 
     // Persist whenever settings change (skip the initial default render)
     useEffect(() => {
@@ -126,12 +187,73 @@ const LauncherSettings: React.FC = () => {
                                 Check Now
                             </button>
                         </SettingRow>
-                        <SettingRow title="Manage Bundled Java Runtimes" description="View and manage the Java runtimes used by the launcher.">
-                            <button className="px-4 py-2 rounded-md bg-slate-700 hover:bg-slate-600 transition-colors text-sm font-semibold uppercase tracking-wider">
-                                Manage Java
-                            </button>
-                        </SettingRow>
                     </div>
+                </div>
+
+                <div className="mt-8">
+                    <h2 className="font-display text-xl font-bold uppercase tracking-wider text-white mb-4 pb-2 border-b-2 border-white/10">
+                        Manage Java
+                    </h2>
+                    
+                    {/* Java Runtime List */}
+                    <div className="space-y-2 mb-4">
+                        {javaRuntimes.bundled.length === 0 && javaRuntimes.system.length === 0 && (
+                            <div className="text-gray-400 text-sm italic p-3 bg-black/20 rounded-md">
+                                No Java runtimes detected. Download Java 8 or Java 25 below.
+                            </div>
+                        )}
+                        
+                        {javaRuntimes.bundled.map((jre, i) => (
+                            <div key={`bundled-${i}`} className="flex items-center justify-between p-3 bg-black/20 rounded-md border border-starmade-accent/30">
+                                <div>
+                                    <span className="font-semibold text-white">Java {jre.version}</span>
+                                    <span className="text-sm text-starmade-accent ml-2">(bundled)</span>
+                                </div>
+                                <span className="text-xs text-gray-500 font-mono truncate max-w-md">{jre.path}</span>
+                            </div>
+                        ))}
+                        
+                        {javaRuntimes.system.map((jre, i) => (
+                            <div key={`system-${i}`} className="flex items-center justify-between p-3 bg-black/20 rounded-md border border-white/10">
+                                <div>
+                                    <span className="font-semibold text-white">Java {jre.version}</span>
+                                    <span className="text-sm text-gray-400 ml-2">(system)</span>
+                                </div>
+                                <span className="text-xs text-gray-500 font-mono truncate max-w-md">{jre.path}</span>
+                            </div>
+                        ))}
+                    </div>
+                    
+                    {/* Action Buttons */}
+                    <div className="flex flex-wrap gap-3">
+                        <button 
+                            onClick={handleDetectJava} 
+                            disabled={isLoadingJava}
+                            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:text-gray-500 rounded-md text-sm font-semibold uppercase tracking-wider transition-colors"
+                        >
+                            {isLoadingJava ? 'Detecting...' : 'Detect Java'}
+                        </button>
+                        
+                        <button 
+                            onClick={() => handleDownloadJava(8)} 
+                            disabled={!!javaDownloadProgress[8]}
+                            className="px-4 py-2 bg-starmade-accent hover:bg-starmade-accent/80 disabled:bg-starmade-accent/50 rounded-md text-sm font-semibold uppercase tracking-wider transition-colors"
+                        >
+                            {javaDownloadProgress[8] || 'Download Java 8'}
+                        </button>
+                        
+                        <button 
+                            onClick={() => handleDownloadJava(25)} 
+                            disabled={!!javaDownloadProgress[25]}
+                            className="px-4 py-2 bg-starmade-accent hover:bg-starmade-accent/80 disabled:bg-starmade-accent/50 rounded-md text-sm font-semibold uppercase tracking-wider transition-colors"
+                        >
+                            {javaDownloadProgress[25] || 'Download Java 25'}
+                        </button>
+                    </div>
+                    
+                    <p className="text-xs text-gray-400 mt-3">
+                        StarMade versions &lt; 0.3.x require Java 8. Versions ≥ 0.3.x require Java 25.
+                    </p>
                 </div>
 
                 <div className="mt-8">

@@ -5,8 +5,8 @@ const AboutSection: React.FC = () => {
 
     const links = [
         { name: "Official Website", url: "https://www.star-made.org/" },
-        { name: "Community Discord", url: "https://discord.gg/starmade" },
-        { name: "Report an Issue", url: "https://github.com/dukedot" },
+        { name: "Community Discord", url: "https://discord.gg/SXbkYpU" },
+        // { name: "Report an Issue", url: "https://github.com/dukedot" },
         { name: "Third-Party Licenses", url: "#" },
     ]
 

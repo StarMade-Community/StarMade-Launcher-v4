@@ -20,10 +20,15 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
     const { 
         installations, 
         servers,
+        downloadStatuses,
         addInstallation,
         updateInstallation,
+        deleteInstallation,
         addServer,
         updateServer,
+        deleteServer,
+        downloadVersion,
+        cancelDownload,
         getInstallationDefaults,
         getServerDefaults,
     } = useData();
@@ -76,6 +81,11 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
     const handleCancel = () => {
         setView('list');
         setActiveItem(null);
+    };
+
+    const handleDelete = (id: string) => {
+        if (activeTab === 'installations') deleteInstallation(id);
+        else deleteServer(id);
     };
     
     const handleTabChange = (tab: InstallationsTab) => {
@@ -144,8 +154,12 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
                             item={item} 
                             isFeatured={index === 0} 
                             onEdit={handleEdit}
+                            onDelete={handleDelete}
                             actionButtonText={cardActionButtonText}
                             statusLabel={cardStatusLabel}
+                            downloadStatus={downloadStatuses[item.id]}
+                            onDownload={activeTab === 'installations' ? () => downloadVersion(item.id) : undefined}
+                            onCancelDownload={activeTab === 'installations' ? () => cancelDownload(item.id) : undefined}
                         />
                     ))}
                 </div>

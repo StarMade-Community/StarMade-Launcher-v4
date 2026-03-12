@@ -50,6 +50,7 @@ export const defaultInstallationData: ManagedItem = {
   icon: 'release',
   path: 'C:\\Games\\StarMade\\Instances\\new-installation',
   lastPlayed: 'Never',
+  installed: false,
 };
 
 export const initialServersData: ManagedItem[] = [
