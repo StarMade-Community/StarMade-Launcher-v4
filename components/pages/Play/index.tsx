@@ -1,55 +1,65 @@
 import React from 'react';
 import { ChevronRightIcon } from '../../common/icons';
 import { useApp } from '../../../contexts/AppContext';
+import useNewsFetch from '../../hooks/useNewsFetch';
 
-interface NewsItem {
-    id: number;
+interface DisplayNewsItem {
+    id: string;
     title: string;
     category: string;
     date: string;
     imageUrl: string;
-    isHero?: boolean;
+    link: string;
 }
 
-const newsData: NewsItem[] = [
-    {
-        id: 1,
-        title: 'Universe Reset & New Features Deployed',
-        category: 'GAME UPDATES',
-        date: 'JUNE 14, 2024',
-        imageUrl: 'https://i.imgur.com/biwBbge.png',
-        isHero: true,
-    },
-    {
-        id: 2,
-        title: 'Mod Spotlight: Resources ReSourced',
-        category: 'MODS',
-        date: 'JUNE 10, 2024',
-        imageUrl: 'https://starmadedock.net/attachments/starmade-screenshot-0073-png.59078/',
-    },
-    {
-        id: 3,
-        title: 'Dev Diary: Upcoming Faction System Rework',
-        category: 'DEVELOPMENT',
-        date: 'JUNE 5, 2024',
-        imageUrl: 'https://starmadedock.net/attachments/1-png.64246/',
-    },
-    {
-        id: 4,
-        title: 'StarMade Server Hosting Guide',
-        category: 'GUIDES',
-        date: 'MAY 28, 2024',
-        imageUrl: 'https://starmadedock.net/attachments/starmade-screenshot-0001-png.60943/',
-    },
-];
+/**
+ * Categorize news based on title keywords
+ */
+const categorizeNews = (title: string): string => {
+    const lowerTitle = title.toLowerCase();
+    
+    if (lowerTitle.includes('update') || 
+        lowerTitle.includes('patch') || 
+        lowerTitle.includes('release') ||
+        lowerTitle.includes('version') ||
+        lowerTitle.includes('hotfix')) {
+        return 'GAME UPDATES';
+    }
+    
+    if (lowerTitle.includes('dev diary') || 
+        lowerTitle.includes('development') ||
+        lowerTitle.includes('dev blog')) {
+        return 'DEVELOPMENT';
+    }
+    
+    if (lowerTitle.includes('mod') || 
+        lowerTitle.includes('spotlight')) {
+        return 'MODS';
+    }
+    
+    if (lowerTitle.includes('guide') || 
+        lowerTitle.includes('tutorial') ||
+        lowerTitle.includes('how to')) {
+        return 'GUIDES';
+    }
+    
+    // Default to community for uncategorized
+    return 'COMMUNITY';
+};
 
-const HeroNewsCard: React.FC<{ item: NewsItem }> = ({ item }) => (
-    <div
+const HeroNewsCard: React.FC<{ item: DisplayNewsItem }> = ({ item }) => (
+    <a
+        href={item.link}
+        target="_blank"
+        rel="noopener noreferrer"
         className="col-span-2 row-span-3 h-[450px] bg-black/20 rounded-lg p-3 border border-transparent hover:border-white/10 transition-all cursor-pointer group"
     >
         <div 
             className="w-full h-full rounded-md overflow-hidden relative flex flex-col justify-end p-6 bg-cover bg-center transition-transform group-hover:scale-105"
-            style={{ backgroundImage: `url(${item.imageUrl})` }}
+            style={{ 
+                backgroundImage: item.imageUrl ? `url(${item.imageUrl})` : 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
+                backgroundColor: '#0f172a'
+            }}
         >
             <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent group-hover:from-black/90 transition-all"></div>
             <div className="relative z-10 text-white">
@@ -61,25 +71,88 @@ const HeroNewsCard: React.FC<{ item: NewsItem }> = ({ item }) => (
                 <ChevronRightIcon className="w-6 h-6 text-white" />
             </div>
         </div>
-    </div>
+    </a>
 );
 
-const SmallNewsCard: React.FC<{ item: NewsItem }> = ({ item }) => (
-    <div className="bg-black/20 p-3 rounded-lg flex gap-4 items-center group cursor-pointer hover:bg-black/40 border border-transparent hover:border-white/10 transition-all">
-        <img src={item.imageUrl} alt={item.title} className="w-28 h-20 object-cover rounded-md" />
-        <div className="flex-1">
+const SmallNewsCard: React.FC<{ item: DisplayNewsItem }> = ({ item }) => (
+    <a
+        href={item.link}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="bg-black/20 p-3 rounded-lg flex gap-4 items-center group cursor-pointer hover:bg-black/40 border border-transparent hover:border-white/10 transition-all"
+    >
+        <div 
+            className="w-28 h-20 rounded-md bg-cover bg-center flex-shrink-0"
+            style={{ 
+                backgroundImage: item.imageUrl ? `url(${item.imageUrl})` : 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
+                backgroundColor: '#1e293b'
+            }}
+        />
+        <div className="flex-1 min-w-0">
             <p className="text-xs font-semibold uppercase tracking-wide text-starmade-text-accent">{item.category}</p>
-            <h3 className="font-semibold text-white leading-tight mt-1 group-hover:text-green-300 transition-colors">{item.title}</h3>
+            <h3 className="font-semibold text-white leading-tight mt-1 group-hover:text-green-300 transition-colors line-clamp-2">{item.title}</h3>
             <p className="text-xs text-gray-400 mt-2">{item.date}</p>
         </div>
-    </div>
+    </a>
 );
-
 
 const Play: React.FC = () => {
     const { navigate } = useApp();
-    const heroItem = newsData.find(item => item.isHero);
-    const otherItems = newsData.filter(item => !item.isHero);
+    const { news, loading, error } = useNewsFetch();
+
+    // Convert RSS news to display format with categories
+    const displayNews: DisplayNewsItem[] = news.map(item => ({
+        id: item.gid,
+        title: item.title,
+        category: categorizeNews(item.title),
+        date: item.pubDate,
+        imageUrl: item.imageUrl || '',
+        link: item.link,
+    }));
+
+    // Find the latest "GAME UPDATES" news for the hero section
+    const heroItem = displayNews.find(item => item.category === 'GAME UPDATES') || displayNews[0];
+    
+    // Get other news (not game updates) for the sidebar, max 3
+    const sidebarItems = displayNews
+        .filter(item => item.id !== heroItem?.id)
+        .slice(0, 3);
+
+    if (loading) {
+        return (
+            <div className="w-full max-w-6xl mx-auto">
+                <div className="flex justify-between items-center mb-6">
+                    <h1 className="font-display text-3xl font-bold uppercase text-white tracking-wider">
+                        Latest News
+                    </h1>
+                </div>
+                <div className="grid grid-cols-3 gap-6">
+                    <div className="col-span-2 row-span-3 h-[450px] bg-black/20 rounded-lg animate-pulse" />
+                    <div className="col-span-1 flex flex-col gap-4">
+                        <div className="h-32 bg-black/20 rounded-lg animate-pulse" />
+                        <div className="h-32 bg-black/20 rounded-lg animate-pulse" />
+                        <div className="h-32 bg-black/20 rounded-lg animate-pulse" />
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (error) {
+        return (
+            <div className="w-full max-w-6xl mx-auto">
+                <div className="flex justify-between items-center mb-6">
+                    <h1 className="font-display text-3xl font-bold uppercase text-white tracking-wider">
+                        Latest News
+                    </h1>
+                </div>
+                <div className="bg-red-900/20 border border-red-500/50 rounded-lg p-6 text-center">
+                    <p className="text-red-400">{error}</p>
+                    <p className="text-gray-400 text-sm mt-2">Please check your internet connection</p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="w-full max-w-6xl mx-auto">
@@ -98,7 +171,7 @@ const Play: React.FC = () => {
             <div className="grid grid-cols-3 gap-6">
                 {heroItem && <HeroNewsCard item={heroItem} />}
                 <div className="col-span-1 flex flex-col gap-4">
-                    {otherItems.map(item => <SmallNewsCard key={item.id} item={item} />)}
+                    {sidebarItems.map(item => <SmallNewsCard key={item.id} item={item} />)}
                 </div>
             </div>
         </div>
