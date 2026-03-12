@@ -1,11 +1,11 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
-import type { AppContextType, Page, PageProps, ManagedItem } from '../types';
+import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import type { AppContextType, Page, PageProps, ManagedItem, PlaySession, SessionLaunchArgs } from '../types';
 import { useData } from './DataContext';
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-    const { activeAccount } = useData();
+    const { activeAccount, installations, recordSession } = useData();
     const [activePage, setActivePage] = useState<Page>('Play');
     const [pageProps, setPageProps] = useState<PageProps>({});
     const [isLaunchModalOpen, setIsLaunchModalOpen] = useState(false);
@@ -13,6 +13,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const [launchError, setLaunchError] = useState<string | null>(null);
     const [launchStatus, setLaunchStatus] = useState<string | null>(null);
     const [pendingLaunchInstallation, setPendingLaunchInstallation] = useState<ManagedItem | null>(null);
+    const [pendingSessionArgs, setPendingSessionArgs] = useState<SessionLaunchArgs | null>(null);
     const [logViewerOpen, setLogViewerOpen] = useState(false);
     const [logViewerInstallation, setLogViewerInstallation] = useState<ManagedItem | null>(null);
 
@@ -21,17 +22,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setPageProps(props);
     };
 
-    const openLaunchModal = (installation?: ManagedItem) => {
+    const openLaunchModal = useCallback((installation?: ManagedItem, sessionArgs?: SessionLaunchArgs) => {
         if (!isLaunching) {
             setPendingLaunchInstallation(installation || null);
+            setPendingSessionArgs(sessionArgs || null);
             setIsLaunchModalOpen(true);
         }
-    };
-    const closeLaunchModal = () => {
+    }, [isLaunching]);
+
+    const closeLaunchModal = useCallback(() => {
         setIsLaunchModalOpen(false);
         setLaunchError(null);
         setPendingLaunchInstallation(null);
-    };
+        setPendingSessionArgs(null);
+    }, []);
 
     const startLaunching = async () => {
         const installation = pendingLaunchInstallation;
@@ -99,10 +103,44 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 // Pass the active account id so the main process can inject the
                 // registry auth token as a -auth <token> argument to the game.
                 activeAccountId: activeAccount?.id,
+                // Session-specific direct-connect args (from a pinned / last-played session).
+                uplink: pendingSessionArgs?.uplink,
+                uplinkPort: pendingSessionArgs?.uplinkPort,
+                modIds: pendingSessionArgs?.modIds,
             });
 
             if (result.success) {
                 console.log(`Game launched successfully with PID ${result.pid}`);
+
+                // Record this as the last-played session.
+                // Use a stable, deterministic id derived from the session target
+                // (installationId + serverAddress + serverPort + modIds) so that
+                // repeated launches of the same target update the existing record
+                // rather than creating a new one, preserving pin/unpin identity.
+                const serverAddress = pendingSessionArgs?.uplink ?? 'localhost';
+                const serverPort    = pendingSessionArgs?.uplinkPort ?? 4242;
+                const modIds        = pendingSessionArgs?.modIds;
+                const stableId = [
+                    installation.id,
+                    serverAddress,
+                    String(serverPort),
+                    (modIds ?? []).slice().sort().join(','),
+                ].join('::');
+                const session: PlaySession = {
+                    id: stableId,
+                    installationId: installation.id,
+                    installationName: installation.name,
+                    installationPath: installation.path,
+                    installationVersion: installation.version,
+                    sessionType: pendingSessionArgs?.uplink && pendingSessionArgs.uplink !== 'localhost'
+                        ? 'multiplayer'
+                        : 'singleplayer',
+                    serverAddress,
+                    serverPort,
+                    modIds,
+                    timestamp: new Date().toISOString(),
+                };
+                recordSession(session);
                 
                 // Check if we should open log viewer automatically
                 if (typeof window !== 'undefined' && window.launcher?.store) {
@@ -145,6 +183,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setLogViewerOpen(false);
     };
 
+    /**
+     * Launch a previously recorded play session.
+     * Finds the matching installation and opens the launch modal pre-loaded
+     * with the session's direct-connect arguments.
+     */
+    const launchSession = useCallback((session: PlaySession) => {
+        const installation = installations.find(i => i.id === session.installationId);
+        if (!installation) {
+            console.warn('[AppContext] launchSession: installation not found for session', session.installationId);
+            return;
+        }
+        openLaunchModal(installation, {
+            uplink:     session.serverAddress,
+            uplinkPort: session.serverPort,
+            modIds:     session.modIds,
+        });
+    }, [installations, openLaunchModal]);
+
     const value: AppContextType = {
         activePage,
         pageProps,
@@ -161,6 +217,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         completeLaunching,
         openLogViewer,
         closeLogViewer,
+        launchSession,
     };
 
     return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

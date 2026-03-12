@@ -8,6 +8,7 @@ import Settings from './components/pages/Settings';
 import LaunchConfirmModal from './components/common/LaunchConfirmModal';
 import GameLogViewer from './components/common/GameLogViewer';
 import UpdateAvailableModal from './components/common/UpdateAvailableModal';
+import LastPlayedWidget from './components/common/LastPlayedWidget';
 import { useApp } from './contexts/AppContext';
 import useRandomBackground from './components/hooks/useRandomBackground';
 
@@ -117,6 +118,8 @@ const App: React.FC = () => {
           {renderContent()}
         </main>
         <Footer />
+        {/* Quick-play widget — only shown on the Play (home) page */}
+        {activePage === 'Play' && <LastPlayedWidget />}
       </div>
     </div>
   );

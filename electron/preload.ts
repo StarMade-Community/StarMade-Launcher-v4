@@ -119,6 +119,12 @@ const launcherApi = {
       isServer?: boolean;
       serverPort?: number;
       activeAccountId?: string;
+      /** Server address for `-uplink` (direct connect to a world/server). */
+      uplink?: string;
+      /** Port for the `-uplink` server. */
+      uplinkPort?: number;
+      /** Mod IDs to pass as a comma-separated list after the `-uplink` port. */
+      modIds?: string[];
     }): Promise<{ success: boolean; pid?: number; error?: string }> =>
       ipcRenderer.invoke(IPC.GAME_LAUNCH, options),
 
@@ -145,6 +151,19 @@ const launcherApi = {
     /** Get GraphicsInfo.txt content if it exists. */
     getGraphicsInfo: (installationPath: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.GAME_GET_GRAPHICS_INFO, installationPath),
+
+    /**
+     * Read the `launcher-session.json` file written by the game into the
+     * installation directory.  Returns the parsed object or `null` when the
+     * file does not exist or cannot be read.
+     */
+    readSession: (installationPath: string): Promise<{
+      sessionType: 'singleplayer' | 'multiplayer';
+      serverAddress: string;
+      serverPort: number;
+      modIds?: string[];
+      timestamp: string;
+    } | null> => ipcRenderer.invoke(IPC.GAME_READ_SESSION, installationPath),
 
     /** Subscribe to game log events. Returns a cleanup function. */
     onLog: (cb: (data: { installationId: string; level: string; message: string }) => void): (() => void) => {

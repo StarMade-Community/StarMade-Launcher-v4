@@ -68,6 +68,12 @@ export const IPC = {
   GAME_OPEN_LOG_LOCATION: 'game:open-log-location',
   /** Renderer → Main (invoke): get GraphicsInfo.txt content if it exists. */
   GAME_GET_GRAPHICS_INFO: 'game:get-graphics-info',
+  /**
+   * Renderer → Main (invoke): read the `launcher-session.json` file written by
+   * the game into an installation directory.  Returns the parsed object or
+   * `null` if the file does not exist or cannot be parsed.
+   */
+  GAME_READ_SESSION: 'game:read-session',
 
   // ─── Dialog ─────────────────────────────────────────────────────────────────
   
