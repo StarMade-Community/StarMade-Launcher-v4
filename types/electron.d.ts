@@ -140,6 +140,34 @@ declare global {
         /** Scan a specific folder (and its sub-directories) for legacy StarMade installations. */
         scanFolder: (folderPath: string) => Promise<string[]>;
       };
+
+      /** Launcher auto-updater APIs */
+      updater: {
+        /** Get the current running launcher version string (e.g. "4.0.0"). */
+        getVersion: () => Promise<string>;
+        /**
+         * Manually trigger an update check against GitHub releases.
+         * Resolves with update info (available, latestVersion, etc.).
+         */
+        checkForUpdates: () => Promise<{
+          available: boolean;
+          latestVersion: string;
+          currentVersion: string;
+          releaseNotes: string;
+          downloadUrl: string;
+        }>;
+        /**
+         * Subscribe to update-available events pushed by the main process on
+         * startup.  Returns a cleanup function.
+         */
+        onUpdateAvailable: (cb: (info: {
+          available: boolean;
+          latestVersion: string;
+          currentVersion: string;
+          releaseNotes: string;
+          downloadUrl: string;
+        }) => void) => () => void;
+      };
     };
   }
 }

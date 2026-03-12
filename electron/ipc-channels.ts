@@ -102,6 +102,15 @@ export const IPC = {
   LEGACY_SCAN: 'legacy:scan',
   /** Renderer → Main (invoke): scan a specific folder for legacy StarMade installs. */
   LEGACY_SCAN_FOLDER: 'legacy:scan-folder',
+
+  // ─── Launcher auto-updater ───────────────────────────────────────────────────
+
+  /** Renderer → Main (invoke): check GitHub releases for a newer launcher version. */
+  UPDATER_CHECK: 'updater:check',
+  /** Renderer → Main (invoke): get the current running launcher version string. */
+  UPDATER_GET_VERSION: 'updater:get-version',
+  /** Main → Renderer: a newer launcher version was found during the startup check. */
+  UPDATER_UPDATE_AVAILABLE: 'updater:update-available',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
