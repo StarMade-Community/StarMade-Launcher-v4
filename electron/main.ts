@@ -366,7 +366,7 @@ function listImagesInDir(dir: string): string[] {
 
 ipcMain.handle(IPC.BACKGROUNDS_LIST, async () => {
   const userDir    = path.join(app.getPath('userData'), 'backgrounds');
-  const bundledDir = path.join(__dirname, '..', 'backgrounds');
+  const bundledDir = path.join(__dirname, '..', 'presets', 'backgrounds');
 
   try { fs.mkdirSync(userDir, { recursive: true }); } catch { /* ignore */ }
 
@@ -375,13 +375,60 @@ ipcMain.handle(IPC.BACKGROUNDS_LIST, async () => {
 
 ipcMain.handle(IPC.ICONS_LIST, async () => {
   const userDir    = path.join(app.getPath('userData'), 'icons');
-  const bundledDir = path.join(__dirname, '..', 'icons');
-0
+  const bundledDir = path.join(__dirname, '..', 'presets', 'icons');
+
   // Ensure the user icons folder exists so they know where to put images
   try { fs.mkdirSync(userDir, { recursive: true }); } catch { /* ignore */ }
 
   return [...listImagesInDir(bundledDir), ...listImagesInDir(userDir)];
 });
+
+// ─── Preset assets initialisation ───────────────────────────────────────────
+
+/**
+ * On the very first launch, copy the bundled preset backgrounds and icons into
+ * the user-writable data directory so that users have a set of defaults to
+ * start with.  Subsequent launches skip this step (tracked via the store key
+ * `presetsInitialized`).
+ */
+function copyPresetsToUserData(): void {
+  if (storeGet('presetsInitialized') === true) return;
+
+  const presetsDir = path.join(__dirname, '..', 'presets');
+  const userDataDir = app.getPath('userData');
+
+  const categories: Array<{ src: string; dest: string }> = [
+    { src: path.join(presetsDir, 'backgrounds'), dest: path.join(userDataDir, 'backgrounds') },
+    { src: path.join(presetsDir, 'icons'),       dest: path.join(userDataDir, 'icons') },
+  ];
+
+  let hadError = false;
+
+  for (const { src, dest } of categories) {
+    if (!fs.existsSync(src)) continue;
+
+    try {
+      fs.mkdirSync(dest, { recursive: true });
+      const files = fs.readdirSync(src).filter(f => IMAGE_EXTS.has(path.extname(f).toLowerCase()));
+      for (const file of files) {
+        const srcFile  = path.join(src, file);
+        const destFile = path.join(dest, file);
+        // Never overwrite a file the user may have already customised
+        if (!fs.existsSync(destFile)) {
+          fs.copyFileSync(srcFile, destFile);
+        }
+      }
+    } catch (err) {
+      console.error(`[presets] Failed to copy presets from ${src} to ${dest}:`, err);
+      hadError = true;
+    }
+  }
+
+  // Only mark as done when all copies succeeded so a transient error retries on next launch
+  if (!hadError) {
+    storeSet('presetsInitialized', true);
+  }
+}
 
 // ─── Legacy installation detection ───────────────────────────────────────────
 
@@ -446,6 +493,7 @@ ipcMain.handle(IPC.LEGACY_SCAN_FOLDER, async (_event, folderPath: string) => {
 // ─── App lifecycle ───────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
+  copyPresetsToUserData();
   buildMenu();
   createWindow();
 
