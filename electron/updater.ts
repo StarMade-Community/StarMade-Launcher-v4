@@ -262,6 +262,14 @@ export async function downloadUpdate(
 export async function installUpdate(installerPath: string): Promise<void> {
   const plat = process.platform;
 
+  // macOS requires code-signing & notarisation for a silent install, which
+  // isn't set up yet.  Just open the releases page so the user can grab the
+  // DMG manually.
+  if (plat === 'darwin') {
+    await shell.openExternal(GITHUB_RELEASES_PAGE);
+    return;
+  }
+
   try {
     if (plat === 'win32') {
       // NSIS installers accept /S for a silent install.  The installer will
