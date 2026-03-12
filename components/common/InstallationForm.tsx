@@ -437,7 +437,20 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
                         <FormField label="Java Executable Path" htmlFor="javaPath">
                           <div className="flex">
                             <input id="javaPath" type="text" value={javaPath} onChange={e => setJavaPath(e.target.value)} className="flex-1 bg-slate-900/80 border border-slate-700 rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
-                            <button className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80"><FolderIcon className="w-5 h-5 text-gray-400" /></button>
+                            <button
+                              onClick={async () => {
+                                if (!window.launcher?.dialog) return;
+                                const folder = await window.launcher.dialog.openFolder(javaPath || undefined);
+                                if (!folder) return;
+                                const exe = window.launcher.java?.findExecutable
+                                  ? await window.launcher.java.findExecutable(folder)
+                                  : folder;
+                                setJavaPath(exe);
+                              }}
+                              className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80 transition-colors"
+                            >
+                              <FolderIcon className="w-5 h-5 text-gray-400" />
+                            </button>
                           </div>
                         </FormField>
                         <FormField label="JVM Arguments" htmlFor="jvmArgs">
