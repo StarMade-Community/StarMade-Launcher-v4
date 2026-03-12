@@ -132,6 +132,14 @@ declare global {
         /** List available icon image paths (file:// URLs). */
         list: () => Promise<string[]>;
       };
+
+      /** Legacy installation detection APIs */
+      legacy: {
+        /** Scan the current and sub-directories for legacy StarMade installations (containing StarMade.jar). */
+        scan: () => Promise<string[]>;
+        /** Scan a specific folder (and its sub-directories) for legacy StarMade installations. */
+        scanFolder: (folderPath: string) => Promise<string[]>;
+      };
     };
   }
 }

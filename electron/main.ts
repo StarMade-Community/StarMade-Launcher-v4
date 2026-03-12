@@ -383,6 +383,57 @@ ipcMain.handle(IPC.ICONS_LIST, async () => {
   return [...listImagesInDir(bundledDir), ...listImagesInDir(userDir)];
 });
 
+// ─── Legacy installation detection ───────────────────────────────────────────
+
+/**
+ * Asynchronously walk `dir` looking for folders that contain `StarMade.jar`.
+ * Stops recursing once `depth` exceeds `maxDepth` to avoid scanning the
+ * whole file system. Skips common non-game directories to keep scan time bounded.
+ */
+const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', '__pycache__']);
+
+async function findLegacyInstalls(dir: string, maxDepth = 4, depth = 0): Promise<string[]> {
+  if (depth > maxDepth) return [];
+  try {
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    const results: string[] = [];
+    let hasJar = false;
+
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name === 'StarMade.jar') {
+        hasJar = true;
+      } else if (entry.isDirectory() && !SKIP_DIRS.has(entry.name)) {
+        const subResults = await findLegacyInstalls(path.join(dir, entry.name), maxDepth, depth + 1);
+        results.push(...subResults);
+      }
+    }
+
+    if (hasJar) results.unshift(dir);
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+ipcMain.handle(IPC.LEGACY_SCAN, async () => {
+  const searchRoots = new Set<string>([
+    process.cwd(),
+    app.getAppPath(),
+  ]);
+
+  const found = new Set<string>();
+  await Promise.all(
+    Array.from(searchRoots).map(root =>
+      findLegacyInstalls(root).then(paths => paths.forEach(p => found.add(p)))
+    )
+  );
+  return Array.from(found);
+});
+
+ipcMain.handle(IPC.LEGACY_SCAN_FOLDER, async (_event, folderPath: string) => {
+  return findLegacyInstalls(folderPath);
+});
+
 // ─── Auto-updater stub ───────────────────────────────────────────────────────
 // Full auto-update logic (electron-updater) will be wired in Phase 7/8.
 // The stub is kept here so Phase 7 only needs to uncomment/expand it.

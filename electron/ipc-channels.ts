@@ -95,6 +95,13 @@ export const IPC = {
 
   /** Renderer → Main (invoke): list available icon image paths. */
   ICONS_LIST: 'icons:list',
+
+  // ─── Legacy installation detection ──────────────────────────────────────────
+
+  /** Renderer → Main (invoke): scan current and sub-directories for legacy StarMade installs (StarMade.jar). */
+  LEGACY_SCAN: 'legacy:scan',
+  /** Renderer → Main (invoke): scan a specific folder for legacy StarMade installs. */
+  LEGACY_SCAN_FOLDER: 'legacy:scan-folder',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

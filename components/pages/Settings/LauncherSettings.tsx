@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import CustomDropdown from '../../common/CustomDropdown';
 import { FolderIcon } from '../../common/icons';
+import { useData } from '../../../contexts/DataContext';
 
 // ─── Store key ───────────────────────────────────────────────────────────────
 
@@ -48,6 +49,7 @@ const ToggleSwitch: React.FC<{ checked: boolean; onChange: (checked: boolean) =>
 // ─── Main component ──────────────────────────────────────────────────────────
 
 const LauncherSettings: React.FC = () => {
+    const { installations, addInstallation } = useData();
     const [isLoaded, setIsLoaded] = useState(false);
     const [settings, setSettings] = useState<LauncherSettingsData>(DEFAULT_SETTINGS);
     const [userDataPath, setUserDataPath] = useState<string>('');
@@ -57,6 +59,9 @@ const LauncherSettings: React.FC = () => {
     }>({ bundled: [], system: [] });
     const [isLoadingJava, setIsLoadingJava] = useState(false);
     const [javaDownloadProgress, setJavaDownloadProgress] = useState<Record<string, string>>({});
+    const [legacyFound, setLegacyFound] = useState<string[]>([]);
+    const [isScanning, setIsScanning] = useState(false);
+    const [importedPaths, setImportedPaths] = useState<Set<string>>(new Set());
 
     const languageOptions = [
         { value: 'English (US)', label: 'English (US)' },
@@ -155,6 +160,64 @@ const LauncherSettings: React.FC = () => {
 
     const update = <K extends keyof LauncherSettingsData>(key: K, value: LauncherSettingsData[K]) => {
         setSettings(prev => ({ ...prev, [key]: value }));
+    };
+
+    // ── Legacy installation detection ────────────────────────────────────────
+
+    /** Paths already present in the installations list */
+    const existingPaths = new Set(installations.map(i => i.path));
+
+    const handleAutoDetect = async () => {
+        if (typeof window === 'undefined' || !window.launcher?.legacy) return;
+        setIsScanning(true);
+        try {
+            const found = await window.launcher.legacy.scan();
+            setLegacyFound(found);
+        } catch (error) {
+            console.error('Failed to scan for legacy installs:', error);
+        } finally {
+            setIsScanning(false);
+        }
+    };
+
+    const handleScanFolder = async () => {
+        if (typeof window === 'undefined' || !window.launcher?.legacy || !window.launcher?.dialog) return;
+        const folder = await window.launcher.dialog.openFolder();
+        if (!folder) return;
+        setIsScanning(true);
+        try {
+            const found = await window.launcher.legacy.scanFolder(folder);
+            // Merge with existing results, avoiding duplicates
+            setLegacyFound(prev => Array.from(new Set([...prev, ...found])));
+        } catch (error) {
+            console.error('Failed to scan folder for legacy installs:', error);
+        } finally {
+            setIsScanning(false);
+        }
+    };
+
+    const handleImport = (installPath: string) => {
+        // Guard against duplicate imports (e.g. rapid double-click before re-render)
+        if (existingPaths.has(installPath) || importedPaths.has(installPath)) return;
+
+        // Extract the last path segment as a display name (works on both / and \ separators)
+        const folderName = installPath.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? 'legacy-install';
+        const newItem = {
+            id: Date.now().toString(),
+            name: folderName,
+            version: 'unknown',
+            // 'archive' is the closest built-in type for pre-existing installs not sourced from the CDN
+            type: 'archive' as const,
+            icon: 'release',
+            path: installPath,
+            lastPlayed: 'Never',
+            installed: true,
+        };
+        setImportedPaths(prev => {
+            if (prev.has(installPath)) return prev;
+            addInstallation(newItem);
+            return new Set([...prev, installPath]);
+        });
     };
 
     return (
@@ -306,6 +369,66 @@ const LauncherSettings: React.FC = () => {
                             </div>
                         </SettingRow>
                     </div>
+                </div>
+
+                <div className="mt-8">
+                    <h2 className="font-display text-xl font-bold uppercase tracking-wider text-white mb-1 pb-2 border-b-2 border-white/10">
+                        Legacy Installations
+                    </h2>
+                    <p className="text-sm text-gray-400 mb-4">
+                        Import StarMade installations from older (pre-v4) launchers. The launcher will scan for folders containing <span className="font-mono text-gray-300">StarMade.jar</span>.
+                    </p>
+
+                    {/* Action buttons */}
+                    <div className="flex flex-wrap gap-3 mb-4">
+                        <button
+                            onClick={handleAutoDetect}
+                            disabled={isScanning}
+                            className="px-4 py-2 bg-starmade-accent hover:bg-starmade-accent/80 disabled:bg-starmade-accent/50 rounded-md text-sm font-semibold uppercase tracking-wider transition-colors"
+                        >
+                            {isScanning ? 'Scanning…' : 'Auto-Detect'}
+                        </button>
+                        <button
+                            onClick={handleScanFolder}
+                            disabled={isScanning}
+                            className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:text-gray-500 rounded-md text-sm font-semibold uppercase tracking-wider transition-colors"
+                        >
+                            <FolderIcon className="w-4 h-4" />
+                            Add Folder…
+                        </button>
+                    </div>
+
+                    {/* Results list */}
+                    {legacyFound.length === 0 ? (
+                        <div className="text-gray-400 text-sm italic p-3 bg-black/20 rounded-md">
+                            No legacy installations found yet. Click <span className="text-white not-italic">Auto-Detect</span> to scan automatically or <span className="text-white not-italic">Add Folder…</span> to browse for an old install.
+                        </div>
+                    ) : (
+                        <div className="space-y-2">
+                            {legacyFound.map((installPath) => {
+                                const alreadyAdded = existingPaths.has(installPath) || importedPaths.has(installPath);
+                                return (
+                                    <div key={installPath} className="flex items-center justify-between gap-3 p-3 bg-black/20 rounded-md border border-white/10">
+                                        <span className="text-xs text-gray-300 font-mono truncate flex-1 min-w-0" title={installPath}>
+                                            {installPath}
+                                        </span>
+                                        {alreadyAdded ? (
+                                            <span className="text-xs text-starmade-accent font-semibold uppercase tracking-wider flex-shrink-0">
+                                                Imported
+                                            </span>
+                                        ) : (
+                                            <button
+                                                onClick={() => handleImport(installPath)}
+                                                className="flex-shrink-0 px-3 py-1 bg-starmade-accent hover:bg-starmade-accent/80 rounded-md text-sm font-semibold uppercase tracking-wider transition-colors"
+                                            >
+                                                Import
+                                            </button>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
                 </div>
             </div>
         </div>
