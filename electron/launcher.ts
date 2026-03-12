@@ -265,6 +265,7 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
       ...jvmArgList,
       '-jar',
       'StarMade.jar',
+      '-force' //StarMade requires this for some stupid reason
     ];
 
     // Add server-specific arguments
