@@ -31,6 +31,18 @@ const isDev = !app.isPackaged;
 const RENDERER_URL = 'http://localhost:3000';
 const PRELOAD_PATH = path.join(__dirname, 'preload.js');
 
+// ─── Linux AppImage sandbox fix ───────────────────────────────────────────────
+// AppImages are mounted as a squashfs image by an unprivileged user, so the
+// chrome-sandbox binary cannot have the required SUID-root permissions
+// (mode 4755, owned by root).  Electron aborts at startup with a fatal sandbox
+// error unless we explicitly disable the SUID sandbox.
+// The APPIMAGE env var is set by the AppImage runtime; we restrict the workaround
+// to AppImage launches so that deb/rpm installs (where the package manager can
+// grant the correct SUID permissions) still run with a full sandbox.
+if (process.platform === 'linux' && process.env.APPIMAGE) {
+  app.commandLine.appendSwitch('no-sandbox');
+}
+
 /**
  * Returns a user-writable directory for launcher data (downloaded JREs, etc.).
  *
