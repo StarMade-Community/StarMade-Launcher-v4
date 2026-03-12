@@ -15,6 +15,15 @@ declare global {
          */
         onMaximizedChanged: (cb: (isMaximized: boolean) => void) => () => void;
       };
+      /** Persistent JSON store — backed by a file in Electron's userData directory. */
+      store: {
+        /** Retrieve a top-level value by key. Resolves to `undefined` if the key does not exist. */
+        get: (key: string) => Promise<unknown>;
+        /** Persist a value under the given key. */
+        set: (key: string, value: unknown) => Promise<void>;
+        /** Remove a key from the store. */
+        delete: (key: string) => Promise<void>;
+      };
     };
   }
 }

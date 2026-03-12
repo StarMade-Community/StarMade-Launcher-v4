@@ -20,7 +20,12 @@ const launcherApi = {
       return () => ipcRenderer.removeListener(IPC.WINDOW_MAXIMIZED_CHANGED, listener);
     },
   },
-} as const;
+  store: {
+    get: (key: string): Promise<unknown> => ipcRenderer.invoke(IPC.STORE_GET, key),
+    set: (key: string, value: unknown): Promise<void> => ipcRenderer.invoke(IPC.STORE_SET, key, value),
+    delete: (key: string): Promise<void> => ipcRenderer.invoke(IPC.STORE_DELETE, key),
+  },
+};
 
 export type LauncherApi = typeof launcherApi;
 

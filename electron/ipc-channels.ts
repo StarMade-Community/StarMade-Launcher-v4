@@ -11,6 +11,13 @@ export const IPC = {
   WINDOW_CLOSE: 'window:close',
   /** Main → Renderer: whether the window is currently maximized */
   WINDOW_MAXIMIZED_CHANGED: 'window:maximized-changed',
+
+  /** Renderer → Main: get a value from the persistent JSON store */
+  STORE_GET: 'store:get',
+  /** Renderer → Main: set a value in the persistent JSON store */
+  STORE_SET: 'store:set',
+  /** Renderer → Main: delete a key from the persistent JSON store */
+  STORE_DELETE: 'store:delete',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

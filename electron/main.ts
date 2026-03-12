@@ -7,6 +7,7 @@ import {
 } from 'electron';
 import path from 'path';
 import { IPC } from './ipc-channels';
+import { storeGet, storeSet, storeDelete } from './store';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -83,6 +84,12 @@ ipcMain.on(IPC.WINDOW_MAXIMIZE, () => {
 });
 
 ipcMain.on(IPC.WINDOW_CLOSE, () => mainWindow?.close());
+
+// ─── Store IPC handlers ───────────────────────────────────────────────────────
+
+ipcMain.handle(IPC.STORE_GET, (_event, key: string) => storeGet(key));
+ipcMain.handle(IPC.STORE_SET, (_event, key: string, value: unknown) => { storeSet(key, value); });
+ipcMain.handle(IPC.STORE_DELETE, (_event, key: string) => { storeDelete(key); });
 
 // ─── Application menu ────────────────────────────────────────────────────────
 
