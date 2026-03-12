@@ -184,9 +184,6 @@ jobs:
             cat > notes.txt <<EOF
           ## StarMade Launcher v${{ steps.version.outputs.VERSION }}
 
-          ### What's Changed
-          - See commit history for full details
-
           ### Downloads
           - **Windows:** \`StarMade Launcher.exe\`
           - **macOS:** \`StarMade Launcher.dmg\`
