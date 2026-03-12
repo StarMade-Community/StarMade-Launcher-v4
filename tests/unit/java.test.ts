@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
+import os from 'os';
+import path from 'path';
 
 // Mock electron and its dependencies before importing the module under test
 vi.mock('electron', () => ({
-  app: { getPath: vi.fn(() => '/tmp/test-user-data') },
+  app: { getPath: vi.fn(() => path.join(os.tmpdir(), 'test-user-data')) },
   BrowserWindow: { getAllWindows: vi.fn(() => []) },
   shell: { openPath: vi.fn(), openExternal: vi.fn() },
 }));
@@ -12,7 +14,7 @@ vi.mock('adm-zip', () => ({
 }));
 
 vi.mock('tar-stream', () => ({
-  extract: vi.fn(),
+  default: { extract: vi.fn() },
 }));
 
 import {

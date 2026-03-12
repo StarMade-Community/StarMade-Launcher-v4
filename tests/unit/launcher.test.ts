@@ -7,7 +7,7 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('adm-zip', () => ({ default: vi.fn() }));
-vi.mock('tar-stream', () => ({ extract: vi.fn() }));
+vi.mock('tar-stream', () => ({ default: { extract: vi.fn() } }));
 
 import { parseStarMadeLogLine, isStderrError } from '../../electron/launcher.js';
 

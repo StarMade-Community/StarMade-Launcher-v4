@@ -1,13 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as os from 'os';
+import * as path from 'path';
 
 // Mock electron before importing versions.ts (versions.ts imports java.ts
 // which imports fs/https etc. — those are Node built-ins and are fine)
-vi.mock('electron', () => ({
-  app: { getPath: vi.fn(() => '/tmp/test-user-data') },
-}));
+vi.mock('electron', () => {
+  const tempUserDataPath = path.join(os.tmpdir(), 'test-user-data');
+  return {
+    app: { getPath: vi.fn(() => tempUserDataPath) },
+  };
+});
 
 vi.mock('adm-zip', () => ({ default: vi.fn() }));
-vi.mock('tar-stream', () => ({ extract: vi.fn() }));
+vi.mock('tar-stream', () => ({ default: { extract: vi.fn() } }));
 
 import { parseBuildIndex, invalidateVersionCache } from '../../electron/versions.js';
 
