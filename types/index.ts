@@ -79,6 +79,8 @@ export interface AppContextType {
     isLaunchModalOpen: boolean;
     isLaunching: boolean;
     launchError: string | null;
+    /** Human-readable status shown in the launch button during pre-launch steps (e.g. "Downloading Java 8…"). */
+    launchStatus: string | null;
     logViewerOpen: boolean;
     logViewerInstallation: ManagedItem | null;
     navigate: (page: Page, props?: PageProps) => void;

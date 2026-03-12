@@ -99,6 +99,9 @@ const launcherApi = {
     /** Get default Java paths for jre8 and jre25. */
     getDefaultPaths: (): Promise<{ jre8Path: string; jre25Path: string }> =>
       ipcRenderer.invoke(IPC.JAVA_GET_DEFAULT_PATHS),
+    /** Find the java executable inside a given folder (JRE/JDK root). */
+    findExecutable: (folderPath: string): Promise<string> =>
+      ipcRenderer.invoke(IPC.JAVA_FIND_EXECUTABLE, folderPath),
   },
 
   // ─── Phase 5: Game launching ──────────────────────────────────────────────

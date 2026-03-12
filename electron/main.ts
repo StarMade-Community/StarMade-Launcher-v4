@@ -190,6 +190,21 @@ ipcMain.handle(IPC.JAVA_GET_DEFAULT_PATHS, () => {
   return getDefaultJavaPaths(launcherDir);
 });
 
+ipcMain.handle(IPC.JAVA_FIND_EXECUTABLE, (_event, folderPath: string): string => {
+  const isWin = process.platform === 'win32';
+  const candidates = isWin
+    ? [path.join(folderPath, 'bin', 'java.exe'), path.join(folderPath, 'java.exe')]
+    : [path.join(folderPath, 'bin', 'java'),     path.join(folderPath, 'java')];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  // Best-guess path even if not found yet (user may install later)
+  return isWin
+    ? path.join(folderPath, 'bin', 'java.exe')
+    : path.join(folderPath, 'bin', 'java');
+});
+
 // ─── Game launch IPC handlers ─────────────────────────────────────────────────
 
 ipcMain.handle(IPC.GAME_LAUNCH, async (_event, options: {

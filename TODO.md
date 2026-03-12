@@ -1,0 +1,3 @@
+1. Account auth with sm registry
+2. Launcher auto updating
+3. Automatic detection and importing of older (pre v4) launcher installations

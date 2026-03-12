@@ -4,8 +4,6 @@
 
 # StarMade Launcher v4
 
-[![Build and Release](https://github.com/YOUR_ORG/StarMade-Launcher-v4/actions/workflows/release.yml/badge.svg)](https://github.com/YOUR_ORG/StarMade-Launcher-v4/actions/workflows/release.yml)
-[![Deploy to GitHub Pages](https://github.com/YOUR_ORG/StarMade-Launcher-v4/actions/workflows/deploy.yml/badge.svg)](https://github.com/YOUR_ORG/StarMade-Launcher-v4/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A modern, immersive launcher for [StarMade](https://www.star-made.org/) — the space sandbox game by Schine GmbH. Built with React 19, TypeScript 5, Vite 6, and Electron 41.
@@ -30,7 +28,7 @@ A modern, immersive launcher for [StarMade](https://www.star-made.org/) — the 
 - **Java Version Switching** — The launcher automatically switches between Java 8 and 25 based on the version of StarMade you're running:
   - StarMade < 0.3 → Java 8
   - StarMade ≥ 0.3 → Java 25 (with required JVM args)
-- **Auto-Download Java** — Required Java runtimes will be automatically downloaded *(Phase 4 - coming soon)*
+- **Auto-Download Java** — Required Java runtimes will be automatically downloaded
 
 ---
 
@@ -38,9 +36,9 @@ A modern, immersive launcher for [StarMade](https://www.star-made.org/) — the 
 
 Download the latest release for your platform:
 
-- **Windows**: [StarMade-Launcher-Setup-X.Y.Z.exe](https://github.com/YOUR_ORG/StarMade-Launcher-v4/releases/latest)
-- **macOS**: [StarMade-Launcher-X.Y.Z.dmg](https://github.com/YOUR_ORG/StarMade-Launcher-v4/releases/latest)
-- **Linux**: [StarMade-Launcher-X.Y.Z.AppImage](https://github.com/YOUR_ORG/StarMade-Launcher-v4/releases/latest)
+- **Windows**: [StarMade-Launcher.exe](https://github.com/YOUR_ORG/StarMade-Launcher-v4/releases/latest)
+- **macOS**: [StarMade-Launcher.dmg](https://github.com/YOUR_ORG/StarMade-Launcher-v4/releases/latest)
+- **Linux**: [StarMade-Launcher.AppImage](https://github.com/YOUR_ORG/StarMade-Launcher-v4/releases/latest)
 
 > **Note:** See the [Releases](https://github.com/YOUR_ORG/StarMade-Launcher-v4/releases) page for all versions and SHA-256 checksums.
 

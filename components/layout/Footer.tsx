@@ -2,16 +2,13 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
     ChevronDownIcon,
     CheckIcon,
-    BugIcon,
-    ArchiveIcon,
     ChevronRightIcon,
     DiscordIcon,
-    DevIcon
 } from '../common/icons';
 import useOnClickOutside from '../hooks/useOnClickOutside';
-import type { Version } from '../../types';
 import { useApp } from '../../contexts/AppContext';
 import { useData } from '../../contexts/DataContext';
+import { getIconComponent } from '../../utils/getIconComponent';
 
 const DiscordButton: React.FC = () => {
     const [onlineCount, setOnlineCount] = useState<number | null>(null);
@@ -72,16 +69,6 @@ const InstallationSelector: React.FC = () => {
     const installedInstallations = installations.filter(inst => inst.installed !== false);
     const selectedInstallation = installedInstallations[0] || installations[0] || null;
 
-    const getIconForType = (type: string) => {
-        switch(type) {
-            case 'release':
-            case 'latest': return <CheckIcon className="w-5 h-5 text-green-400" />;
-            case 'pre': return <BugIcon className="w-5 h-5 text-green-400" />;
-            case 'dev': return <DevIcon className="w-5 h-5 text-orange-400" />;
-            case 'archive': return <ArchiveIcon className="w-5 h-5 text-gray-400" />;
-            default: return <CheckIcon className="w-5 h-5 text-green-400" />;
-        }
-    }
 
     // No installations at all - prompt to create one
     if (installations.length === 0) {
@@ -123,7 +110,7 @@ const InstallationSelector: React.FC = () => {
                 className="flex items-center gap-3 pl-4 pr-3 py-2 bg-black/20 rounded-md hover:bg-black/40 transition-colors border border-white/10"
             >
                 <div className="flex items-center gap-2">
-                    {getIconForType(selectedInstallation.type)}
+                    {getIconComponent(selectedInstallation.icon, 'small')}
                     <div className="text-left">
                         <p className="text-sm font-medium text-white">{selectedInstallation.name}</p>
                         <p className="text-xs text-gray-400">{selectedInstallation.version}</p>
@@ -143,7 +130,7 @@ const InstallationSelector: React.FC = () => {
                                     }}
                                     className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-700/50 transition-colors"
                                 >
-                                    {getIconForType(installation.type)}
+                                    {getIconComponent(installation.icon, 'small')}
                                     <div className="flex-1">
                                         <p className="text-sm text-white">{installation.name}</p>
                                         <p className="text-xs text-gray-400">{installation.version}</p>

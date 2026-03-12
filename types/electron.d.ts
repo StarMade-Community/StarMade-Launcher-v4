@@ -73,6 +73,8 @@ declare global {
         detect: () => Promise<Array<{ version: string; path: string; source: string }>>;
         /** Get default Java paths for jre8 and jre25. */
         getDefaultPaths: () => Promise<{ jre8Path: string; jre25Path: string }>;
+        /** Find the java executable inside a given folder (JRE/JDK root). */
+        findExecutable: (folderPath: string) => Promise<string>;
       };
 
       /** Game launching API — Phase 5. */
