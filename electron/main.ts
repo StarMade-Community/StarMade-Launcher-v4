@@ -407,7 +407,7 @@ function copyPresetsToUserData(): void {
 
     try {
       fs.mkdirSync(dest, { recursive: true });
-      const files = fs.readdirSync(src);
+      const files = fs.readdirSync(src).filter(f => IMAGE_EXTS.has(path.extname(f).toLowerCase()));
       for (const file of files) {
         const srcFile  = path.join(src, file);
         const destFile = path.join(dest, file);
