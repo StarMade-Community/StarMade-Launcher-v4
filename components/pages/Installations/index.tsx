@@ -18,6 +18,7 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
     const [activeItem, setActiveItem] = useState<ManagedItem | null>(null);
     const [isNew, setIsNew] = useState(false);
 
+    const { openLaunchModal } = useApp();
     const { 
         installations, 
         servers,
@@ -161,7 +162,10 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
                             downloadStatus={downloadStatuses[item.id]}
                             onDownload={activeTab === 'installations' ? () => downloadVersion(item.id) : undefined}
                             onCancelDownload={activeTab === 'installations' ? () => cancelDownload(item.id) : undefined}
-                             onOpenFolder={
+                            onAction={activeTab === 'installations'
+                                ? (i) => openLaunchModal(i)
+                                : undefined}
+                            onOpenFolder={
                                 typeof window !== 'undefined' && window.launcher?.shell
                                     ? (path) => window.launcher.shell!.openPath(path)
                                     : undefined
