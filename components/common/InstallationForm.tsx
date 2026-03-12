@@ -43,6 +43,16 @@ const availableIcons: { icon: string; name: string }[] = [
     { icon: 'cube', name: 'Cube' },
 ];
 
+/**
+ * Strip characters that are illegal in directory names across platforms,
+ * then collapse whitespace. Falls back to 'new-installation' if the
+ * result is empty.
+ */
+const toFolderName = (name: string): string => {
+    const sanitized = name.trim().replace(/[<>:"/\\|?*\x00-\x1f]/g, '').trim();
+    return sanitized || 'new-installation';
+};
+
 interface IconPickerModalProps {
     onSelect: (icon: string) => void;
     onClose: () => void;
@@ -248,6 +258,18 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
     }
   }, [jvmArgs]);
 
+  // When creating a new item, the actual install path is baseDir/name.
+  // When editing, the user controls the full path directly.
+  const effectivePath = isNew
+    ? `${gameDir}/${toFolderName(name)}`
+    : gameDir;
+
+  const handleFolderPicker = async () => {
+    if (typeof window === 'undefined' || !window.launcher?.dialog) return;
+    const selected = await window.launcher.dialog.openFolder(gameDir);
+    if (selected) setGameDir(selected);
+  };
+
   const handleSaveClick = () => {
     onSave({
         ...item,
@@ -255,7 +277,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         type,
         icon,
         version,
-        path: gameDir,
+        path: effectivePath,
         buildPath: buildPath || undefined,
         requiredJavaVersion: requiredJavaVersion,
         installed: isNew ? false : item.installed,
@@ -341,11 +363,16 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         </div>
 
         <div className="grid grid-cols-2 gap-x-8 gap-y-6">
-          <FormField label="Game Directory" htmlFor="gameDir">
+          <FormField label={isNew ? 'Parent Directory' : 'Game Directory'} htmlFor="gameDir">
             <div className="flex">
-              <input id="gameDir" type="text" value={gameDir} onChange={e => setGameDir(e.target.value)} className="flex-1 bg-slate-900/80 border border-slate-700 rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
-              <button className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80"><FolderIcon className="w-5 h-5 text-gray-400" /></button>
+              <input id="gameDir" type="text" value={isNew ? gameDir : effectivePath} onChange={e => setGameDir(e.target.value)} className="flex-1 bg-slate-900/80 border border-slate-700 rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
+              <button onClick={handleFolderPicker} className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80 transition-colors"><FolderIcon className="w-5 h-5 text-gray-400" /></button>
             </div>
+            {isNew && (
+              <p className="text-xs text-gray-500 mt-1">
+                Will install to: <span className="text-gray-400 font-mono">{effectivePath}</span>
+              </p>
+            )}
           </FormField>
 
             <div className="col-span-2">
