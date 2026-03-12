@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
-import type { DataContextType, ManagedItem, Account, Version, DownloadStatus, DownloadProgress, LoginResult, RegisterResult } from '../types';
+import type { DataContextType, ManagedItem, Account, Version, DownloadStatus, DownloadProgress, LoginResult, RegisterResult, PlaySession } from '../types';
 
 // ─── Store keys ──────────────────────────────────────────────────────────────
 
@@ -8,6 +8,8 @@ const SK_ACTIVE_ACCOUNT_ID = 'activeAccountId';
 const SK_INSTALLATIONS     = 'installations';
 const SK_SERVERS           = 'servers';
 const SK_SELECTED_VER_ID   = 'selectedVersionId';
+const SK_PINNED_SESSIONS   = 'pinnedSessions';
+const SK_LAST_PLAYED       = 'lastPlayedSession';
 
 // ─── Default values ──────────────────────────────────────────────────────────
 
@@ -53,6 +55,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const [isLoaded,       setIsLoaded]       = useState(false);
     const [isVersionsLoading, setIsVersionsLoading] = useState(false);
     const [downloadStatuses, setDownloadStatuses] = useState<Record<string, DownloadStatus>>({});
+    const [pinnedSessions,   setPinnedSessions]   = useState<PlaySession[]>([]);
+    const [lastPlayedSession, setLastPlayedSession] = useState<PlaySession | null>(null);
 
     // ── Load from store on mount ─────────────────────────────────────────────
 
@@ -65,12 +69,16 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             window.launcher.store.get(SK_INSTALLATIONS),
             window.launcher.store.get(SK_SERVERS),
             window.launcher.store.get(SK_SELECTED_VER_ID),
+            window.launcher.store.get(SK_PINNED_SESSIONS),
+            window.launcher.store.get(SK_LAST_PLAYED),
         ]).then(([
             storedAccounts,
             storedActiveAccountId,
             storedInstallations,
             storedServers,
             storedSelectedVersionId,
+            storedPinnedSessions,
+            storedLastPlayed,
         ]) => {
             // Load accounts
             if (Array.isArray(storedAccounts) && storedAccounts.length > 0) {
@@ -99,6 +107,16 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             if (typeof storedSelectedVersionId === 'string') {
                 // Store for later use after versions are fetched
                 setSelectedVersion({ id: storedSelectedVersionId } as Version);
+            }
+
+            // Load pinned sessions
+            if (Array.isArray(storedPinnedSessions)) {
+                setPinnedSessions(storedPinnedSessions as PlaySession[]);
+            }
+
+            // Load last played session
+            if (storedLastPlayed && typeof storedLastPlayed === 'object' && !Array.isArray(storedLastPlayed)) {
+                setLastPlayedSession(storedLastPlayed as PlaySession);
             }
 
             setIsLoaded(true);
@@ -226,6 +244,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (isLoaded && hasStore()) window.launcher.store.set(SK_SELECTED_VER_ID, selectedVersion?.id ?? null);
     }, [selectedVersion, isLoaded]);
 
+    useEffect(() => {
+        if (isLoaded && hasStore()) window.launcher.store.set(SK_PINNED_SESSIONS, pinnedSessions);
+    }, [pinnedSessions, isLoaded]);
+
+    useEffect(() => {
+        if (isLoaded && hasStore()) window.launcher.store.set(SK_LAST_PLAYED, lastPlayedSession);
+    }, [lastPlayedSession, isLoaded]);
+
     // ── Mutations ────────────────────────────────────────────────────────────
 
     const addInstallation    = (item: ManagedItem) => setInstallations(prev => [item, ...prev]);
@@ -304,6 +330,24 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             if (!entry) return prev;
             return { ...prev, [installationId]: { ...entry, state: 'cancelled' } };
         });
+    }, []);
+
+    // ── Session actions ───────────────────────────────────────────────────────
+
+    const pinSession = useCallback((session: PlaySession) => {
+        setPinnedSessions(prev => {
+            // Remove existing entry for the same session id, then prepend (max 4).
+            const filtered = prev.filter(s => s.id !== session.id);
+            return [session, ...filtered].slice(0, 4);
+        });
+    }, []);
+
+    const unpinSession = useCallback((sessionId: string) => {
+        setPinnedSessions(prev => prev.filter(s => s.id !== sessionId));
+    }, []);
+
+    const recordSession = useCallback((session: PlaySession) => {
+        setLastPlayedSession(session);
     }, []);
 
     // ── Auth actions ─────────────────────────────────────────────────────────
@@ -388,6 +432,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         downloadVersion,
         cancelDownload,
         refreshVersions: () => refreshVersions(true),
+        lastPlayedSession,
+        pinnedSessions,
+        pinSession,
+        unpinSession,
+        recordSession,
     };
 
     return <DataContext.Provider value={value}>{children}</DataContext.Provider>;

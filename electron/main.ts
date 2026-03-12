@@ -236,6 +236,12 @@ ipcMain.handle(IPC.GAME_LAUNCH, async (_event, options: {
   serverPort?: number;
   /** The active account id — used to retrieve the stored auth token. */
   activeAccountId?: string;
+  /** Server address for `-uplink` (direct connect to a world/server). */
+  uplink?: string;
+  /** Port for the `-uplink` server. */
+  uplinkPort?: number;
+  /** Mod IDs to pass after the `-uplink` port. */
+  modIds?: string[];
 }) => {
   const launcherDir = getLauncherDir();
 
@@ -275,6 +281,24 @@ ipcMain.handle(IPC.GAME_OPEN_LOG_LOCATION, (_event, installationPath: string) =>
 
 ipcMain.handle(IPC.GAME_GET_GRAPHICS_INFO, (_event, installationPath: string) => {
   return getGraphicsInfo(installationPath);
+});
+
+// ─── Session file reader ─────────────────────────────────────────────────────
+
+/**
+ * Read the `launcher-session.json` file that the game writes into the
+ * installation directory after each play session.  Returns the parsed JSON
+ * object, or `null` when the file is absent or cannot be parsed.
+ */
+ipcMain.handle(IPC.GAME_READ_SESSION, (_event, installationPath: string) => {
+  const sessionFilePath = path.join(installationPath, 'launcher-session.json');
+  try {
+    if (!fs.existsSync(sessionFilePath)) return null;
+    const content = fs.readFileSync(sessionFilePath, 'utf8');
+    return JSON.parse(content) as unknown;
+  } catch {
+    return null;
+  }
 });
 
 // ─── Application menu ────────────────────────────────────────────────────────

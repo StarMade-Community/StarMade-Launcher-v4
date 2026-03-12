@@ -180,6 +180,16 @@ export interface LaunchOptions {
   launcherDir: string;
   /** Access token from the StarMade registry. Passed as `-auth <token>` when present. */
   authToken?: string;
+  /**
+   * Server address for the `-uplink` argument (direct-connect to a world/server).
+   * Use `'localhost'` for singleplayer worlds or a remote IP for multiplayer.
+   * Omit to launch the game normally without auto-connecting.
+   */
+  uplink?: string;
+  /** Port for the `-uplink` server. Defaults to 4242 when `uplink` is set. */
+  uplinkPort?: number;
+  /** Enabled mod IDs. Passed as a comma-separated list after the `-uplink` port. */
+  modIds?: string[];
 }
 
 export interface LaunchResult {
@@ -204,6 +214,9 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
     serverPort,
     launcherDir,
     authToken,
+    uplink,
+    uplinkPort,
+    modIds,
   } = options;
 
   // Check if already running
@@ -281,16 +294,27 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
 
     // Pass the authentication token to the game so players don't need to
     // log in again through the in-game menu (mirrors v2 launcher behaviour).
+    // Each flag and its value are separate spawn arguments so the OS/JVM
+    // receives them correctly (a single combined string would be treated as
+    // one opaque argument by the process).
     if (authToken) {
-      // The game expects the token as a single combined argument: "-auth <token>"
-      args.push(`-auth ${authToken}`);
+      args.push('-auth', authToken);
       sendLogEvent(installationId, 'INFO', 'Auth token injected.');
+    }
+
+    // Direct-connect to a world or server via -uplink.
+    // Format: -uplink <address> <port> [<comma-separated-mod-ids>]
+    if (uplink) {
+      args.push('-uplink', uplink, String(uplinkPort ?? 4242));
+      if (modIds && modIds.length > 0) {
+        args.push(modIds.join(','));
+      }
     }
 
     // Build a redacted copy of args for logging so the auth token is never
     // written to any log in plaintext.
     const safeArgs = authToken
-      ? args.map((a) => (a.includes(authToken) ? a.replaceAll(authToken, '[REDACTED]') : a))
+      ? args.map((a) => (a === authToken ? '[REDACTED]' : a))
       : args;
 
     console.log(`[Launcher] Launching: ${javaPath} ${safeArgs.join(' ')}`);

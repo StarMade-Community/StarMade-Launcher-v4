@@ -1,5 +1,42 @@
 export type ItemType = 'latest' | 'release' | 'dev' | 'archive' | 'pre';
 
+// ─── Session types ────────────────────────────────────────────────────────────
+
+/**
+ * Represents a single play session – either launching a singleplayer world or
+ * connecting to a multiplayer server from within an installation.
+ *
+ * Stored in the launcher's persistent store for the "last played" display and
+ * for pinned quick-access sessions.  The game itself may also write a
+ * `launcher-session.json` file into the installation directory; the launcher
+ * reads that file on startup to populate / update this record.
+ */
+export interface PlaySession {
+  /** Unique identifier for this session record. */
+  id: string;
+  /** ID of the ManagedItem installation this session belongs to. */
+  installationId: string;
+  /** Display name of the installation (copied so sessions survive renames). */
+  installationName: string;
+  /** Filesystem path to the installation directory. */
+  installationPath: string;
+  /** StarMade version string of the installation. */
+  installationVersion: string;
+  /** Whether this was a singleplayer world or a multiplayer server connection. */
+  sessionType: 'singleplayer' | 'multiplayer';
+  /**
+   * Server address passed via `-uplink`.
+   * `'localhost'` for singleplayer worlds, the remote IP for multiplayer.
+   */
+  serverAddress: string;
+  /** Server port (typically 4242). */
+  serverPort: number;
+  /** Enabled mod IDs to be passed as a comma-separated list after `-uplink`. */
+  modIds?: string[];
+  /** ISO 8601 timestamp of the last time this session was launched. */
+  timestamp: string;
+}
+
 export interface ManagedItem {
   id: string;
   name: string;
@@ -101,6 +138,16 @@ export type PageProps =
     | {};
 
 // Context Types
+/** Optional session arguments that override the default launch target. */
+export interface SessionLaunchArgs {
+  /** Server address for `-uplink` (e.g. `'localhost'` for singleplayer). */
+  uplink?: string;
+  /** Port for the `-uplink` server. Defaults to 4242. */
+  uplinkPort?: number;
+  /** Enabled mod IDs to pass as a comma-separated list after `-uplink`. */
+  modIds?: string[];
+}
+
 export interface AppContextType {
     activePage: Page;
     pageProps: PageProps;
@@ -112,12 +159,14 @@ export interface AppContextType {
     logViewerOpen: boolean;
     logViewerInstallation: ManagedItem | null;
     navigate: (page: Page, props?: PageProps) => void;
-    openLaunchModal: (installation?: ManagedItem) => void;
+    openLaunchModal: (installation?: ManagedItem, sessionArgs?: SessionLaunchArgs) => void;
     closeLaunchModal: () => void;
     startLaunching: () => void;
     completeLaunching: () => void;
     openLogViewer: (installation: ManagedItem) => void;
     closeLogViewer: () => void;
+    /** Launch a previously recorded play session directly (bypasses install picker). */
+    launchSession: (session: PlaySession) => void;
 }
 
 export interface DataContextType {
@@ -158,4 +207,16 @@ export interface DataContextType {
     downloadVersion: (installationId: string) => void;
     cancelDownload: (installationId: string) => void;
     refreshVersions: () => Promise<void>;
+
+    // Session actions
+    /** The most recently played session (across all installations). */
+    lastPlayedSession: PlaySession | null;
+    /** Up to 4 sessions pinned by the user for quick access. */
+    pinnedSessions: PlaySession[];
+    /** Pin a session for quick access (max 4; oldest pin is dropped when full). */
+    pinSession: (session: PlaySession) => void;
+    /** Unpin a previously pinned session. */
+    unpinSession: (sessionId: string) => void;
+    /** Record a completed play session as the new last-played entry. */
+    recordSession: (session: PlaySession) => void;
 }
