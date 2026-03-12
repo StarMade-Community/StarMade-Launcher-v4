@@ -14,9 +14,9 @@ const UserProfile: React.FC = () => {
     useOnClickOutside(dropdownRef, () => setIsOpen(false));
     
     const handleLogout = () => {
-        // Remove temporary offline account from accounts list if present
-        if (activeAccount?.id.startsWith('offline-')) {
-            setAccounts(accounts.filter(a => !a.id.startsWith('offline-')));
+        // Remove the active account from the accounts list
+        if (activeAccount) {
+            setAccounts(accounts.filter(a => a.id !== activeAccount.id));
         }
         setActiveAccount(null);
         setIsOpen(false);
