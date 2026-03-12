@@ -4,6 +4,7 @@ import {
   ipcMain,
   Menu,
   shell,
+  dialog,
 } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -264,6 +265,21 @@ function buildMenu(): void {
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
+
+// ─── Dialog handlers ─────────────────────────────────────────────────────────
+
+ipcMain.handle(IPC.DIALOG_OPEN_FOLDER, async (_event, defaultPath?: string) => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openDirectory', 'createDirectory'],
+    defaultPath: defaultPath || app.getPath('home'),
+  });
+  
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+  
+  return result.filePaths[0];
+});
 
 // ─── Auto-updater stub ───────────────────────────────────────────────────────
 // Full auto-update logic (electron-updater) will be wired in Phase 7/8.

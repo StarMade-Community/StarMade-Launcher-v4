@@ -64,6 +64,11 @@ export const IPC = {
   GAME_OPEN_LOG_LOCATION: 'game:open-log-location',
   /** Renderer → Main (invoke): get GraphicsInfo.txt content if it exists. */
   GAME_GET_GRAPHICS_INFO: 'game:get-graphics-info',
+
+  // ─── Dialog ─────────────────────────────────────────────────────────────────
+  
+  /** Renderer → Main (invoke): open folder picker dialog. */
+  DIALOG_OPEN_FOLDER: 'dialog:open-folder',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
