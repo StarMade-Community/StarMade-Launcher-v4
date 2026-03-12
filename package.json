@@ -95,7 +95,7 @@
       "icon": "build/icon.png"
     },
     "portable": {
-      "requestedExecutionLevel": "asInvoker"
+      "requestExecutionLevel": "asInvoker"
     }
   }
 }
