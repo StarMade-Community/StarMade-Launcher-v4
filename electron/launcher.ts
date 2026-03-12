@@ -287,10 +287,16 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
       sendLogEvent(installationId, 'INFO', 'Auth token injected.');
     }
 
-    console.log(`[Launcher] Launching: ${javaPath} ${args.join(' ')}`);
+    // Build a redacted copy of args for logging so the auth token is never
+    // written to any log in plaintext.
+    const safeArgs = authToken
+      ? args.map((a) => (a.includes(authToken) ? a.replaceAll(authToken, '[REDACTED]') : a))
+      : args;
+
+    console.log(`[Launcher] Launching: ${javaPath} ${safeArgs.join(' ')}`);
     console.log(`[Launcher] Working directory: ${installationPath}`);
 
-    sendLogEvent(installationId, 'INFO', `Command: ${args.join(' ')}`);
+    sendLogEvent(installationId, 'INFO', `Command: ${safeArgs.join(' ')}`);
 
     // Spawn the process
     const child = spawn(javaPath, args, {
