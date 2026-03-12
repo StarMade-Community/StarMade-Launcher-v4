@@ -205,7 +205,10 @@ const GameLogViewer: React.FC<GameLogViewerProps> = ({
 
   const filteredLogs = logs.filter(log => {
     if (filter === 'all') return true;
-    if (filter === 'errors') return log.level === 'ERROR' || log.level === 'FATAL' || log.level === 'stderr';
+    // 'stderr' is intentionally excluded from the errors filter — routine JVM
+    // output goes to stderr but is not an error.  Real exceptions/errors that
+    // arrive via stderr are already promoted to level 'ERROR' by the launcher.
+    if (filter === 'errors') return log.level === 'ERROR' || log.level === 'FATAL';
     if (filter === 'warnings') return log.level === 'WARNING';
     if (filter === 'info') return log.level === 'INFO' || log.level === 'stdout';
     if (filter === 'debug') return log.level === 'DEBUG';
@@ -219,8 +222,11 @@ const GameLogViewer: React.FC<GameLogViewerProps> = ({
       case 'FATAL':
         return 'text-red-600 font-bold';
       case 'ERROR':
-      case 'stderr':
         return 'text-red-400';
+      case 'stderr':
+        // Routine JVM stderr output — neutral colour.  Real errors from stderr
+        // are promoted to 'ERROR' level before reaching the viewer.
+        return 'text-gray-400';
       case 'WARNING':
         return 'text-yellow-400';
       case 'INFO':
