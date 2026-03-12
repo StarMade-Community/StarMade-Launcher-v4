@@ -58,17 +58,23 @@ const DiscordButton: React.FC = () => {
     );
 };
 
-const InstallationSelector: React.FC = () => {
+const InstallationSelector: React.FC<{
+    selectedId: string | null;
+    onSelect: (id: string) => void;
+}> = ({ selectedId, onSelect }) => {
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
     useOnClickOutside(dropdownRef, () => setIsOpen(false));
     const { installations } = useData();
     const { navigate } = useApp();
     
-    // Use first installed installation as default
     const installedInstallations = installations.filter(inst => inst.installed !== false);
-    const selectedInstallation = installedInstallations[0] || installations[0] || null;
-
+    // Resolve the displayed installation: prefer the explicitly selected id, fall back to first
+    const selectedInstallation =
+        (selectedId ? installedInstallations.find(i => i.id === selectedId) : null)
+        ?? installedInstallations[0]
+        ?? installations[0]
+        ?? null;
 
     // No installations at all - prompt to create one
     if (installations.length === 0) {
@@ -126,6 +132,7 @@ const InstallationSelector: React.FC = () => {
                             <li key={installation.id}>
                                 <button 
                                     onClick={() => {
+                                        onSelect(installation.id);
                                         setIsOpen(false);
                                     }}
                                     className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-700/50 transition-colors"
@@ -252,17 +259,23 @@ const SciFiPlayButton: React.FC<SciFiPlayButtonProps> = ({ isUpdating, statusLab
 const Footer: React.FC = () => {
   const { navigate, isLaunching, launchStatus, openLaunchModal, completeLaunching } = useApp();
   const { installations } = useData();
-  
-  // Use the first installed installation as the default
-  const defaultInstallation = installations.find(inst => inst.installed !== false);
+
+  const [selectedInstallationId, setSelectedInstallationId] = useState<string | null>(null);
+
+  // Resolve the effective installation — prefer the user's selection, fall back to first installed
+  const installedInstallations = installations.filter(inst => inst.installed !== false);
+  const activeInstallation =
+      (selectedInstallationId ? installedInstallations.find(i => i.id === selectedInstallationId) : null)
+      ?? installedInstallations[0]
+      ?? null;
 
   const handleLaunchClick = () => {
-    if (!defaultInstallation) {
+    if (!activeInstallation) {
       // No installed installation — send the user to the Installations page
       navigate('Installations', { initialTab: 'installations' });
       return;
     }
-    openLaunchModal(defaultInstallation);
+    openLaunchModal(activeInstallation);
   };
 
   return (
@@ -273,7 +286,10 @@ const Footer: React.FC = () => {
         </div>
         
         <div className="flex items-center justify-center gap-6">
-            <InstallationSelector />
+            <InstallationSelector
+                selectedId={selectedInstallationId}
+                onSelect={setSelectedInstallationId}
+            />
 
             <SciFiPlayButton 
                 isUpdating={isLaunching}

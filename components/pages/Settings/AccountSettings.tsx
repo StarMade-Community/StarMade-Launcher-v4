@@ -12,6 +12,7 @@ const AccountSettings: React.FC = () => {
     // Login form
     const [loginUsername, setLoginUsername] = useState('');
     const [loginPassword, setLoginPassword] = useState('');
+    const [loginDisplayName, setLoginDisplayName] = useState('');
     const [loginError,    setLoginError]    = useState('');
     const [loginLoading,  setLoginLoading]  = useState(false);
 
@@ -30,7 +31,7 @@ const AccountSettings: React.FC = () => {
     const [guestError,   setGuestError]   = useState('');
 
     const resetForms = () => {
-        setLoginUsername(''); setLoginPassword(''); setLoginError('');
+        setLoginUsername(''); setLoginPassword(''); setLoginDisplayName(''); setLoginError('');
         setRegUsername(''); setRegEmail(''); setRegPassword(''); setRegPassword2('');
         setRegError(''); setRegSuccess(''); setRegSubscribe(true);
         setGuestName(''); setGuestError('');
@@ -44,7 +45,7 @@ const AccountSettings: React.FC = () => {
         e.preventDefault();
         if (!loginUsername.trim() || !loginPassword) { setLoginError('Please fill in all fields.'); return; }
         setLoginError(''); setLoginLoading(true);
-        const result = await loginAccount(loginUsername, loginPassword);
+        const result = await loginAccount(loginUsername, loginPassword, loginDisplayName);
         setLoginLoading(false);
         if (result.success) {
             goTo('list');
@@ -106,6 +107,10 @@ const AccountSettings: React.FC = () => {
                     <div>
                         <label className={labelCls}>Password</label>
                         <input className={inputCls} type="password" value={loginPassword} onChange={e => setLoginPassword(e.target.value)} placeholder="Your password" autoComplete="current-password" />
+                    </div>
+                    <div>
+                        <label className={labelCls}>Display Name <span className="normal-case font-normal text-gray-500">(optional)</span></label>
+                        <input className={inputCls} value={loginDisplayName} onChange={e => setLoginDisplayName(e.target.value)} placeholder="Custom name shown in the launcher" autoComplete="off" />
                     </div>
                     {loginError && <p className="text-red-400 text-sm">{loginError}</p>}
                     <button type="submit" className={btnPrimary} disabled={loginLoading}>
@@ -240,7 +245,7 @@ const AccountSettings: React.FC = () => {
                                     <UserIcon className="w-8 h-8 text-slate-300" />
                                 </div>
                                 <div className="flex-1 min-w-0">
-                                    <h3 className={`text-lg font-bold truncate ${isActive ? 'text-white' : 'text-gray-300'}`}>{account.name}</h3>
+                                    <h3 className={`text-lg font-bold truncate ${isActive ? 'text-white' : 'text-gray-300'}`}>{account.displayName ?? account.name}</h3>
                                     <p className="text-xs text-gray-500">
                                         {isGuest ? 'Guest / Offline' : (account.uuid ? `UUID: ${account.uuid}` : 'Registry Account')}
                                     </p>

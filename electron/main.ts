@@ -519,7 +519,7 @@ ipcMain.handle(IPC.LEGACY_SCAN, async () => {
   const found = new Set<string>();
   await Promise.all(
     Array.from(searchRoots).map(root =>
-      findLegacyInstalls(root).then(paths => paths.forEach(p => found.add(p)))
+      findLegacyInstalls(root, 2).then(paths => paths.forEach(p => found.add(p)))
     )
   );
   return Array.from(found);
