@@ -28,8 +28,6 @@ const branches: { value: ItemType, label: string }[] = [
   { value: 'archive', label: 'Archive' },
 ];
 
-const resolutions = ["1280x720", "1920x1080", "2560x1440", "3840x2160"];
-
 const availableIcons: { icon: string; name: string }[] = [
     { icon: 'release', name: 'Release' },
     { icon: 'dev', name: 'Dev Build' },
@@ -99,7 +97,6 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
   const [buildPath, setBuildPath] = useState(item.buildPath ?? '');
   const [requiredJavaVersion, setRequiredJavaVersion] = useState<8 | 25 | undefined>(item.requiredJavaVersion);
   const [gameDir, setGameDir] = useState(item.path);
-  const [resolution, setResolution] = useState('1920x1080');
   const [javaMemory, setJavaMemory] = useState(8192);
   const [javaPath, setJavaPath] = useState('');
   const [jvmArgs, setJvmArgs] = useState('-Xms4G -Xmx8G');
@@ -251,8 +248,6 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
   const title = isNew ? `New ${itemTypeName}` : `Edit ${itemTypeName}`;
   const saveButtonText = isNew ? 'Create' : 'Save';
 
-  const resolutionOptions = resolutions.map(res => ({ value: res, label: res }));
-
   return (
     <div className="h-full flex flex-col text-white">
       {isIconPickerOpen && <IconPickerModal onSelect={setIcon} onClose={() => setIconPickerOpen(false)} />}
@@ -333,14 +328,6 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
               <input id="gameDir" type="text" value={gameDir} onChange={e => setGameDir(e.target.value)} className="flex-1 bg-slate-900/80 border border-slate-700 rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
               <button className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80"><FolderIcon className="w-5 h-5 text-gray-400" /></button>
             </div>
-          </FormField>
-          <FormField label="Resolution" htmlFor="resolution">
-            <CustomDropdown
-                options={resolutionOptions}
-                value={resolution}
-                onChange={setResolution}
-                icon={<MonitorIcon className="w-5 h-5 text-gray-400" />}
-            />
           </FormField>
 
             <div className="col-span-2">
