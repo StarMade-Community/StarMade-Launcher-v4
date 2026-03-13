@@ -4,7 +4,7 @@
  * Flow:
  *  1. Query GitHub Releases API for the latest version tag.
  *  2. Compare against the running app version.
- *  3. If newer: find the platform-appropriate asset (NSIS .exe on Windows,
+ *  3. If newer: find the platform-appropriate asset (portable .exe on Windows,
  *     AppImage on Linux), download it to a temp file with live progress
  *     callbacks, then execute/replace the launcher.
  *  4. If anything fails, open the releases page in the browser as a fallback.
@@ -84,7 +84,7 @@ function compareSemver(a: string, b: string): -1 | 0 | 1 {
  * Pick the best installer asset for the current platform from a list of
  * GitHub release assets.
  *
- * Windows → .exe (NSIS installer)
+ * Windows → .exe (portable executable)
  * Linux   → .AppImage
  * macOS   → not supported for silent install; returns undefined
  */
@@ -288,7 +288,14 @@ export async function installUpdate(installerPath: string): Promise<void> {
       // Paths are passed via environment variables to avoid any shell-injection
       // risk from special characters in file paths.  A random suffix on the
       // script name prevents predictable temp-file collisions.
-      const currentExe = app.getPath('exe');
+      //
+      // IMPORTANT: When running as an electron-builder portable executable,
+      // the app self-extracts to a temporary directory at runtime.
+      // app.getPath('exe') therefore returns the path to the *extracted* binary
+      // inside that temp dir — NOT the original portable .exe the user placed
+      // on disk.  electron-builder sets PORTABLE_EXECUTABLE_FILE to the real
+      // on-disk path of the portable .exe, so we must use that when available.
+      const currentExe = process.env.PORTABLE_EXECUTABLE_FILE || app.getPath('exe');
 
       const uniqueSuffix = Math.random().toString(36).slice(2);
       const scriptPath = path.join(os.tmpdir(), `starmade-update-${uniqueSuffix}.ps1`);
