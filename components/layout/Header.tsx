@@ -57,7 +57,12 @@ const UserProfile: React.FC = () => {
                                                     <div className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center border border-slate-600">
                                                         <UserIcon className="w-5 h-5 text-slate-400" />
                                                     </div>
-                                                    <span className="text-sm text-white flex-1">{account.name}</span>
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className="text-sm text-white truncate">{account.displayName ?? account.name}</p>
+                                                        {account.displayName && (
+                                                            <p className="text-xs text-gray-500 truncate">{account.name}</p>
+                                                        )}
+                                                    </div>
                                                 </button>
                                             </li>
                                         ))}
@@ -116,7 +121,10 @@ const UserProfile: React.FC = () => {
                     <UserIcon className="w-6 h-6 text-slate-400" />
                 </div>
                 <div>
-                    <h3 className="font-semibold text-white">{activeAccount.name}</h3>
+                    <h3 className="font-semibold text-white">{activeAccount.displayName ?? activeAccount.name}</h3>
+                    {activeAccount.displayName && (
+                        <p className="text-xs text-gray-500">{activeAccount.name}</p>
+                    )}
                     {activeAccount.id.startsWith('offline-') && (
                         <p className="text-xs text-gray-500">Offline Mode</p>
                     )}
@@ -143,7 +151,12 @@ const UserProfile: React.FC = () => {
                                                 <div className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center border border-slate-600">
                                                     <UserIcon className="w-5 h-5 text-slate-400" />
                                                 </div>
-                                                <span className="text-sm text-white flex-1">{account.name}</span>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-sm text-white truncate">{account.displayName ?? account.name}</p>
+                                                    {account.displayName && (
+                                                        <p className="text-xs text-gray-500 truncate">{account.name}</p>
+                                                    )}
+                                                </div>
                                                 {activeAccount.id === account.id && <CheckCircleIcon className="w-5 h-5 text-starmade-accent" />}
                                             </button>
                                         </li>

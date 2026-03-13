@@ -33,6 +33,15 @@ const isDev = !app.isPackaged;
 const RENDERER_URL = 'http://localhost:3000';
 const PRELOAD_PATH = path.join(__dirname, 'preload.js');
 
+// ─── EPIPE guard ─────────────────────────────────────────────────────────────
+// When the launcher is packaged as an AppImage (or any scenario where stdout /
+// stderr is not connected to a terminal), Node.js throws an EPIPE error the
+// first time console.log / console.error tries to write.  That propagates as
+// an uncaught exception and shows the "A JavaScript error occurred" dialog.
+// Silently ignoring EPIPE on the stdio streams is the standard Node.js fix.
+process.stdout.on('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err; });
+process.stderr.on('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err; });
+
 // ─── Linux sandbox fix ───────────────────────────────────────────────────────
 // Chromium's SUID sandbox check runs at the C++ browser-process level, before
 // V8 starts and before *any* JavaScript executes.  That means calling

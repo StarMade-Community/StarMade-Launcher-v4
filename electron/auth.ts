@@ -164,7 +164,7 @@ export async function loginWithPassword(username: string, password: string): Pro
       if (refreshToken) storeToken(refreshKey(accountId), refreshToken);
       storeSet(expiryKey(accountId), expiry);
 
-      console.log(`[Auth] Logged in as ${username.trim()} (accountId=${accountId})`);
+      try { console.log(`[Auth] Logged in as ${username.trim()} (accountId=${accountId})`); } catch { /* EPIPE – stdout disconnected (AppImage) */ }
 
       return {
         success: true,

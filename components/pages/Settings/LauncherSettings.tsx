@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import CustomDropdown from '../../common/CustomDropdown';
 import { FolderIcon } from '../../common/icons';
-import { useData } from '../../../contexts/DataContext';
+import { useData } from '@/contexts/DataContext';
 import UpdateAvailableModal from '../../common/UpdateAvailableModal';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -238,6 +238,7 @@ const LauncherSettings: React.FC = () => {
             } catch (error) {
                 console.error('Failed to load defaults for legacy import:', error);
             }
+        }
         // Try to read the version from version.txt inside the install directory
         let version = 'unknown';
         if (window.launcher?.legacy?.readVersion) {
