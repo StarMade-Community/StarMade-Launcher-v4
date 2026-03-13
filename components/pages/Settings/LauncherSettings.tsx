@@ -81,9 +81,7 @@ const LauncherSettings: React.FC = () => {
     const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
 
     const languageOptions = [
-        { value: 'English (US)', label: 'English (US)' },
-        { value: 'Deutsch', label: 'Deutsch' },
-        { value: 'Français', label: 'Français' },
+        { value: 'English', label: 'English' }, //Todo: Support other languages, and maybe have this set the game's language if possible
     ];
     
     const closeBehaviorOptions = [
