@@ -26,7 +26,7 @@ interface UpdateInfo {
 const App: React.FC = () => {
   const [isShortViewport, setIsShortViewport] = useState<boolean>(false);
 
-  const { 
+  const {
     activePage, 
     pageProps, 
     isLaunchModalOpen, 
@@ -82,12 +82,16 @@ const App: React.FC = () => {
     const serverName = 'serverName' in pageProps ? pageProps.serverName : undefined;
 
     switch (activePage) {
-      case 'Installations':
-        return <Installations initialTab={initialTab} />;
+      case 'Installations': {
+        const installationProps = 'initialTab' in pageProps ? pageProps : {};
+        return <Installations {...installationProps} />;
+      }
       case 'News':
         return <News />;
-      case 'Settings':
-        return <Settings initialSection={initialSection} />;
+      case 'Settings': {
+        const settingsProps = 'initialSection' in pageProps ? pageProps : {};
+        return <Settings {...settingsProps} />;
+      }
       case 'ServerPanel':
         return <ServerPanel serverId={serverId} serverName={serverName} />;
       case 'Play':

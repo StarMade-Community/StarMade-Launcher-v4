@@ -1,8 +1,18 @@
 import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
-import type { AppContextType, Page, PageProps, ManagedItem, PlaySession, SessionLaunchArgs } from '../types';
+import type { AppContextType, Page, PageProps, ManagedItem, PlaySession, SessionLaunchArgs, LauncherSettingsData } from '../types';
 import { useData } from './DataContext';
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
+
+const LAUNCHER_SETTINGS_KEY = 'launcherSettings';
+const DEFAULT_LAUNCHER_SETTINGS: LauncherSettingsData = {
+    checkForUpdates: true,
+    useBetaChannel: false,
+    showLog: false,
+    language: 'English (US)',
+    closeBehavior: 'Close launcher',
+};
+const POST_LAUNCH_CLOSE_DELAY_MS = 250;
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const { activeAccount, installations, recordSession } = useData();
@@ -27,6 +37,51 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setLaunchError(null);
         setPendingLaunchInstallation(null);
         setPendingSessionArgs(null);
+    }, []);
+
+    const getLauncherSettings = useCallback(async (): Promise<LauncherSettingsData> => {
+        if (typeof window === 'undefined' || !window.launcher?.store) {
+            return DEFAULT_LAUNCHER_SETTINGS;
+        }
+
+        try {
+            const stored = await window.launcher.store.get(LAUNCHER_SETTINGS_KEY);
+            if (stored && typeof stored === 'object') {
+                return {
+                    ...DEFAULT_LAUNCHER_SETTINGS,
+                    ...(stored as Partial<LauncherSettingsData>),
+                };
+            }
+        } catch {
+            // Ignore store read failures and fall back to defaults.
+        }
+
+        return DEFAULT_LAUNCHER_SETTINGS;
+    }, []);
+
+    const applyPostLaunchBehavior = useCallback((settings: LauncherSettingsData, installation: ManagedItem) => {
+        if (settings.closeBehavior === 'Keep the launcher open' && settings.showLog) {
+            setLogViewerInstallation(installation);
+            setLogViewerOpen(true);
+        }
+
+        if (typeof window === 'undefined' || !window.launcher?.window) {
+            return;
+        }
+
+        switch (settings.closeBehavior) {
+            case 'Close launcher':
+                setTimeout(() => {
+                    window.launcher?.window?.close();
+                }, POST_LAUNCH_CLOSE_DELAY_MS);
+                break;
+            case 'Hide launcher':
+                window.launcher.window.minimize();
+                break;
+            case 'Keep the launcher open':
+            default:
+                break;
+        }
     }, []);
 
     /**
@@ -154,16 +209,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                     timestamp: new Date().toISOString(),
                 };
                 recordSession(session);
-                
-                // Check if we should open log viewer automatically
-                if (typeof window !== 'undefined' && window.launcher?.store) {
-                    window.launcher.store.get('launcherSettings').then((settings: any) => {
-                        if (settings?.showLog) {
-                            setLogViewerInstallation(installation);
-                            setLogViewerOpen(true);
-                        }
-                    }).catch(() => {});
-                }
+
+                const launcherSettings = await getLauncherSettings();
+                applyPostLaunchBehavior(launcherSettings, installation);
                 
                 // Keep isLaunching true for a moment to show progress
                 setTimeout(() => {
@@ -179,7 +227,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             setLaunchError(String(error));
             setIsLaunching(false);
         }
-    }, [activeAccount, recordSession]);
+    }, [activeAccount, applyPostLaunchBehavior, getLauncherSettings, recordSession]);
 
     /** Called by the "Launch Anyway" modal button — launches without terminating. */
     const startLaunching = async () => {

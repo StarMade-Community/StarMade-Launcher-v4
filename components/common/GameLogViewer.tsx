@@ -49,12 +49,12 @@ const GameLogViewer: React.FC<GameLogViewerProps> = ({
     report.push(`User Agent: ${navigator.userAgent}`);
     report.push('');
     report.push('───────────────────────────────────────────────────────────');
-    report.push('CRASH LOG (Last 50 entries before crash)');
+    report.push('CRASH LOG (Last 100 entries before crash)');
     report.push('───────────────────────────────────────────────────────────');
     report.push('');
     
-    // Get last 50 log entries leading up to crash
-    const relevantLogs = crashLogs.slice(-50);
+    // Get last 100 log entries leading up to crash
+    const relevantLogs = crashLogs.slice(-100);
     
     relevantLogs.forEach(log => {
       const levelPadded = log.level.padEnd(8);
@@ -62,13 +62,7 @@ const GameLogViewer: React.FC<GameLogViewerProps> = ({
     });
     
     report.push('');
-    report.push('───────────────────────────────────────────────────────────');
-    report.push('SYSTEM INFORMATION');
-    report.push('───────────────────────────────────────────────────────────');
-    report.push(`Log File: ${logPath}`);
-    report.push(`Total Log Entries: ${logs.length}`);
-    report.push(`Memory: ${(performance as any).memory ? `${((performance as any).memory.usedJSHeapSize / 1048576).toFixed(2)} MB` : 'N/A'}`);
-    
+
     // Try to read GraphicsInfo.txt if it exists
     if (typeof window !== 'undefined' && window.launcher?.game?.getGraphicsInfo) {
       try {

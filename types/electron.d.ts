@@ -294,9 +294,10 @@ declare global {
         getVersion: () => Promise<string>;
         /**
          * Manually trigger an update check against GitHub releases.
+         * Pass `includePreReleases: true` to include pre-release versions.
          * Resolves with update info (available, latestVersion, etc.).
          */
-        checkForUpdates: () => Promise<{
+        checkForUpdates: (options?: { includePreReleases?: boolean }) => Promise<{
           available: boolean;
           latestVersion: string;
           currentVersion: string;
@@ -306,6 +307,8 @@ declare global {
           assetUrl?: string;
           /** Filename of the installer asset. */
           assetName?: string;
+          /** Whether the discovered release is a pre-release build. */
+          isPreRelease?: boolean;
         }>;
         /**
          * Download the update installer asset.
@@ -341,7 +344,18 @@ declare global {
           downloadUrl: string;
           assetUrl?: string;
           assetName?: string;
+          isPreRelease?: boolean;
         }) => void) => () => void;
+      };
+
+      /** Launcher data backup / restore APIs */
+      backup: {
+        /** Create a timestamped backup of the launcher userData directory. */
+        create: () => Promise<{ success: boolean; backupPath?: string; error?: string }>;
+        /** List available backups, newest first. */
+        list: () => Promise<Array<{ name: string; path: string; date: string }>>;
+        /** Restore a backup from the given path and restart the launcher. */
+        restore: (backupPath: string) => Promise<{ success: boolean; error?: string }>;
       };
     };
   }

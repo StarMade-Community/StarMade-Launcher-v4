@@ -137,6 +137,16 @@ export interface DownloadStatus {
 export type ServerLifecycleState = 'starting' | 'running' | 'stopping' | 'stopped' | 'error';
 export type ServerLogLevel = 'INFO' | 'WARNING' | 'ERROR' | 'FATAL' | 'DEBUG' | 'stdout' | 'stderr';
 
+export type LauncherCloseBehavior = 'Close launcher' | 'Hide launcher' | 'Keep the launcher open';
+
+export interface LauncherSettingsData {
+  checkForUpdates: boolean;
+  useBetaChannel: boolean;
+  showLog: boolean;
+  language: string;
+  closeBehavior: LauncherCloseBehavior;
+}
+
 export type Page = 'Play' | 'Installations' | 'News' | 'Settings' | 'ServerPanel';
 export type SettingsSection = 'launcher' | 'accounts' | 'about' | 'defaults';
 export type InstallationsTab = 'installations' | 'servers';
