@@ -570,6 +570,31 @@ function copyPresetsToUserData(): void {
  */
 const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', '__pycache__']);
 
+function getLegacyAutoDetectRoots(): Array<{ root: string; maxDepth: number }> {
+  const roots = new Map<string, number>();
+  const addRoot = (rootPath: string | undefined, maxDepth: number) => {
+    if (!rootPath) return;
+    const normalized = path.resolve(rootPath);
+    if (!fs.existsSync(normalized)) return;
+    const previousDepth = roots.get(normalized);
+    roots.set(normalized, previousDepth === undefined ? maxDepth : Math.max(previousDepth, maxDepth));
+  };
+
+  const homeDir = os.homedir();
+
+  // Keep app-local roots for source/dev installs.
+  addRoot(process.cwd(), 3);
+  addRoot(app.getAppPath(), 3);
+
+  // Add common user-facing locations where old launchers are usually unpacked.
+  addRoot(homeDir, 3);
+  addRoot(path.join(homeDir, 'Games'), 3);
+  addRoot(path.join(homeDir, 'Game Files'), 3);
+  addRoot(path.join(homeDir, 'Desktop'), 3);
+
+  return Array.from(roots.entries()).map(([root, maxDepth]) => ({ root, maxDepth }));
+}
+
 async function findLegacyInstalls(dir: string, maxDepth = 4, depth = 0): Promise<string[]> {
   if (depth > maxDepth) return [];
   try {
@@ -594,15 +619,12 @@ async function findLegacyInstalls(dir: string, maxDepth = 4, depth = 0): Promise
 }
 
 ipcMain.handle(IPC.LEGACY_SCAN, async () => {
-  const searchRoots = new Set<string>([
-    process.cwd(),
-    app.getAppPath(),
-  ]);
+  const searchRoots = getLegacyAutoDetectRoots();
 
   const found = new Set<string>();
   await Promise.all(
-    Array.from(searchRoots).map(root =>
-      findLegacyInstalls(root, 2).then(paths => paths.forEach(p => found.add(p)))
+    searchRoots.map(({ root, maxDepth }) =>
+      findLegacyInstalls(root, maxDepth).then(paths => paths.forEach(p => found.add(p)))
     )
   );
   return Array.from(found);
