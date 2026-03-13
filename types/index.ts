@@ -130,13 +130,17 @@ export interface DownloadStatus {
   error?: string;
 }
 
-export type Page = 'Play' | 'Installations' | 'News' | 'Settings';
+export type ServerLifecycleState = 'starting' | 'running' | 'stopping' | 'stopped' | 'error';
+export type ServerLogLevel = 'INFO' | 'WARNING' | 'ERROR' | 'FATAL' | 'DEBUG' | 'stdout' | 'stderr';
+
+export type Page = 'Play' | 'Installations' | 'News' | 'Settings' | 'ServerPanel';
 export type SettingsSection = 'launcher' | 'accounts' | 'about' | 'defaults';
 export type InstallationsTab = 'installations' | 'servers';
 
 export type PageProps = 
     | { initialSection?: SettingsSection } 
     | { initialTab?: InstallationsTab }
+    | { serverId?: string; serverName?: string }
     | {};
 
 // Context Types
@@ -177,6 +181,8 @@ export interface DataContextType {
     activeAccount: Account | null;
     installations: ManagedItem[];
     servers: ManagedItem[];
+    selectedServerId: string | null;
+    selectedServer: ManagedItem | null;
     versions: Version[];
     selectedVersion: Version | null;
     /** Keyed by installation id. Only present while a download is active or has recently finished. */
@@ -202,6 +208,7 @@ export interface DataContextType {
     addServer: (item: ManagedItem) => void;
     updateServer: (item: ManagedItem) => void;
     deleteServer: (id: string) => void;
+    setSelectedServerId: (serverId: string | null) => void;
     getInstallationDefaults: () => ManagedItem;
     getServerDefaults: () => ManagedItem;
 

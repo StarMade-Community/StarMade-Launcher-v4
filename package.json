@@ -2,7 +2,7 @@
   "name": "starmade-launcher",
   "private": true,
   "version": "4.0.0",
-  "description": "Modern cross-platform launcher for StarMade",
+  "description": "StarMade Launcher",
   "author": "StarMade Community",
   "type": "module",
   "main": "dist-electron/main.js",

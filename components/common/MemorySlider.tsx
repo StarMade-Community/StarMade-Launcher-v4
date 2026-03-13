@@ -54,7 +54,7 @@ const MemorySlider: React.FC<MemorySliderProps> = ({ value, onChange }) => {
     
     const memoryPercentage = ((value - MIN_MEMORY) / (maxMemory - MIN_MEMORY)) * 100;
     const markers = getMemoryMarkers();
-    const showWarning = maxMemory > WARNING_THRESHOLD && value > WARNING_THRESHOLD;
+    // const showWarning = maxMemory > WARNING_THRESHOLD && value > WARNING_THRESHOLD;
 
     return (
         <div className="flex flex-col gap-2 w-full" data-testid="memory-slider-root">
@@ -119,11 +119,11 @@ const MemorySlider: React.FC<MemorySliderProps> = ({ value, onChange }) => {
                     </div>
                 </div>
             </div>
-            {showWarning && (
+            {/*{showWarning && (
                 <p className="text-xs text-yellow-400/80 px-3">
                     ⚠ Allocating more than 16 GB is not recommended — it may cause instability or be ignored by the JVM.
                 </p>
-            )}
+            )}*/}
         </div>
     );
 };

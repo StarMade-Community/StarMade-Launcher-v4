@@ -5,6 +5,7 @@ import News from './components/pages/News';
 import Installations from './components/pages/Installations';
 import Play from './components/pages/Play';
 import Settings from './components/pages/Settings';
+import ServerPanel from './components/pages/ServerPanel';
 import LaunchConfirmModal from './components/common/LaunchConfirmModal';
 import GameLogViewer from './components/common/GameLogViewer';
 import UpdateAvailableModal from './components/common/UpdateAvailableModal';
@@ -60,13 +61,20 @@ const App: React.FC = () => {
   // ─── Page rendering ───────────────────────────────────────────────────────
 
   const renderContent = () => {
+    const initialSection = 'initialSection' in pageProps ? pageProps.initialSection : undefined;
+    const initialTab = 'initialTab' in pageProps ? pageProps.initialTab : undefined;
+    const serverId = 'serverId' in pageProps ? pageProps.serverId : undefined;
+    const serverName = 'serverName' in pageProps ? pageProps.serverName : undefined;
+
     switch (activePage) {
       case 'Installations':
-        return <Installations {...pageProps} />;
+        return <Installations initialTab={initialTab} />;
       case 'News':
         return <News />;
       case 'Settings':
-        return <Settings {...pageProps} />;
+        return <Settings initialSection={initialSection} />;
+      case 'ServerPanel':
+        return <ServerPanel serverId={serverId} serverName={serverName} />;
       case 'Play':
       default:
         return <Play />;

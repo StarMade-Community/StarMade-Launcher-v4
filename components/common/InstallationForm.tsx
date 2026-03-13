@@ -39,7 +39,6 @@ const availableIcons: { icon: string; name: string }[] = [
     { icon: 'server', name: 'Server' },
     { icon: 'code', name: 'Code' },
     { icon: 'bolt', name: 'Bolt' },
-    { icon: 'beaker', name: 'Beaker' },
     { icon: 'cube', name: 'Cube' },
 ];
 

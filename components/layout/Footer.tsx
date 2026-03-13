@@ -258,7 +258,7 @@ const SciFiPlayButton: React.FC<SciFiPlayButtonProps> = ({ isUpdating, statusLab
 
 const Footer: React.FC = () => {
   const { navigate, isLaunching, launchStatus, openLaunchModal, completeLaunching } = useApp();
-  const { installations } = useData();
+  const { installations, servers, selectedServer, setSelectedServerId } = useData();
 
   const [selectedInstallationId, setSelectedInstallationId] = useState<string | null>(null);
 
@@ -299,7 +299,16 @@ const Footer: React.FC = () => {
             />
 
             <button 
-                onClick={() => navigate('Installations', { initialTab: 'servers' })}
+                onClick={() => {
+                    const targetServer = selectedServer ?? servers[0] ?? null;
+                    if (targetServer) {
+                        setSelectedServerId(targetServer.id);
+                    }
+                    navigate('ServerPanel', {
+                        serverId: targetServer?.id,
+                        serverName: targetServer?.name,
+                    });
+                }}
                 className="flex items-center gap-2 text-gray-300 hover:text-white transition-colors text-sm font-semibold uppercase tracking-wider">
                 <span>Start Server</span>
                 <ChevronRightIcon className="w-4 h-4" />

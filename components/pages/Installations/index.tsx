@@ -17,8 +17,7 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
     const [view, setView] = useState<'list' | 'form'>('list');
     const [activeItem, setActiveItem] = useState<ManagedItem | null>(null);
     const [isNew, setIsNew] = useState(false);
-
-    const { openLaunchModal } = useApp();
+    const { openLaunchModal, navigate } = useApp();
     const { 
         installations, 
         servers,
@@ -29,6 +28,7 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
         addServer,
         updateServer,
         deleteServer,
+        setSelectedServerId,
         downloadVersion,
         cancelDownload,
         getInstallationDefaults,
@@ -164,7 +164,10 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
                             onCancelDownload={activeTab === 'installations' ? () => cancelDownload(item.id) : undefined}
                             onAction={activeTab === 'installations'
                                 ? (i) => openLaunchModal(i)
-                                : undefined}
+                                : (server) => {
+                                    setSelectedServerId(server.id);
+                                    navigate('ServerPanel', { serverId: server.id, serverName: server.name });
+                                }}
                             onOpenFolder={
                                 typeof window !== 'undefined' && window.launcher?.shell
                                     ? (path) => window.launcher.shell!.openPath(path)
