@@ -57,64 +57,66 @@ const MemorySlider: React.FC<MemorySliderProps> = ({ value, onChange }) => {
     const showWarning = maxMemory > WARNING_THRESHOLD && value > WARNING_THRESHOLD;
 
     return (
-        <div className="flex flex-col gap-2 w-full">
-            <div className="flex items-center gap-4 w-full">
-                <div className="flex-1 px-3">
-                    <div className="relative">
-                        <div className="h-2 bg-slate-800/80 rounded-full border border-slate-700 overflow-hidden">
-                            <div 
-                                className="h-full bg-gradient-to-r from-starmade-accent/60 to-starmade-accent transition-all duration-150"
-                                style={{ width: `${memoryPercentage}%` }}
+        <div className="flex flex-col gap-2 w-full" data-testid="memory-slider-root">
+            <div className="w-full max-w-[640px] min-w-[520px]" data-testid="memory-slider-layout">
+                <div className="flex items-center gap-4 w-full">
+                    <div className="flex-1 min-w-[360px] px-3">
+                        <div className="relative">
+                            <div className="h-2 bg-slate-800/80 rounded-full border border-slate-700 overflow-hidden">
+                                <div 
+                                    className="h-full bg-gradient-to-r from-starmade-accent/60 to-starmade-accent transition-all duration-150"
+                                    style={{ width: `${memoryPercentage}%` }}
+                                />
+                            </div>
+                            <input
+                                type="range"
+                                min={MIN_MEMORY}
+                                max={maxMemory}
+                                step={STEP}
+                                value={value}
+                                onChange={handleSliderChange}
+                                className="absolute top-0 w-full h-2 opacity-0 cursor-pointer"
+                                style={{ margin: 0 }}
                             />
+                            <div 
+                                className="absolute top-1/2 w-5 h-5 bg-starmade-accent rounded-full border-2 border-white shadow-lg transform -translate-y-1/2 -translate-x-1/2 pointer-events-none transition-all duration-150"
+                                style={{ left: `${memoryPercentage}%` }}
+                            >
+                                <div className="absolute inset-0 rounded-full bg-white/20" />
+                            </div>
                         </div>
+                        <div className="relative mt-4 h-8">
+                            {markers.map((marker, index) => {
+                                const markerPos = ((marker - MIN_MEMORY) / (maxMemory - MIN_MEMORY)) * 100;
+                                // Alternate labels above/below to prevent overlap
+                                const isEven = index % 2 === 0;
+                                return (
+                                    <div
+                                        key={marker}
+                                        className="absolute flex flex-col items-center transform -translate-x-1/2"
+                                        style={{ left: `${markerPos}%`, top: isEven ? '0' : '12px' }}
+                                    >
+                                        <div className="w-px h-3 bg-slate-600 mb-1" />
+                                        <span className="text-xs text-gray-400 font-mono whitespace-nowrap">
+                                            {marker / 1024}GB
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                    <div className="w-36 shrink-0 flex items-center justify-end gap-2">
                         <input
-                            type="range"
+                            type="number"
+                            value={value}
+                            onChange={handleInputChange}
                             min={MIN_MEMORY}
                             max={maxMemory}
                             step={STEP}
-                            value={value}
-                            onChange={handleSliderChange}
-                            className="absolute top-0 w-full h-2 opacity-0 cursor-pointer"
-                            style={{ margin: 0 }}
+                            className="w-24 bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 text-center focus:outline-none focus:ring-2 focus:ring-starmade-accent"
                         />
-                        <div 
-                            className="absolute top-1/2 w-5 h-5 bg-starmade-accent rounded-full border-2 border-white shadow-lg transform -translate-y-1/2 -translate-x-1/2 pointer-events-none transition-all duration-150"
-                            style={{ left: `${memoryPercentage}%` }}
-                        >
-                            <div className="absolute inset-0 rounded-full bg-white/20" />
-                        </div>
+                        <span className="text-sm text-gray-400">MB</span>
                     </div>
-                    <div className="relative mt-4 h-8">
-                        {markers.map((marker, index) => {
-                            const markerPos = ((marker - MIN_MEMORY) / (maxMemory - MIN_MEMORY)) * 100;
-                            // Alternate labels above/below to prevent overlap
-                            const isEven = index % 2 === 0;
-                            return (
-                                <div
-                                    key={marker}
-                                    className="absolute flex flex-col items-center transform -translate-x-1/2"
-                                    style={{ left: `${markerPos}%`, top: isEven ? '0' : '12px' }}
-                                >
-                                    <div className="w-px h-3 bg-slate-600 mb-1" />
-                                    <span className="text-xs text-gray-400 font-mono whitespace-nowrap">
-                                        {marker / 1024}GB
-                                    </span>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
-                <div className="flex items-center gap-2">
-                    <input
-                        type="number"
-                        value={value}
-                        onChange={handleInputChange}
-                        min={MIN_MEMORY}
-                        max={maxMemory}
-                        step={STEP}
-                        className="w-24 bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 text-center focus:outline-none focus:ring-2 focus:ring-starmade-accent"
-                    />
-                    <span className="text-sm text-gray-400">MB</span>
                 </div>
             </div>
             {showWarning && (

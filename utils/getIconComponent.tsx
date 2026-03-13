@@ -1,8 +1,8 @@
 import React from 'react';
 import { 
-    CheckIcon, BugIcon, ArchiveIcon, DevIcon, RocketIcon, 
-    PlanetIcon, StarIcon, ServerIcon, CodeBracketIcon, BoltIcon, 
-    BeakerIcon, CubeIcon, GamepadIcon 
+    CheckIcon, BugIcon, ArchiveIcon, RocketIcon,
+    PlanetIcon, MarsIcon, StarIcon, ServerIcon, CodeBracketIcon,
+    BeakerIcon, CubeIcon, GamepadIcon, BoltIcon
 } from '../components/common/icons';
 
 export const getIconComponent = (icon: string, size: 'large' | 'small' = 'small') => {
@@ -18,13 +18,13 @@ export const getIconComponent = (icon: string, size: 'large' | 'small' = 'small'
         case 'latest': return <CheckIcon className={`${sizeClass} text-green-400`} />;
         case 'release': return <CheckIcon className={`${sizeClass} text-green-400`} />;
         case 'dev': return <CodeBracketIcon className={`${sizeClass} text-orange-400`} />;
-        case 'pre': return <DevIcon className={`${sizeClass} text-yellow-400`} />;
+        case 'pre': return <BugIcon className={`${sizeClass} text-yellow-400`} />;
         case 'archive': return <ArchiveIcon className={`${sizeClass} text-gray-400`} />;
         case 'rocket': return <RocketIcon className={`${sizeClass} text-indigo-400`} />;
         case 'planet': return <PlanetIcon className={`${sizeClass} text-cyan-400`} />;
+        case 'mars': return <MarsIcon className={`${sizeClass} text-red-400`} />;
         case 'star': return <StarIcon className={`${sizeClass} text-yellow-300`} />;
         case 'server': return <ServerIcon className={`${sizeClass} text-slate-400`} />;
-        case 'code': return <CodeBracketIcon className={`${sizeClass} text-sky-400`} />;
         case 'bolt': return <BoltIcon className={`${sizeClass} text-amber-400`} />;
         case 'beaker': return <BeakerIcon className={`${sizeClass} text-emerald-400`} />;
         case 'cube': return <CubeIcon className={`${sizeClass} text-rose-400`} />;

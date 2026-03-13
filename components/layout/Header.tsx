@@ -22,6 +22,11 @@ const UserProfile: React.FC = () => {
         setIsOpen(false);
     };
 
+    const getPreferredAccountName = (account: { displayName?: string; name: string }): string => {
+        const display = account.displayName?.trim();
+        return display || account.name;
+    };
+
     // No active account - show prompt
     if (!activeAccount) {
         return (
@@ -58,10 +63,7 @@ const UserProfile: React.FC = () => {
                                                         <UserIcon className="w-5 h-5 text-slate-400" />
                                                     </div>
                                                     <div className="flex-1 min-w-0">
-                                                        <p className="text-sm text-white truncate">{account.displayName ?? account.name}</p>
-                                                        {account.displayName && (
-                                                            <p className="text-xs text-gray-500 truncate">{account.name}</p>
-                                                        )}
+                                                        <p className="text-sm text-white truncate">{getPreferredAccountName(account)}</p>
                                                     </div>
                                                 </button>
                                             </li>
@@ -121,10 +123,7 @@ const UserProfile: React.FC = () => {
                     <UserIcon className="w-6 h-6 text-slate-400" />
                 </div>
                 <div>
-                    <h3 className="font-semibold text-white">{activeAccount.displayName ?? activeAccount.name}</h3>
-                    {activeAccount.displayName && (
-                        <p className="text-xs text-gray-500">{activeAccount.name}</p>
-                    )}
+                    <h3 className="font-semibold text-white">{getPreferredAccountName(activeAccount)}</h3>
                     {activeAccount.id.startsWith('offline-') && (
                         <p className="text-xs text-gray-500">Offline Mode</p>
                     )}
@@ -152,7 +151,7 @@ const UserProfile: React.FC = () => {
                                                     <UserIcon className="w-5 h-5 text-slate-400" />
                                                 </div>
                                                 <div className="flex-1 min-w-0">
-                                                    <p className="text-sm text-white truncate">{account.displayName ?? account.name}</p>
+                                                    <p className="text-sm text-white truncate">{getPreferredAccountName(account)}</p>
                                                 </div>
                                                 {activeAccount.id === account.id && <CheckCircleIcon className="w-5 h-5 text-starmade-accent" />}
                                             </button>

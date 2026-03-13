@@ -263,7 +263,6 @@ const DefaultSettings: React.FC = () => {
                 <h2 className="font-display text-xl font-bold uppercase tracking-wider text-white">
                     Default Settings
                 </h2>
-                <p className="text-sm text-gray-400">Configure default values for new installations and servers.</p>
             </div>
             <div className="flex items-center gap-6 mb-6 flex-shrink-0">
                 <TabButton isActive={activeTab === 'installations'} onClick={() => setActiveTab('installations')}>

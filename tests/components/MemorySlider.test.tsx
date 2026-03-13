@@ -77,4 +77,12 @@ describe('MemorySlider', () => {
     fireEvent.change(input, { target: { value: 'abc' } });
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it('uses a fixed-width layout lane for the slider controls', () => {
+    render(<MemorySlider value={4096} onChange={vi.fn()} />);
+
+    const layout = screen.getByTestId('memory-slider-layout');
+    expect(layout.className).toContain('max-w-[640px]');
+    expect(layout.className).toContain('min-w-[520px]');
+  });
 });
