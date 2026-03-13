@@ -98,6 +98,9 @@
       "category": "Game",
       "icon": "build/icon.png"
     },
+    "extraResources": [
+      { "from": "build/icon.png", "to": "icon.png" }
+    ],
     "portable": {
       "requestExecutionLevel": "user"
     }

@@ -112,6 +112,14 @@ function getLauncherDir(): string {
 let mainWindow: BrowserWindow | null = null;
 
 function createWindow(): void {
+  // Resolve the icon path: in packaged builds the icon is copied to
+  // resources/icon.png via extraResources so it lives outside the asar and
+  // can be used as a real file path.  In dev we reference it directly from
+  // the build/ folder.
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'icon.png')
+    : path.join(__dirname, '../build/icon.png');
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 900,
@@ -120,6 +128,7 @@ function createWindow(): void {
     frame: false,
     titleBarStyle: 'hidden',
     backgroundColor: '#0D0D1B',
+    icon: iconPath,
     show: false,
     webPreferences: {
       preload: PRELOAD_PATH,
