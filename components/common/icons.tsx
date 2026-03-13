@@ -36,6 +36,7 @@ import {
     XCircle      as XCircleIcon,
     AlertTriangle as ExclamationTriangleIcon,
     MarsIcon as MarsIcon,
+    Wrench       as WrenchIcon,
 } from 'lucide-react';
 
 export {
@@ -46,6 +47,7 @@ export {
     CodeBracketIcon, BoltIcon, BeakerIcon, CubeIcon, InformationCircleIcon,
     UserPlusIcon, ArrowRightOnRectangleIcon, CheckCircleIcon, DownloadIcon,
     DocumentTextIcon, XCircleIcon, ExclamationTriangleIcon, MarsIcon,
+    WrenchIcon,
 };
 
 // DiscordIcon: brand icon not available in lucide-react
