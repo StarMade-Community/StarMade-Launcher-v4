@@ -302,6 +302,255 @@ interface ConfigFieldValidation {
   warning: string | null;
 }
 
+type GameConfigFieldType = 'string' | 'number' | 'boolean';
+type GameConfigCategory = 'economy' | 'environment' | 'limits' | 'other';
+
+interface GameConfigFieldMeta {
+  label: string;
+  description: string;
+  category: GameConfigCategory;
+  type?: GameConfigFieldType;
+  min?: number;
+  max?: number;
+  guidance?: string;
+}
+
+interface GameConfigField {
+  path: string;
+  label: string;
+  description: string;
+  category: GameConfigCategory;
+  type: GameConfigFieldType;
+  defaultValue: string;
+  min?: number;
+  max?: number;
+  guidance?: string;
+}
+
+const GAME_CONFIG_CATEGORY_LABELS: Record<GameConfigCategory, string> = {
+  economy: 'Economy',
+  environment: 'Environment',
+  limits: 'Limits',
+  other: 'Other',
+};
+
+const GAME_CONFIG_CATEGORY_ORDER: GameConfigCategory[] = ['economy', 'environment', 'limits', 'other'];
+
+const GAME_CONFIG_FIELD_META: Record<string, GameConfigFieldMeta> = {
+  'GameConfig/StartingGear/Credits': {
+    label: 'Starting Credits',
+    description: 'Credits granted to a new character on spawn.',
+    category: 'economy',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/SunHeatDamage/DamagePerBlock': {
+    label: 'Sun Heat Damage Per Block',
+    description: 'Damage applied per block when sun heat damage triggers.',
+    category: 'environment',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/SunHeatDamage/MaxDelayBetweenHits': {
+    label: 'Max Delay Between Sun Hits',
+    description: 'Maximum random delay between consecutive sun heat damage hits.',
+    category: 'environment',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/SunHeatDamage/SunDamageRadius': {
+    label: 'Sun Damage Radius',
+    description: 'Radius around the entity where sun damage applies.',
+    category: 'environment',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/SunHeatDamage/SunDamageDelayInSecs': {
+    label: 'Sun Damage Delay (sec)',
+    description: 'Time delay before repeated sun heat damage is applied.',
+    category: 'environment',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/SunHeatDamage/SunDamageMin': {
+    label: 'Minimum Sun Damage',
+    description: 'Lower bound for randomized sun heat damage.',
+    category: 'environment',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/SunHeatDamage/SunDamageMax': {
+    label: 'Maximum Sun Damage',
+    description: 'Upper bound for randomized sun heat damage.',
+    category: 'environment',
+    type: 'number',
+    min: 0,
+  },
+};
+
+const parseGameConfigFieldType = (rawValue: string): GameConfigFieldType => {
+  const normalized = rawValue.trim().toLowerCase();
+  if (normalized === 'true' || normalized === 'false') return 'boolean';
+  if (/^-?\d+(\.\d+)?$/.test(normalized)) return 'number';
+  return 'string';
+};
+
+const humanizeGameConfigSegment = (segment: string): string => segment
+  .replace(/\[\d+\]/g, '')
+  .replace(/([a-z])([A-Z])/g, '$1 $2')
+  .replace(/_/g, ' ')
+  .trim()
+  .split(/\s+/)
+  .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+  .join(' ');
+
+const shouldHideGameConfigPath = (path: string): boolean => (
+  path.includes('[')
+  || path.startsWith('GameConfig/StartingGear/Block')
+  || path.startsWith('GameConfig/StartingGear/Tool')
+  || path.startsWith('GameConfig/StartingGear/Helmet')
+  || path.startsWith('GameConfig/StartingGear/Flashlight')
+  || path.startsWith('GameConfig/StartingGear/Logbook')
+  || path.startsWith('GameConfig/StartingGear/Blueprint')
+  || path.startsWith('GameConfig/StartingGear/BuildInhibiter')
+);
+
+const inferGameConfigCategory = (path: string): GameConfigCategory => {
+  const secondSegment = path.split('/')[1]?.toLowerCase() ?? '';
+  if (secondSegment === 'startinggear') return 'economy';
+  if (secondSegment.includes('sun') || secondSegment.includes('heat')) return 'environment';
+  if (secondSegment.includes('limit') || secondSegment.includes('maxdimension')) return 'limits';
+  return 'other';
+};
+
+const parseGameConfigXmlDocument = (xmlContent: string): Document => {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlContent, 'application/xml');
+  const parseError = doc.querySelector('parsererror');
+  if (parseError) {
+    throw new Error('Invalid XML content.');
+  }
+  return doc;
+};
+
+const findElementByGameConfigPath = (doc: Document, path: string): Element | null => {
+  const root = doc.documentElement;
+  if (!root) return null;
+
+  const segments = path.split('/');
+  if (segments.length === 0 || segments[0] !== root.tagName) return null;
+
+  let current: Element | null = root;
+  for (let i = 1; i < segments.length; i += 1) {
+    if (!current) return null;
+    const match = segments[i].match(/^([^\[]+)(?:\[(\d+)\])?$/);
+    if (!match) return null;
+
+    const tagName = match[1];
+    const requestedIndex = Number.parseInt(match[2] ?? '1', 10);
+    const siblings = Array.from(current.children).filter((child) => child.tagName === tagName);
+    current = siblings[requestedIndex - 1] ?? null;
+  }
+
+  return current;
+};
+
+const extractGameConfigFields = (xmlContent: string): { fields: GameConfigField[]; values: Record<string, string> } => {
+  const doc = parseGameConfigXmlDocument(xmlContent);
+  const root = doc.documentElement;
+  if (!root) return { fields: [], values: {} };
+
+  const values: Record<string, string> = {};
+  const fields: GameConfigField[] = [];
+
+  const walk = (element: Element, parentPath: string) => {
+    const childElements = Array.from(element.children);
+    if (childElements.length === 0) {
+      const path = parentPath;
+      if (shouldHideGameConfigPath(path)) return;
+
+      const rawValue = (element.textContent ?? '').trim();
+      const explicitMeta = GAME_CONFIG_FIELD_META[path];
+      const inferredType = parseGameConfigFieldType(rawValue);
+      const type = explicitMeta?.type ?? inferredType;
+
+      values[path] = rawValue;
+      fields.push({
+        path,
+        label: explicitMeta?.label ?? humanizeGameConfigSegment(path.split('/').pop() ?? path),
+        description: explicitMeta?.description ?? `GameConfig path: ${path}`,
+        category: explicitMeta?.category ?? inferGameConfigCategory(path),
+        type,
+        defaultValue: rawValue,
+        min: explicitMeta?.min,
+        max: explicitMeta?.max,
+        guidance: explicitMeta?.guidance,
+      });
+      return;
+    }
+
+    const siblingCounts = childElements.reduce<Record<string, number>>((acc, child) => {
+      acc[child.tagName] = (acc[child.tagName] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    const siblingSeen: Record<string, number> = {};
+    for (const child of childElements) {
+      siblingSeen[child.tagName] = (siblingSeen[child.tagName] ?? 0) + 1;
+      const index = siblingSeen[child.tagName];
+      const includeIndex = (siblingCounts[child.tagName] ?? 0) > 1;
+      const segment = includeIndex ? `${child.tagName}[${index}]` : child.tagName;
+      walk(child, `${parentPath}/${segment}`);
+    }
+  };
+
+  walk(root, root.tagName);
+
+  fields.sort((a, b) => {
+    const categoryDiff = GAME_CONFIG_CATEGORY_ORDER.indexOf(a.category) - GAME_CONFIG_CATEGORY_ORDER.indexOf(b.category);
+    if (categoryDiff !== 0) return categoryDiff;
+    return a.label.localeCompare(b.label);
+  });
+
+  return { fields, values };
+};
+
+const getGameConfigFieldValidation = (field: GameConfigField, rawValue: string): ConfigFieldValidation => {
+  const trimmed = rawValue.trim();
+
+  if (field.type === 'number') {
+    if (!trimmed) {
+      return { error: 'A numeric value is required.', warning: null };
+    }
+
+    const parsed = Number.parseFloat(trimmed);
+    if (!Number.isFinite(parsed)) {
+      return { error: 'Enter a valid number.', warning: null };
+    }
+
+    if (field.min !== undefined && parsed < field.min) {
+      return { error: null, warning: `Value is below minimum and will be clamped to ${field.min}.` };
+    }
+
+    if (field.max !== undefined && parsed > field.max) {
+      return { error: null, warning: `Value is above maximum and will be clamped to ${field.max}.` };
+    }
+
+    if (field.path === 'GameConfig/SunHeatDamage/SunDamageMax') {
+      const minValue = Number.parseFloat(field.defaultValue);
+      if (Number.isFinite(minValue) && parsed < minValue) {
+        return { error: null, warning: 'Sun damage max is lower than its loaded value; verify this is intended.' };
+      }
+    }
+  }
+
+  if (field.type === 'string' && !trimmed) {
+    return { error: null, warning: 'Empty value may be rejected by the game parser.' };
+  }
+
+  return { error: null, warning: null };
+};
+
 const CONFIG_CATEGORY_LABELS: Record<ServerConfigCategory, string> = {
   networking: 'Networking',
   security: 'Security',
@@ -573,10 +822,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [configCategoryFilter, setConfigCategoryFilter] = useState<Set<ServerConfigCategory>>(new Set());
   const [isConfigLoading, setIsConfigLoading] = useState(false);
   const [gameConfigXmlText, setGameConfigXmlText] = useState('');
-  const [gameConfigXmlSavedText, setGameConfigXmlSavedText] = useState('');
+  const [gameConfigFields, setGameConfigFields] = useState<GameConfigField[]>([]);
+  const [gameConfigValues, setGameConfigValues] = useState<Record<string, string>>({});
+  const [gameConfigSavedValues, setGameConfigSavedValues] = useState<Record<string, string>>({});
+  const [gameConfigSearchTerm, setGameConfigSearchTerm] = useState('');
+  const [gameConfigCategoryFilter, setGameConfigCategoryFilter] = useState<Set<GameConfigCategory>>(new Set());
   const [gameConfigLoadedServerId, setGameConfigLoadedServerId] = useState<string | null>(null);
   const [isGameConfigLoading, setIsGameConfigLoading] = useState(false);
-  const [isGameConfigSaving, setIsGameConfigSaving] = useState(false);
+  const [savingGameConfigPath, setSavingGameConfigPath] = useState<string | null>(null);
   const [gameConfigError, setGameConfigError] = useState<string | null>(null);
   const [savingConfigKey, setSavingConfigKey] = useState<string | null>(null);
   const [isSavingMaxPlayers, setIsSavingMaxPlayers] = useState(false);
@@ -765,8 +1018,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setLogLoadError(null);
     setActiveConfigTab('server-cfg');
     setGameConfigXmlText('');
-    setGameConfigXmlSavedText('');
+    setGameConfigFields([]);
+    setGameConfigValues({});
+    setGameConfigSavedValues({});
+    setGameConfigSearchTerm('');
+    setGameConfigCategoryFilter(new Set());
     setGameConfigLoadedServerId(null);
+    setSavingGameConfigPath(null);
     setGameConfigError(null);
     setFileEntriesByDir({});
     setExpandedFileDirs(['']);
@@ -912,6 +1170,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     };
   }, [effectiveServer, hasGameApi]);
 
+  const hydrateGameConfigState = useCallback((xmlContent: string, options?: { keepDrafts?: boolean }) => {
+    const parsed = extractGameConfigFields(xmlContent);
+    setGameConfigXmlText(xmlContent);
+    setGameConfigFields(parsed.fields);
+    setGameConfigValues((prev) => (options?.keepDrafts ? { ...parsed.values, ...prev } : parsed.values));
+    setGameConfigSavedValues(parsed.values);
+  }, []);
+
   useEffect(() => {
     if (activeConfigTab !== 'game-config-xml') return;
     if (!effectiveServer || !hasGameApi) return;
@@ -927,12 +1193,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         if (cancelled) return;
 
         const next = content ?? '';
-        setGameConfigXmlText(next);
-        setGameConfigXmlSavedText(next);
+        hydrateGameConfigState(next);
         setGameConfigLoadedServerId(effectiveServer.id);
       } catch (error) {
         if (cancelled) return;
         setGameConfigError(`Failed to load GameConfig.xml: ${String(error)}`);
+        setGameConfigFields([]);
+        setGameConfigValues({});
+        setGameConfigSavedValues({});
       } finally {
         if (!cancelled) setIsGameConfigLoading(false);
       }
@@ -943,7 +1211,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     return () => {
       cancelled = true;
     };
-  }, [activeConfigTab, effectiveServer, gameConfigLoadedServerId, hasGameApi]);
+  }, [activeConfigTab, effectiveServer, gameConfigLoadedServerId, hasGameApi, hydrateGameConfigState]);
 
   const loadFileDirectory = useCallback(async (relativeDir = '') => {
     if (!effectiveServer || !hasGameApi) return;
@@ -1690,36 +1958,74 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     try {
       const content = await window.launcher.game.readGameConfigXml(effectiveServer.path);
       const next = content ?? '';
-      setGameConfigXmlText(next);
-      setGameConfigXmlSavedText(next);
+      hydrateGameConfigState(next);
       setGameConfigLoadedServerId(effectiveServer.id);
     } catch (error) {
       setGameConfigError(`Failed to reload GameConfig.xml: ${String(error)}`);
     } finally {
       setIsGameConfigLoading(false);
     }
-  }, [effectiveServer, hasGameApi]);
+  }, [effectiveServer, hasGameApi, hydrateGameConfigState]);
 
-  const saveGameConfigXml = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || isGameConfigSaving) return;
+  const toggleGameConfigCategory = useCallback((category: GameConfigCategory) => {
+    setGameConfigCategoryFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(category)) {
+        next.delete(category);
+      } else {
+        next.add(category);
+      }
+      return next;
+    });
+  }, []);
 
-    setIsGameConfigSaving(true);
+  const saveGameConfigField = useCallback(async (field: GameConfigField, explicitValue?: string) => {
+    if (!effectiveServer || !hasGameApi || savingGameConfigPath) return;
+
+    const currentRaw = explicitValue ?? gameConfigValues[field.path] ?? field.defaultValue;
+    const validation = getGameConfigFieldValidation(field, currentRaw);
+    if (validation.error) return;
+
+    let sanitized = currentRaw.trim();
+    if (field.type === 'boolean') {
+      sanitized = String(parseCfgBoolean(currentRaw, false));
+    } else if (field.type === 'number') {
+      const parsed = Number.parseFloat(currentRaw);
+      if (!Number.isFinite(parsed)) return;
+
+      const min = field.min ?? Number.NEGATIVE_INFINITY;
+      const max = field.max ?? Number.POSITIVE_INFINITY;
+      sanitized = String(Math.max(min, Math.min(max, parsed)));
+    }
+
+    setSavingGameConfigPath(field.path);
     setGameConfigError(null);
+    setGameConfigValues((prev) => ({ ...prev, [field.path]: sanitized }));
+
     try {
-      const result = await window.launcher.game.writeGameConfigXml(effectiveServer.path, gameConfigXmlText);
-      if (!result.success) {
-        setGameConfigError(result.error ?? 'Failed to save GameConfig.xml.');
+      const doc = parseGameConfigXmlDocument(gameConfigXmlText);
+      const target = findElementByGameConfigPath(doc, field.path);
+      if (!target) {
+        setGameConfigError(`Could not locate ${field.path} in GameConfig.xml.`);
         return;
       }
 
-      setGameConfigXmlSavedText(gameConfigXmlText);
+      target.textContent = sanitized;
+      const serialized = new XMLSerializer().serializeToString(doc);
+      const result = await window.launcher.game.writeGameConfigXml(effectiveServer.path, serialized);
+      if (!result.success) {
+        setGameConfigError(result.error ?? `Failed to save ${field.label} to GameConfig.xml.`);
+        return;
+      }
+
+      hydrateGameConfigState(serialized, { keepDrafts: true });
       setGameConfigLoadedServerId(effectiveServer.id);
     } catch (error) {
-      setGameConfigError(`Failed to save GameConfig.xml: ${String(error)}`);
+      setGameConfigError(`Failed to save ${field.label}: ${String(error)}`);
     } finally {
-      setIsGameConfigSaving(false);
+      setSavingGameConfigPath(null);
     }
-  }, [effectiveServer, gameConfigXmlText, hasGameApi, isGameConfigSaving]);
+  }, [effectiveServer, gameConfigValues, gameConfigXmlText, hasGameApi, hydrateGameConfigState, savingGameConfigPath]);
 
   const persistMaxPlayers = useCallback(async () => {
     if (!effectiveServer || !hasGameApi || isSavingMaxPlayers) return;
@@ -2950,7 +3256,22 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   );
 
   const renderGameConfigXmlConfiguration = () => {
-    const hasUnsavedChanges = gameConfigXmlText !== gameConfigXmlSavedText;
+    const hasUnsavedChanges = Object.keys(gameConfigValues).some(
+      (path) => gameConfigValues[path] !== (gameConfigSavedValues[path] ?? ''),
+    );
+
+    const filteredGameConfigFields = gameConfigFields.filter((field) => {
+      if (gameConfigCategoryFilter.size > 0 && !gameConfigCategoryFilter.has(field.category)) return false;
+      const needle = gameConfigSearchTerm.trim().toLowerCase();
+      if (!needle) return true;
+      const rawValue = gameConfigValues[field.path] ?? field.defaultValue;
+      return (
+        field.path.toLowerCase().includes(needle)
+        || field.label.toLowerCase().includes(needle)
+        || field.description.toLowerCase().includes(needle)
+        || rawValue.toLowerCase().includes(needle)
+      );
+    });
 
     return (
       <>
@@ -2958,22 +3279,15 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h3 className="font-display text-lg font-bold uppercase tracking-wider text-white">GameConfig.xml</h3>
-              <p className="mt-1 text-sm text-gray-400">Edit raw XML for game-wide configuration values.</p>
+              <p className="mt-1 text-sm text-gray-400">Edit game settings using typed fields and save each value directly to GameConfig.xml.</p>
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => { void reloadGameConfigXml(); }}
-                disabled={!effectiveServer || !hasGameApi || isGameConfigLoading || isGameConfigSaving}
+                disabled={!effectiveServer || !hasGameApi || isGameConfigLoading || !!savingGameConfigPath}
                 className="rounded-md border border-white/15 bg-black/30 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Reload
-              </button>
-              <button
-                onClick={() => { void saveGameConfigXml(); }}
-                disabled={!effectiveServer || !hasGameApi || isGameConfigLoading || isGameConfigSaving || !hasUnsavedChanges}
-                className="rounded-md bg-starmade-accent px-3 py-2 text-xs font-semibold uppercase tracking-wider text-white hover:bg-starmade-accent/80 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isGameConfigSaving ? 'Saving...' : 'Save XML'}
               </button>
             </div>
           </div>
@@ -2985,18 +3299,130 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               {hasUnsavedChanges ? 'Unsaved changes.' : 'No unsaved changes.'}
             </p>
           )}
+
+          <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto]">
+            <input
+              type="search"
+              value={gameConfigSearchTerm}
+              onChange={(event) => setGameConfigSearchTerm(event.target.value)}
+              placeholder="Search GameConfig fields..."
+              className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-gray-200 placeholder:text-gray-500"
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              {GAME_CONFIG_CATEGORY_ORDER.map((category) => {
+                const active = gameConfigCategoryFilter.has(category);
+                return (
+                  <button
+                    key={category}
+                    onClick={() => toggleGameConfigCategory(category)}
+                    className={`rounded border px-3 py-1 text-[11px] font-semibold uppercase tracking-wider transition-colors ${
+                      active
+                        ? 'border-starmade-accent bg-starmade-accent/20 text-white'
+                        : 'border-white/15 bg-black/25 text-gray-300 hover:bg-black/40'
+                    }`}
+                  >
+                    {GAME_CONFIG_CATEGORY_LABELS[category]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
-        <div className="min-h-0 flex-1 p-4">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
           {isGameConfigLoading ? (
             <p className="text-sm text-gray-400">Loading GameConfig.xml...</p>
+          ) : filteredGameConfigFields.length === 0 ? (
+            <p className="rounded-md border border-dashed border-white/15 bg-black/20 px-3 py-4 text-sm text-gray-400">
+              No GameConfig fields match the current search/filter.
+            </p>
           ) : (
-            <textarea
-              value={gameConfigXmlText}
-              onChange={(event) => setGameConfigXmlText(event.target.value)}
-              spellCheck={false}
-              className="h-full w-full resize-none rounded-md border border-white/15 bg-black/40 p-3 font-mono text-xs leading-5 text-gray-200 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
-            />
+            <div className="space-y-5">
+              {GAME_CONFIG_CATEGORY_ORDER.map((category) => {
+                const categoryFields = filteredGameConfigFields.filter((field) => field.category === category);
+                if (categoryFields.length === 0) return null;
+
+                return (
+                  <section key={category} className="space-y-3">
+                    <h4 className="text-sm font-semibold uppercase tracking-wider text-gray-300">{GAME_CONFIG_CATEGORY_LABELS[category]}</h4>
+                    {categoryFields.map((field) => {
+                      const rawValue = gameConfigValues[field.path] ?? field.defaultValue;
+                      const validation = getGameConfigFieldValidation(field, rawValue);
+                      const isSavingThisField = savingGameConfigPath === field.path;
+                      const isInvalid = !!validation.error;
+
+                      return (
+                        <div key={field.path} className="rounded-md border border-white/10 bg-black/20 p-3">
+                          <div className="mb-2">
+                            <p className="text-sm font-semibold text-white">{field.label}</p>
+                            <p className="text-xs text-gray-400">{field.description}</p>
+                            <p className="mt-1 text-[11px] font-mono text-gray-500">{field.path}</p>
+                          </div>
+
+                          {field.type === 'boolean' ? (
+                            <label className="inline-flex items-center gap-2 text-sm text-gray-300">
+                              <input
+                                type="checkbox"
+                                checked={parseCfgBoolean(rawValue, field.defaultValue.toLowerCase() === 'true')}
+                                onChange={(event) => {
+                                  const next = String(event.target.checked);
+                                  setGameConfigValues((prev) => ({ ...prev, [field.path]: next }));
+                                  void saveGameConfigField(field, next);
+                                }}
+                                disabled={!!savingGameConfigPath || isInvalid}
+                                className="h-4 w-4 rounded"
+                              />
+                              Enabled
+                            </label>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <input
+                                type={field.type === 'number' ? 'number' : 'text'}
+                                min={field.type === 'number' ? field.min : undefined}
+                                max={field.type === 'number' ? field.max : undefined}
+                                value={rawValue}
+                                onChange={(event) => {
+                                  const next = event.target.value;
+                                  setGameConfigValues((prev) => ({ ...prev, [field.path]: next }));
+                                }}
+                                onBlur={() => { void saveGameConfigField(field); }}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter') {
+                                    event.preventDefault();
+                                    void saveGameConfigField(field);
+                                  }
+                                }}
+                                disabled={!!savingGameConfigPath}
+                                className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-gray-200"
+                              />
+                              <button
+                                onClick={() => { void saveGameConfigField(field); }}
+                                disabled={!!savingGameConfigPath || isInvalid}
+                                className="rounded-md border border-white/15 bg-black/30 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {isSavingThisField ? 'Saving...' : 'Save'}
+                              </button>
+                            </div>
+                          )}
+
+                          {(validation.error || validation.warning || field.guidance) && (
+                            <p className={`mt-2 text-xs ${
+                              validation.error
+                                ? 'text-red-300'
+                                : validation.warning
+                                  ? 'text-amber-300'
+                                  : 'text-gray-500'
+                            }`}>
+                              {validation.error ?? validation.warning ?? field.guidance}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </section>
+                );
+              })}
+            </div>
           )}
         </div>
       </>
