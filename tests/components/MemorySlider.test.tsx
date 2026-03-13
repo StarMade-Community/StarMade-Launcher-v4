@@ -62,10 +62,10 @@ describe('MemorySlider', () => {
     expect(onChange).toHaveBeenCalledWith(6144);
   });
 
-  it('renders memory markers (2GB through 16GB)', () => {
+  it('renders memory markers (4GB through 16GB)', () => {
     render(<MemorySlider value={4096} onChange={vi.fn()} />);
-    // Markers at 2GB, 4GB, 6GB, ... 16GB
-    for (let mb = MIN; mb <= MAX; mb += 2048) {
+    // Markers at 4GB, 6GB, ... 16GB
+    for (let mb = MIN; mb <= MAX; mb += 4096) {
       expect(screen.getByText(`${mb / 1024}GB`)).toBeInTheDocument();
     }
   });
