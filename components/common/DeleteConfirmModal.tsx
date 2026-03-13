@@ -5,6 +5,7 @@ interface DeleteConfirmModalProps {
     isOpen: boolean;
     itemName: string;
     itemTypeName: string;
+    error?: string | null;
     onConfirm: () => void;
     onCancel: () => void;
 }
@@ -13,6 +14,7 @@ const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
     isOpen,
     itemName,
     itemTypeName,
+    error,
     onConfirm,
     onCancel,
 }) => {
@@ -42,6 +44,12 @@ const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
                     <p className="mt-2 text-sm text-red-400 max-w-sm mx-auto leading-relaxed">
                         This will permanently delete all game files on disk. This action cannot be undone.
                     </p>
+
+                    {error && (
+                        <div className="mt-4 w-full text-xs text-red-300 bg-red-900/20 border border-red-900/40 rounded-md px-3 py-2 text-left break-words">
+                            <span className="font-semibold">Error: </span>{error}
+                        </div>
+                    )}
                 </div>
 
                 <div className="mt-8 flex justify-center items-center gap-4 flex-wrap">

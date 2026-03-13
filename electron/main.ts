@@ -469,12 +469,27 @@ ipcMain.handle(IPC.APP_GET_SYSTEM_MEMORY, () => Math.floor(os.totalmem() / (1024
 // ─── Installation file management handlers ───────────────────────────────────
 
 /**
+ * Well-known files and folders found in a valid StarMade installation.
+ * Used by `isStarMadeInstallDir` to verify a directory before deleting it.
+ */
+const STARMADE_MARKERS = new Set([
+  'StarMade.jar', // Main game JAR
+  'version.txt',  // Version descriptor written by the game/launcher
+  '.data',        // Game data folder (saves, universe, etc.)
+  'logs',         // Game log folder
+  'StarMade',     // Nested StarMade subdirectory (some installs)
+]);
+
+/**
  * Returns true when `targetPath` is safe to recursively delete.
  *
  * Safety checks:
- * - Must be an absolute path with at least 3 components (prevents root / home
- *   directory deletion on UNIX and drive-root deletion on Windows).
- * - Must not be, or be a parent of, any well-known system directory.
+ * - Must be an absolute path with at least 2 directory levels below the
+ *   filesystem root (prevents deleting root, drive root, or a top-level
+ *   system directory such as /home or C:\Users).
+ * - Must not equal, nor be a parent of, any well-known system directory.
+ *   On Windows the protected list is built from environment variables so it
+ *   correctly uses the real absolute paths regardless of the drive letter.
  */
 function isSafeDeletionPath(targetPath: string): boolean {
   const normalized = path.normalize(targetPath);
@@ -482,30 +497,84 @@ function isSafeDeletionPath(targetPath: string): boolean {
   // Must be absolute.
   if (!path.isAbsolute(normalized)) return false;
 
-  // Must have a minimum directory depth to avoid deleting e.g. "/" or "C:\".
-  const parts = normalized.split(path.sep).filter(Boolean);
-  if (parts.length < 2) return false;
+  // Strip the filesystem root (e.g. '/' or 'C:\') and require at least two
+  // meaningful path components beneath it, e.g.:
+  //   /home            → 1 component → BLOCKED
+  //   /home/alice      → 2 components → BLOCKED (home roots listed below)
+  //   /home/alice/game → 3 components → OK (if not in blocked list)
+  const { root } = path.parse(normalized);
+  const relParts = normalized.slice(root.length).split(path.sep).filter(Boolean);
+  if (relParts.length < 2) return false;
 
-  // Reject well-known system roots.
-  const systemRoots = process.platform === 'win32'
-    ? ['windows', 'program files', 'program files (x86)', 'system32', 'syswow64']
-    : ['/', '/bin', '/boot', '/dev', '/etc', '/lib', '/lib64', '/proc', '/root',
-       '/sbin', '/sys', '/tmp', '/usr', '/var'];
+  // Build the complete set of paths that must never be deleted.
+  const blockedPaths = new Set<string>();
 
-  const lowerNormalized = normalized.toLowerCase();
-  for (const systemRoot of systemRoots) {
-    const lowerRoot = systemRoot.toLowerCase();
-    // Block if the path IS a system root or is a direct parent of one.
-    if (
-      lowerNormalized === lowerRoot ||
-      lowerNormalized === path.normalize(lowerRoot) ||
-      lowerRoot.startsWith(lowerNormalized + path.sep)
-    ) {
-      return false;
+  if (process.platform === 'win32') {
+    // Drive root (e.g. C:\) – already captured via path.parse().root above.
+    blockedPaths.add(path.normalize(root));
+
+    // Absolute system directories derived from well-known environment variables.
+    for (const envPath of [
+      process.env.SystemRoot,           // C:\Windows
+      process.env.ProgramFiles,         // C:\Program Files
+      process.env['ProgramFiles(x86)'], // C:\Program Files (x86)
+    ]) {
+      if (envPath) blockedPaths.add(path.normalize(envPath));
+    }
+
+    // Parent directory of all user home folders (e.g. C:\Users).
+    blockedPaths.add(path.dirname(os.homedir()));
+  } else {
+    // Unix / macOS well-known system directories (all expressed as absolute paths).
+    for (const p of [
+      '/', '/bin', '/boot', '/dev', '/etc', '/lib', '/lib64',
+      '/proc', '/root', '/sbin', '/sys', '/tmp', '/usr', '/var',
+      '/home',   // parent of Linux user dirs — must NOT be deleted
+      '/Users',  // parent of macOS user dirs — must NOT be deleted
+    ]) {
+      blockedPaths.add(path.normalize(p));
     }
   }
 
+  const lowerNormalized = normalized.toLowerCase();
+  for (const blocked of blockedPaths) {
+    const lowerBlocked = blocked.toLowerCase();
+    // Block if normalized equals the protected path.
+    if (lowerNormalized === lowerBlocked) return false;
+    // Block if normalized is a *parent* of a protected path
+    // (e.g. prevent someone sneaking in the parent of C:\Windows).
+    if (lowerBlocked.startsWith(lowerNormalized + path.sep)) return false;
+  }
+
   return true;
+}
+
+/**
+ * Returns true when `targetPath` appears to be a launcher-managed StarMade
+ * installation directory.
+ *
+ * An empty directory is considered safe to remove (it may have been created
+ * just before a download was cancelled or never started).
+ *
+ * For non-empty directories we require at least one well-known StarMade
+ * marker file/folder to be present.  This prevents accidental deletion of
+ * unrelated directories that happen to have the same path as a misconfigured
+ * installation record.
+ */
+function isStarMadeInstallDir(targetPath: string): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(targetPath);
+  } catch {
+    // If we cannot read the directory (e.g. permissions), be conservative.
+    return false;
+  }
+
+  // Empty directory – safe to delete (created pre-download or after a cancel).
+  if (entries.length === 0) return true;
+
+  // At least one well-known StarMade marker must be present.
+  return entries.some(e => STARMADE_MARKERS.has(e));
 }
 
 ipcMain.handle(IPC.INSTALLATION_DELETE_FILES, async (_event, targetPath: string) => {
@@ -515,12 +584,21 @@ ipcMain.handle(IPC.INSTALLATION_DELETE_FILES, async (_event, targetPath: string)
   if (!isSafeDeletionPath(targetPath)) {
     return { success: false, error: 'Path is not safe to delete.' };
   }
+
+  // Directory already absent – nothing to do.
+  if (!fs.existsSync(targetPath)) {
+    return { success: true };
+  }
+
+  if (!isStarMadeInstallDir(targetPath)) {
+    return {
+      success: false,
+      error: `The directory does not appear to be a StarMade installation: ${targetPath}`,
+    };
+  }
+
   try {
-    if (!fs.existsSync(targetPath)) {
-      // Directory already gone — treat as success.
-      return { success: true };
-    }
-    fs.rmSync(targetPath, { recursive: true, force: true });
+    await fs.promises.rm(targetPath, { recursive: true, force: true });
     return { success: true };
   } catch (err) {
     return { success: false, error: String(err) };

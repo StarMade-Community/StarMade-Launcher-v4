@@ -19,6 +19,7 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
     const [activeItem, setActiveItem] = useState<ManagedItem | null>(null);
     const [isNew, setIsNew] = useState(false);
     const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
+    const [deleteError, setDeleteError] = useState<string | null>(null);
 
     const { openLaunchModal } = useApp();
     const { 
@@ -95,6 +96,7 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
     const handleDelete = (id: string) => {
         const allItems = activeTab === 'installations' ? installations : servers;
         const item = allItems.find(i => i.id === id) ?? null;
+        setDeleteError(null);
         setDeleteTarget(item);
     };
 
@@ -102,13 +104,23 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
         if (!deleteTarget) return;
         const { id, path: itemPath } = deleteTarget;
 
-        // Delete physical files first (best-effort; ignore errors so the record
-        // is still removed from the store even if the directory is already gone).
+        // Attempt to delete physical files.  Surface any error to the user
+        // before removing the store record so they understand what happened.
         if (itemPath && typeof window !== 'undefined' && window.launcher?.installation) {
             try {
-                await window.launcher.installation.deleteFiles(itemPath);
-            } catch (err) {
-                console.error('[Installations] Failed to delete files:', err);
+                const result = await window.launcher.installation.deleteFiles(itemPath);
+                if (!result.success) {
+                    const msg = result.error ?? 'Failed to delete files.';
+                    console.error('[Installations] Failed to delete files:', msg);
+                    setDeleteError(msg);
+                    // Do not close the modal – let the user see the error.
+                    return;
+                }
+            } catch (err: unknown) {
+                const msg = String(err);
+                console.error('[Installations] Failed to delete files:', msg);
+                setDeleteError(msg);
+                return;
             }
         }
 
@@ -116,10 +128,12 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
         else deleteServer(id);
 
         setDeleteTarget(null);
+        setDeleteError(null);
     };
 
     const handleDeleteCancel = () => {
         setDeleteTarget(null);
+        setDeleteError(null);
     };
     
     const handleTabChange = (tab: InstallationsTab) => {
@@ -216,6 +230,7 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
             isOpen={deleteTarget !== null}
             itemName={deleteTarget?.name ?? ''}
             itemTypeName={itemTypeName}
+            error={deleteError}
             onConfirm={handleDeleteConfirm}
             onCancel={handleDeleteCancel}
         />
