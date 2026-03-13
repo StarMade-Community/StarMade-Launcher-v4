@@ -5,7 +5,13 @@ const AboutSection: React.FC = () => {
     const [version, setVersion] = useState<string>('...');
 
     useEffect(() => {
-        window.launcher.updater.getVersion().then(setVersion).catch(() => setVersion('unknown'));
+        const getVersion = window.launcher?.updater?.getVersion;
+        if (!getVersion) {
+            setVersion('unknown');
+            return;
+        }
+
+        getVersion().then(setVersion).catch(() => setVersion('unknown'));
     }, []);
 
     const links = [
