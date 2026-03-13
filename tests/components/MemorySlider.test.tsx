@@ -5,7 +5,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 
 import MemorySlider from '../../components/common/MemorySlider';
 
-const MIN = 2048;
+const MIN = 4096;
 const MAX = 16384;
 const STEP = 1024;
 
