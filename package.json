@@ -46,6 +46,7 @@
   },
   "build": {
     "appId": "org.starmade.launcher",
+    "afterPack": "./afterPack.cjs",
     "productName": "StarMade Launcher",
     "copyright": "Copyright © 2026 Schine, GmbH",
     "artifactName": "StarMade-Launcher.${ext}",

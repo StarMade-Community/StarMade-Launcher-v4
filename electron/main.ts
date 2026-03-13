@@ -19,7 +19,6 @@ import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, 
 import type { UpdateInfo } from './updater.js';
 import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from './updater.js';
 import { loginWithPassword, refreshAccessToken, registerAccount, logoutAccount, getAuthStatus, getAccessTokenForLaunch } from './auth.js';
-import { isRunningAsAppImage } from './appimage-detect.js';
 import { isRunningOnWayland } from './wayland-detect.js';
 import { parseVersionTxt } from './legacy.js';
 
@@ -35,22 +34,28 @@ const RENDERER_URL = 'http://localhost:3000';
 const PRELOAD_PATH = path.join(__dirname, 'preload.js');
 
 // ─── Linux sandbox fix ───────────────────────────────────────────────────────
-// Two situations on Linux require the SUID sandbox to be disabled:
+// Chromium's SUID sandbox check runs at the C++ browser-process level, before
+// V8 starts and before *any* JavaScript executes.  That means calling
+// app.commandLine.appendSwitch('no-sandbox') here is fundamentally too late to
+// prevent the crash when chrome-sandbox is present but not SUID-root.
 //
-// 1. AppImage: The squashfs image is mounted by an unprivileged user, so the
-//    chrome-sandbox binary inside the mount cannot have the required SUID-root
-//    permissions (mode 4755, owned by root).  Detection uses multiple
-//    indicators because the APPIMAGE env var is not always propagated when the
-//    AppImage is launched from a file manager or desktop environment on an
-//    external/non-OS drive.  See electron/appimage-detect.ts for full details.
+// AppImage case (primary fix lives in afterPack.cjs)
+// ---------------------------------------------------
+// The squashfs image is mounted read-only by an unprivileged user, so the
+// chrome-sandbox binary inside the mount can never have the required SUID-root
+// permissions (mode 4755).  The afterPack.cjs build hook handles this by
+// replacing the Electron binary with a thin shell wrapper that prepends
+// --no-sandbox *before* exec-ing the real binary, so the flag is on the
+// original argv when Chromium initialises.
 //
-// 2. Root user: Electron/Chromium explicitly refuses to start when the process
-//    is running as root (uid 0) without --no-sandbox, regardless of packaging
-//    format.  This covers both `sudo ./StarMade-Launcher.AppImage` and any
-//    other root-level invocation.
+// Root-user case (handled here as a best-effort fallback)
+// --------------------------------------------------------
+// If the app is launched with `sudo -E ./StarMade-Launcher.AppImage` the
+// afterPack wrapper already adds --no-sandbox.  The check below is kept as a
+// defence-in-depth measure for any direct (non-AppImage) root invocation.
 if (process.platform === 'linux') {
   const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
-  if (isRoot || isRunningAsAppImage(process.env, app.getPath('exe'))) {
+  if (isRoot) {
     app.commandLine.appendSwitch('no-sandbox');
   }
 }
