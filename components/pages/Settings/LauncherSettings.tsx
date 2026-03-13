@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import CustomDropdown from '../../common/CustomDropdown';
 import { FolderIcon } from '../../common/icons';
 import { useData } from '@/contexts/DataContext';
+import type { LauncherCloseBehavior, LauncherSettingsData } from '@/types';
 import UpdateAvailableModal from '../../common/UpdateAvailableModal';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -20,14 +21,6 @@ interface UpdateInfo {
 // ─── Store key ───────────────────────────────────────────────────────────────
 
 const STORE_KEY = 'launcherSettings';
-
-interface LauncherSettingsData {
-    checkForUpdates: boolean;
-    useBetaChannel: boolean;
-    showLog: boolean;
-    language: string;
-    closeBehavior: string;
-}
 
 const DEFAULT_SETTINGS: LauncherSettingsData = {
     checkForUpdates: true,
@@ -98,7 +91,7 @@ const LauncherSettings: React.FC = () => {
         { value: 'English', label: 'English' }, //Todo: Support other languages, and maybe have this set the game's language if possible
     ];
     
-    const closeBehaviorOptions = [
+    const closeBehaviorOptions: Array<{ value: LauncherCloseBehavior; label: string }> = [
         { value: 'Close launcher', label: 'Close launcher' },
         { value: 'Hide launcher', label: 'Hide launcher' },
         { value: 'Keep the launcher open', label: 'Keep the launcher open' },

@@ -62,12 +62,16 @@ const App: React.FC = () => {
 
   const renderContent = () => {
     switch (activePage) {
-      case 'Installations':
-        return <Installations {...pageProps} />;
+      case 'Installations': {
+        const installationProps = 'initialTab' in pageProps ? pageProps : {};
+        return <Installations {...installationProps} />;
+      }
       case 'News':
         return <News />;
-      case 'Settings':
-        return <Settings {...pageProps} />;
+      case 'Settings': {
+        const settingsProps = 'initialSection' in pageProps ? pageProps : {};
+        return <Settings {...settingsProps} />;
+      }
       case 'Play':
       default:
         return <Play />;

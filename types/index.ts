@@ -130,6 +130,16 @@ export interface DownloadStatus {
   error?: string;
 }
 
+export type LauncherCloseBehavior = 'Close launcher' | 'Hide launcher' | 'Keep the launcher open';
+
+export interface LauncherSettingsData {
+  checkForUpdates: boolean;
+  useBetaChannel: boolean;
+  showLog: boolean;
+  language: string;
+  closeBehavior: LauncherCloseBehavior;
+}
+
 export type Page = 'Play' | 'Installations' | 'News' | 'Settings';
 export type SettingsSection = 'launcher' | 'accounts' | 'about' | 'defaults';
 export type InstallationsTab = 'installations' | 'servers';
