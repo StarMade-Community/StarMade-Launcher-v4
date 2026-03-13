@@ -55,6 +55,11 @@ export interface ConfigPanelModel {
    * specific UI such as the GameConfig.xml advanced repeated-entry tables.
    */
   bodyExtras?: React.ReactNode;
+  /**
+   * Optional extra blocks rendered inline within each category section, after
+   * that category's standard fields.
+   */
+  categoryExtras?: Partial<Record<string, React.ReactNode[]>>;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -83,6 +88,7 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ model }) => {
     onSaveField, onValidateField,
     reloadLabel, onReload, reloadDisabled,
     bodyExtras,
+    categoryExtras,
   } = model;
 
   const toggleCategory = (category: string) => {
@@ -116,7 +122,8 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ model }) => {
   }, {});
 
   const hasAnyVisibleFields = categoryOrder.some((cat) => (filteredFieldsByCategory[cat]?.length ?? 0) > 0);
-  const showEmptyMessage = !isLoading && !hasAnyVisibleFields && !bodyExtras;
+  const hasAnyVisibleCategoryExtras = categoryOrder.some((cat) => (categoryExtras?.[cat]?.length ?? 0) > 0);
+  const showEmptyMessage = !isLoading && !hasAnyVisibleFields && !hasAnyVisibleCategoryExtras && !bodyExtras;
 
   return (
     <>
@@ -191,7 +198,8 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ model }) => {
           <div className="space-y-4">
             {categoryOrder.map((category) => {
               const categoryFields = filteredFieldsByCategory[category] ?? [];
-              if (categoryFields.length === 0) return null;
+              const extras = categoryExtras?.[category] ?? [];
+              if (categoryFields.length === 0 && extras.length === 0) return null;
 
               return (
                 <section key={category} className="space-y-3">
@@ -271,6 +279,10 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ model }) => {
                       </div>
                     );
                   })}
+
+                  {extras.map((extra, index) => (
+                    <React.Fragment key={`${category}-extra-${index}`}>{extra}</React.Fragment>
+                  ))}
                 </section>
               );
             })}

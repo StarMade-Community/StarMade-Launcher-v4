@@ -473,16 +473,29 @@ function writeServerCfgKey(installationPath: string, key: string, value: string)
   return { success: true };
 }
 
+function resolveExistingConfigPath(installationPath: string, relativeCandidates: string[]): string | null {
+  for (const relativePath of relativeCandidates) {
+    const candidate = path.join(installationPath, relativePath);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 function readGameConfigXml(installationPath: string): string | null {
-  const configPath = path.join(installationPath, 'GameConfig.xml');
-  if (!fs.existsSync(configPath)) return null;
+  const configPath = resolveExistingConfigPath(installationPath, ['GameConfig.xml', 'StarMade/GameConfig.xml']);
+  if (!configPath) return null;
   return fs.readFileSync(configPath, 'utf8');
 }
 
 function writeGameConfigXml(installationPath: string, xmlContent: string): { success: boolean; error?: string } {
-  const configPath = path.join(installationPath, 'GameConfig.xml');
-  if (!fs.existsSync(configPath)) {
-    return { success: false, error: `GameConfig.xml not found at ${configPath}` };
+  const configPath = resolveExistingConfigPath(installationPath, ['GameConfig.xml', 'StarMade/GameConfig.xml']);
+  if (!configPath) {
+    return {
+      success: false,
+      error: `GameConfig.xml not found at ${path.join(installationPath, 'GameConfig.xml')} or ${path.join(installationPath, 'StarMade', 'GameConfig.xml')}`,
+    };
   }
 
   fs.writeFileSync(configPath, xmlContent, 'utf8');
@@ -770,12 +783,15 @@ function readServerPanelSchema(): unknown {
     ?? readJsonObject(path.join(bundledConfigDir, 'server-config-schema.json'));
   const gameSchema = readJsonObject(path.join(userConfigDir, 'gameconfig-schema.json'))
     ?? readJsonObject(path.join(bundledConfigDir, 'gameconfig-schema.json'));
+  const factionSchema = readJsonObject(path.join(userConfigDir, 'factionconfig-schema.json'))
+    ?? readJsonObject(path.join(bundledConfigDir, 'factionconfig-schema.json'));
 
-  if (serverSchema || gameSchema) {
+  if (serverSchema || gameSchema || factionSchema) {
     const merged = {
       version: 1,
       ...(serverSchema ?? {}),
       ...(gameSchema ?? {}),
+      ...(factionSchema ?? {}),
     };
     return merged;
   }
