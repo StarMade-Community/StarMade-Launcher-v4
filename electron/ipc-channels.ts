@@ -64,10 +64,30 @@ export const IPC = {
   GAME_LOG: 'game:log',
   /** Renderer → Main (invoke): get log file path for a running game. */
   GAME_GET_LOG_PATH: 'game:get-log-path',
+  /** Renderer → Main (invoke): list categorized log files in an installation logs directory. */
+  GAME_LIST_LOG_FILES: 'game:list-log-files',
+  /** Renderer → Main (invoke): read the tail of a specific log file from an installation logs directory. */
+  GAME_READ_LOG_FILE: 'game:read-log-file',
   /** Renderer → Main (invoke): open log directory in file manager. */
   GAME_OPEN_LOG_LOCATION: 'game:open-log-location',
   /** Renderer → Main (invoke): get GraphicsInfo.txt content if it exists. */
   GAME_GET_GRAPHICS_INFO: 'game:get-graphics-info',
+  /** Renderer → Main (invoke): read a key from installation server.cfg. */
+  GAME_SERVER_CFG_GET: 'game:server-cfg-get',
+  /** Renderer → Main (invoke): list parsed key/value entries from installation server.cfg. */
+  GAME_SERVER_CFG_LIST: 'game:server-cfg-list',
+  /** Renderer → Main (invoke): set a key in installation server.cfg. */
+  GAME_SERVER_CFG_SET: 'game:server-cfg-set',
+  /** Renderer → Main (invoke): read installation GameConfig.xml content. */
+  GAME_CONFIG_XML_GET: 'game:config-xml-get',
+  /** Renderer → Main (invoke): write installation GameConfig.xml content. */
+  GAME_CONFIG_XML_SET: 'game:config-xml-set',
+  /** Renderer → Main (invoke): list files/directories inside an installation path. */
+  GAME_FILES_LIST: 'game:files-list',
+  /** Renderer → Main (invoke): read a text file from an installation path. */
+  GAME_FILE_READ: 'game:file-read',
+  /** Renderer → Main (invoke): write a text file to an installation path. */
+  GAME_FILE_WRITE: 'game:file-write',
   /**
    * Renderer → Main (invoke): read the `launcher-session.json` file written by
    * the game into an installation directory.  Returns the parsed object or
@@ -88,6 +108,40 @@ export const IPC = {
   APP_GET_USER_DATA: 'app:get-user-data',
   /** Renderer → Main (invoke): get total system RAM in MB. */
   APP_GET_SYSTEM_MEMORY: 'app:get-system-memory',
+  /** Renderer → Main (invoke): get server panel schema JSON used by config editors. */
+  APP_GET_SERVER_PANEL_SCHEMA: 'app:get-server-panel-schema',
+
+  // ─── Installation file management ───────────────────────────────────────────
+
+  /**
+   * Renderer → Main (invoke): recursively delete the physical files for an
+   * installation or server at the given path.
+   * Payload: targetPath: string
+   * Returns: { success: boolean; error?: string }
+   */
+  INSTALLATION_DELETE_FILES: 'installation:delete-files',
+
+  /**
+   * Renderer → Main (invoke): create a compressed (.zip) backup of an
+   * installation directory.
+   * Payload: { installationPath: string; installationId: string; installationName: string }
+   * Returns: { success: boolean; backupPath?: string; error?: string }
+   */
+  INSTALLATION_BACKUP: 'installation:backup',
+
+  /**
+   * Renderer → Main (invoke): restore an installation from a compressed backup.
+   * Payload: { backupPath: string; targetPath: string }
+   * Returns: { success: boolean; error?: string }
+   */
+  INSTALLATION_RESTORE: 'installation:restore',
+
+  /**
+   * Renderer → Main (invoke): list available backups for an installation.
+   * Payload: installationId: string
+   * Returns: Array<{ name: string; path: string; createdAt: string; sizeBytes: number }>
+   */
+  INSTALLATION_LIST_BACKUPS: 'installation:list-backups',
 
   // ─── Shell ──────────────────────────────────────────────────────────────────
 
@@ -119,12 +173,37 @@ export const IPC = {
 
   // ─── Launcher auto-updater ───────────────────────────────────────────────────
 
-  /** Renderer → Main (invoke): check GitHub releases for a newer launcher version. */
+  /**
+   * Renderer → Main (invoke): check GitHub releases for a newer launcher version.
+   * Payload: { includePreReleases?: boolean }
+   */
   UPDATER_CHECK: 'updater:check',
   /** Renderer → Main (invoke): get the current running launcher version string. */
   UPDATER_GET_VERSION: 'updater:get-version',
   /** Main → Renderer: a newer launcher version was found during the startup check. */
   UPDATER_UPDATE_AVAILABLE: 'updater:update-available',
+
+  // ─── Launcher data backup ────────────────────────────────────────────────────
+
+  /**
+   * Renderer → Main (invoke): create a timestamped backup of the launcher
+   * userData directory.
+   * Returns: { success: boolean; backupPath?: string; error?: string }
+   */
+  BACKUP_CREATE: 'backup:create',
+
+  /**
+   * Renderer → Main (invoke): list available backups (newest first).
+   * Returns: Array<{ name: string; path: string; date: string }>
+   */
+  BACKUP_LIST: 'backup:list',
+
+  /**
+   * Renderer → Main (invoke): restore a backup and restart the launcher.
+   * Payload: { backupPath: string }
+   * Returns: { success: boolean; error?: string }
+   */
+  BACKUP_RESTORE: 'backup:restore',
   /**
    * Renderer → Main (invoke): download the update asset.
    * Payload: { assetUrl: string; assetName: string }

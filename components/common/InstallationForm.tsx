@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FolderIcon, MonitorIcon, ChevronDownIcon, CloseIcon, PencilIcon } from './icons';
+import { FolderIcon, MonitorIcon, ChevronDownIcon, CloseIcon, PencilIcon, WrenchIcon } from './icons';
 import type { ManagedItem, ItemType, Version } from '../../types';
 import { getIconComponent } from '../../utils/getIconComponent';
 import CustomDropdown from './CustomDropdown';
@@ -11,6 +11,7 @@ interface InstallationFormProps {
   isNew: boolean;
   onSave: (data: ManagedItem) => void;
   onCancel: () => void;
+  onRepairInstall?: () => void;
   itemTypeName: string;
 }
 
@@ -189,12 +190,13 @@ async function resolveJavaPaths(
   };
 }
 
-const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave, onCancel, itemTypeName }) => {
+const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave, onCancel, onRepairInstall, itemTypeName }) => {
   const { versions: allVersions, isVersionsLoading } = useData();
 
   const [name, setName] = useState(item.name);
   const [port, setPort] = useState(item.port ?? '4242');
   const [serverIp, setServerIp] = useState(item.serverIp ?? '127.0.0.1');
+  const [maxPlayers, setMaxPlayers] = useState(item.maxPlayers ?? 32);
   const [icon, setIcon] = useState(item.icon);
   const [type, setType] = useState<ItemType>(item.type === 'latest' ? 'release' : item.type);
   const [version, setVersion] = useState(item.version);
@@ -230,6 +232,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         gameDir?: string;
         port?: string;
         serverIp?: string;
+        maxPlayers?: number;
         javaMemory?: number;
         jvmArgs?: string;
         javaPath8?: string;
@@ -239,6 +242,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
       if (defaults.gameDir) setGameDir(defaults.gameDir);
       if (defaults.port && itemTypeName === 'Server') setPort(defaults.port);
       if (defaults.serverIp && itemTypeName === 'Server') setServerIp(defaults.serverIp);
+      if (typeof defaults.maxPlayers === 'number' && itemTypeName === 'Server') setMaxPlayers(Math.max(0, Math.round(defaults.maxPlayers)));
       if (defaults.javaMemory) setJavaMemory(defaults.javaMemory);
       if (defaults.jvmArgs) setJvmArgs(defaults.jvmArgs);
 
@@ -363,6 +367,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         ...(itemTypeName === 'Server' && {
           port,
           serverIp: serverIp.trim() || '127.0.0.1',
+          maxPlayers: Math.max(0, Math.round(maxPlayers || 0)),
         }),
     });
   };
@@ -416,6 +421,16 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
                 <FormField label="Server IP" htmlFor="itemServerIp">
                   <input id="itemServerIp" type="text" value={serverIp} onChange={e => setServerIp(e.target.value)} className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
                 </FormField>
+                <FormField label="Max Players" htmlFor="itemMaxPlayers">
+                  <input
+                    id="itemMaxPlayers"
+                    type="number"
+                    min={0}
+                    value={maxPlayers}
+                    onChange={e => setMaxPlayers(Math.max(0, Number(e.target.value) || 0))}
+                    className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+                  />
+                </FormField>
               </>
             ) : (
               <FormField label="Name" htmlFor="itemName" className="col-span-2">
@@ -458,7 +473,29 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
                 placeholder="Click the folder icon to choose…"
                 className={`flex-1 bg-slate-900/80 border rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent ${pathError ? 'border-red-500' : 'border-slate-700'}`}
               />
-              <button onClick={handleFolderPicker} className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80 transition-colors"><FolderIcon className="w-5 h-5 text-gray-400" /></button>
+              {(() => {
+                const hasRepairBtn = !isNew && !!onRepairInstall;
+                return (
+                  <button
+                    onClick={handleFolderPicker}
+                    className={`bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 hover:bg-slate-700/80 transition-colors${hasRepairBtn ? '' : ' rounded-r-md'}`}
+                    aria-label="Open folder picker"
+                  >
+                    <FolderIcon className="w-5 h-5 text-gray-400" />
+                  </button>
+                );
+              })()}
+              {!isNew && onRepairInstall && (
+                <button
+                  onClick={onRepairInstall}
+                  className="flex items-center gap-2 bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80 transition-colors"
+                  title="Repair Install — re-verify and re-download missing or corrupt files"
+                  aria-label="Repair install — re-verify and re-download missing or corrupt files"
+                >
+                  <WrenchIcon className="w-4 h-4 text-gray-400" />
+                  <span className="text-sm text-gray-400 font-semibold">Repair</span>
+                </button>
+              )}
             </div>
             {pathError && <p className="text-xs text-red-400 mt-1">{pathError}</p>}
             {isNew && (

@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import PageContainer from '../../common/PageContainer';
+import ConfigPanel, { type ConfigPanelModel } from '../../common/ConfigPanel';
 import { useData } from '../../../contexts/DataContext';
 import { useApp } from '../../../contexts/AppContext';
 import type { ManagedItem, ServerLifecycleState, ServerLogLevel } from '../../../types';
@@ -9,10 +10,29 @@ interface ServerPanelProps {
   serverName?: string;
 }
 
-type ServerPanelTab = 'control' | 'logs' | 'configuration' | 'files' | 'database';
-type LogFilter = 'all' | 'errors' | 'warnings' | 'info' | 'debug';
+type ServerPanelTab = 'control' | 'actions' | 'logs' | 'configuration' | 'files' | 'database';
+const CONFIG_EDITOR_TABS = [
+  { id: 'server-cfg', label: 'server.cfg' },
+  { id: 'game-config-xml', label: 'GameConfig.xml' },
+  { id: 'faction-config-xml', label: 'FactionConfig.xml' },
+] as const;
+
+type ConfigEditorTab = (typeof CONFIG_EDITOR_TABS)[number]['id'];
+type LogFilter = 'errors' | 'warnings' | 'info' | 'debug';
 type DashboardWidgetId = 'status' | 'serverInfo' | 'connection' | 'players' | 'controls';
 type ServerActionId = 'start' | 'stop' | 'restart' | 'update';
+const DASHBOARD_CONFIG_CONTROL_KEYS = [
+  'MAX_CLIENTS',
+  'SERVER_LISTEN_IP',
+  'ANNOUNCE_SERVER_TO_SERVERLIST',
+  'USE_STARMADE_AUTHENTICATION',
+  'REQUIRE_STARMADE_AUTHENTICATION',
+  'USE_WHITELIST',
+  'SERVER_LIST_NAME',
+  'SERVER_LIST_DESCRIPTION',
+  'HOST_NAME_TO_ANNOUNCE_TO_SERVER_LIST',
+] as const;
+type DashboardConfigControlKey = (typeof DASHBOARD_CONFIG_CONTROL_KEYS)[number];
 
 interface LogEntry {
   timestamp: string;
@@ -20,17 +40,42 @@ interface LogEntry {
   message: string;
 }
 
+interface LogFileItem {
+  fileName: string;
+  relativePath: string;
+  sizeBytes: number;
+  modifiedMs: number;
+  categoryId: string;
+  categoryLabel: string;
+}
+
+interface LogCategory {
+  id: string;
+  label: string;
+  files: LogFileItem[];
+}
+
+interface InstallationFileEntry {
+  name: string;
+  relativePath: string;
+  isDirectory: boolean;
+  sizeBytes: number;
+  modifiedMs: number;
+}
+
 interface DashboardGroup {
   id: string;
   title: string;
   widgetIds: DashboardWidgetId[];
   height?: number;
+  collapsed?: boolean;
 }
 
 interface DashboardLayout {
   groups: DashboardGroup[];
   hiddenWidgetIds: DashboardWidgetId[];
   quickActionIds: ServerActionId[];
+  quickConfigKeys: DashboardConfigControlKey[];
 }
 
 interface DraggedWidget {
@@ -46,6 +91,7 @@ const LOG_BUFFER_CAP = 1200;
 const DASHBOARD_STORE_KEY = 'serverPanelDashboardLayoutsV2';
 const MIN_GROUP_HEIGHT = 260;
 const MAX_GROUP_HEIGHT = 1200;
+const FACTION_CONFIG_PATH_CANDIDATES = ['FactionConfig.xml', 'StarMade/FactionConfig.xml'] as const;
 
 const WIDGET_HEIGHT_WEIGHT: Record<DashboardWidgetId, number> = {
   status: 120,
@@ -65,11 +111,14 @@ const ALL_WIDGETS: Array<{ id: DashboardWidgetId; label: string }> = [
 
 const tabItems: { id: ServerPanelTab; label: string }[] = [
   { id: 'control', label: 'Dashboard' },
+  { id: 'actions', label: 'Actions' },
   { id: 'logs', label: 'Logs' },
   { id: 'configuration', label: 'Configuration' },
   { id: 'files', label: 'Files' },
   { id: 'database', label: 'Database' },
 ];
+
+const LOG_FILTER_OPTIONS: LogFilter[] = ['info', 'warnings', 'errors', 'debug'];
 
 const createDefaultDashboardLayout = (): DashboardLayout => ({
   groups: [
@@ -78,6 +127,7 @@ const createDefaultDashboardLayout = (): DashboardLayout => ({
   ],
   hiddenWidgetIds: [],
   quickActionIds: ['start', 'stop', 'restart', 'update'],
+  quickConfigKeys: ['MAX_CLIENTS', 'SERVER_LISTEN_IP', 'ANNOUNCE_SERVER_TO_SERVERLIST'],
 });
 
 const isServerActionId = (value: unknown): value is ServerActionId => (
@@ -85,6 +135,10 @@ const isServerActionId = (value: unknown): value is ServerActionId => (
   value === 'stop' ||
   value === 'restart' ||
   value === 'update'
+);
+
+const isDashboardConfigControlKey = (value: unknown): value is DashboardConfigControlKey => (
+  typeof value === 'string' && DASHBOARD_CONFIG_CONTROL_KEYS.includes(value as DashboardConfigControlKey)
 );
 
 const isDashboardWidgetId = (value: unknown): value is DashboardWidgetId => (
@@ -96,23 +150,29 @@ const isDashboardWidgetId = (value: unknown): value is DashboardWidgetId => (
 );
 
 const cloneLayout = (layout: DashboardLayout): DashboardLayout => ({
-  groups: layout.groups.map((group) => ({ ...group, widgetIds: [...group.widgetIds], height: group.height })),
+  groups: layout.groups.map((group) => ({
+    ...group,
+    widgetIds: [...group.widgetIds],
+    height: group.height,
+    collapsed: group.collapsed,
+  })),
   hiddenWidgetIds: [...layout.hiddenWidgetIds],
   quickActionIds: [...layout.quickActionIds],
+  quickConfigKeys: [...layout.quickConfigKeys],
 });
 
 const normalizeLayout = (raw: unknown): DashboardLayout => {
   const fallback = createDefaultDashboardLayout();
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return fallback;
 
-  const root = raw as { groups?: unknown; hiddenWidgetIds?: unknown; quickActionIds?: unknown };
+  const root = raw as { groups?: unknown; hiddenWidgetIds?: unknown; quickActionIds?: unknown; quickConfigKeys?: unknown };
   const seen = new Set<DashboardWidgetId>();
   const groups: DashboardGroup[] = [];
 
   if (Array.isArray(root.groups)) {
     for (const entry of root.groups) {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
-      const candidate = entry as { id?: unknown; title?: unknown; widgetIds?: unknown; height?: unknown };
+      const candidate = entry as { id?: unknown; title?: unknown; widgetIds?: unknown; height?: unknown; collapsed?: unknown };
       if (typeof candidate.id !== 'string' || !candidate.id.trim()) continue;
 
       const title = typeof candidate.title === 'string' && candidate.title.trim()
@@ -132,7 +192,8 @@ const normalizeLayout = (raw: unknown): DashboardLayout => {
       const height = typeof candidate.height === 'number' && Number.isFinite(candidate.height)
         ? Math.max(MIN_GROUP_HEIGHT, Math.min(Math.round(candidate.height), MAX_GROUP_HEIGHT))
         : undefined;
-      groups.push({ id: candidate.id, title, widgetIds, height });
+      const collapsed = typeof candidate.collapsed === 'boolean' ? candidate.collapsed : undefined;
+      groups.push({ id: candidate.id, title, widgetIds, height, collapsed });
     }
   }
 
@@ -166,10 +227,20 @@ const normalizeLayout = (raw: unknown): DashboardLayout => {
     }
   }
 
+  const quickConfigKeys: DashboardConfigControlKey[] = [];
+  if (Array.isArray(root.quickConfigKeys)) {
+    for (const configKey of root.quickConfigKeys) {
+      if (isDashboardConfigControlKey(configKey) && !quickConfigKeys.includes(configKey)) {
+        quickConfigKeys.push(configKey);
+      }
+    }
+  }
+
   return {
     groups,
     hiddenWidgetIds,
     quickActionIds: quickActionIds.length > 0 ? quickActionIds : fallback.quickActionIds,
+    quickConfigKeys,
   };
 };
 
@@ -185,6 +256,45 @@ const normalizeLogLevel = (level: string): ServerLogLevel => {
   return 'INFO';
 };
 
+const parseLogLine = (rawLine: string): LogEntry => {
+  const trimmed = rawLine.trimEnd();
+  const timestamped = trimmed.match(/^\[([^\]]+)\]\s+\[([^\]]+)\]\s*(.*)$/);
+  if (timestamped) {
+    return {
+      timestamp: timestamped[1],
+      level: normalizeLogLevel(timestamped[2]),
+      message: timestamped[3] || '',
+    };
+  }
+
+  const streamTagged = trimmed.match(/^\[(STDOUT|STDERR|INFO|WARNING|ERROR|FATAL|DEBUG)\]\s*(.*)$/i);
+  if (streamTagged) {
+    return {
+      timestamp: '--:--:--',
+      level: normalizeLogLevel(streamTagged[1]),
+      message: streamTagged[2] || '',
+    };
+  }
+
+  return {
+    timestamp: '--:--:--',
+    level: 'INFO',
+    message: trimmed,
+  };
+};
+
+const formatLogFileSize = (bytes: number): string => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const formatLogModifiedTime = (modifiedMs: number): string => {
+  if (!Number.isFinite(modifiedMs) || modifiedMs <= 0) return 'Unknown';
+  return new Date(modifiedMs).toLocaleString();
+};
+
 const formatUptime = (uptimeMs?: number): string => {
   if (!uptimeMs || uptimeMs <= 0) return '00:00:00';
   const totalSeconds = Math.floor(uptimeMs / 1000);
@@ -195,6 +305,1202 @@ const formatUptime = (uptimeMs?: number): string => {
 };
 
 const createGroupId = (): string => `group-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+
+const parseCfgBoolean = (raw: string | null, fallback: boolean): boolean => {
+  if (raw === null) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  return fallback;
+};
+
+type ServerConfigFieldType = 'string' | 'number' | 'boolean';
+type ServerConfigCategory = 'networking' | 'security' | 'performance' | 'advanced';
+
+interface ConfigSchemaValidation {
+  integer?: boolean;
+  regex?: string;
+  message?: string;
+  allowedValues?: string[];
+  minLength?: number;
+  maxLength?: number;
+}
+
+interface ServerConfigField {
+  key: string;
+  label: string;
+  description: string;
+  category: ServerConfigCategory;
+  type: ServerConfigFieldType;
+  defaultValue: string;
+  min?: number;
+  max?: number;
+  guidance?: string;
+  validation?: ConfigSchemaValidation;
+}
+
+interface ServerConfigEntry {
+  key: string;
+  value: string;
+  comment: string | null;
+}
+
+type ConfigFieldValidation = import('../../common/ConfigPanel').ConfigFieldValidation;
+
+type GameConfigFieldType = 'string' | 'number' | 'boolean';
+type GameConfigCategory = 'economy' | 'environment' | 'limits' | 'other';
+type FactionConfigCategory = 'activity' | 'system-bonus' | 'points' | 'other';
+
+interface GameConfigFieldMeta {
+  label: string;
+  description: string;
+  category: GameConfigCategory;
+  type?: GameConfigFieldType;
+  min?: number;
+  max?: number;
+  guidance?: string;
+  validation?: ConfigSchemaValidation;
+}
+
+interface GameConfigField {
+  path: string;
+  label: string;
+  description: string;
+  category: GameConfigCategory;
+  type: GameConfigFieldType;
+  defaultValue: string;
+  min?: number;
+  max?: number;
+  guidance?: string;
+  validation?: ConfigSchemaValidation;
+}
+
+interface FactionConfigFieldMeta {
+  label: string;
+  description: string;
+  category: FactionConfigCategory;
+  type?: GameConfigFieldType;
+  min?: number;
+  max?: number;
+  guidance?: string;
+  validation?: ConfigSchemaValidation;
+}
+
+interface FactionConfigField {
+  path: string;
+  label: string;
+  description: string;
+  category: FactionConfigCategory;
+  type: GameConfigFieldType;
+  defaultValue: string;
+  min?: number;
+  max?: number;
+  guidance?: string;
+  validation?: ConfigSchemaValidation;
+}
+
+interface GameConfigListColumn {
+  key: string;
+  label: string;
+  type: GameConfigFieldType;
+}
+
+interface GameConfigListRow {
+  index: number;
+  fieldPaths: Record<string, string>;
+}
+
+interface GameConfigListSection {
+  key: string;
+  label: string;
+  description: string;
+  category: GameConfigCategory;
+  columns: GameConfigListColumn[];
+  rows: GameConfigListRow[];
+}
+
+interface GameConfigCommentToggleEntry {
+  id: string;
+  label: string;
+  description: string;
+  path: string;
+  category: GameConfigCategory;
+  snippet: string;
+}
+
+interface GameConfigCategoryRule {
+  category: GameConfigCategory;
+  startsWith?: string;
+  includes?: string;
+}
+
+interface FactionConfigCategoryRule {
+  category: FactionConfigCategory;
+  startsWith?: string;
+  includes?: string;
+}
+
+interface ServerPanelSchema {
+  version: number;
+  serverConfig?: {
+    categoryLabels?: Record<string, string>;
+    categoryOrder?: string[];
+    fields?: ServerConfigField[];
+  };
+  gameConfig?: {
+    categoryLabels?: Record<string, string>;
+    categoryOrder?: string[];
+    fieldMeta?: Record<string, GameConfigFieldMeta>;
+    commentToggleEntries?: GameConfigCommentToggleEntry[];
+    hiddenPathPrefixes?: string[];
+    categoryRules?: GameConfigCategoryRule[];
+  };
+  factionConfig?: {
+    categoryLabels?: Record<string, string>;
+    categoryOrder?: string[];
+    fieldMeta?: Record<string, FactionConfigFieldMeta>;
+    hiddenPathPrefixes?: string[];
+    categoryRules?: FactionConfigCategoryRule[];
+  };
+}
+
+const GAME_CONFIG_CATEGORY_LABELS: Record<GameConfigCategory, string> = {
+  economy: 'Economy',
+  environment: 'Environment',
+  limits: 'Limits',
+  other: 'Other',
+};
+
+const GAME_CONFIG_CATEGORY_ORDER: GameConfigCategory[] = ['economy', 'environment', 'limits', 'other'];
+
+const FACTION_CONFIG_CATEGORY_LABELS: Record<FactionConfigCategory, string> = {
+  activity: 'Activity',
+  'system-bonus': 'System Bonus',
+  points: 'Faction Points',
+  other: 'Other',
+};
+
+const FACTION_CONFIG_CATEGORY_ORDER: FactionConfigCategory[] = ['activity', 'system-bonus', 'points', 'other'];
+
+const FACTION_CONFIG_FIELD_META: Record<string, FactionConfigFieldMeta> = {
+  'Faction/FactionActivity/BasicValues/SetInactiveAfterHours': {
+    label: 'Inactive Timeout (Hours)',
+    description: 'Time after which factions become inactive when offline.',
+    category: 'activity',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Inactive timeout must be a whole number.' },
+  },
+  'Faction/FactionActivity/BasicValues/SetActiveAfterOnlineForMin': {
+    label: 'Reactivate After Minutes Online',
+    description: 'Minutes online needed to set a faction active again.',
+    category: 'activity',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Reactivate time must be a whole number.' },
+  },
+};
+
+const FACTION_CONFIG_HIDDEN_PATH_PREFIXES: string[] = [];
+
+const FACTION_CONFIG_CATEGORY_RULES: FactionConfigCategoryRule[] = [
+  { category: 'activity', includes: 'activity' },
+  { category: 'system-bonus', includes: 'ownerbonus' },
+  { category: 'points', includes: 'factionpoint' },
+];
+
+const GAME_CONFIG_FIELD_META: Record<string, GameConfigFieldMeta> = {
+  'GameConfig/StartingGear/Credits': {
+    label: 'Starting Credits',
+    description: 'Credits granted to a new character on spawn.',
+    category: 'economy',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Starting credits must be a whole number.' },
+  },
+  'GameConfig/SunHeatDamage/DamagePerBlock': {
+    label: 'Sun Heat Damage Per Block',
+    description: 'Damage applied per block when sun heat damage triggers.',
+    category: 'environment',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/SunHeatDamage/MaxDelayBetweenHits': {
+    label: 'Max Delay Between Sun Hits',
+    description: 'Maximum random delay between consecutive sun heat damage hits.',
+    category: 'environment',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/SunHeatDamage/SunDamageRadius': {
+    label: 'Sun Damage Radius',
+    description: 'Radius around the entity where sun damage applies.',
+    category: 'environment',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/SunHeatDamage/SunDamageDelayInSecs': {
+    label: 'Sun Damage Delay (sec)',
+    description: 'Time delay before repeated sun heat damage is applied.',
+    category: 'environment',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/SunHeatDamage/SunDamageMin': {
+    label: 'Minimum Sun Damage',
+    description: 'Lower bound for randomized sun heat damage.',
+    category: 'environment',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/SunHeatDamage/SunDamageMax': {
+    label: 'Maximum Sun Damage',
+    description: 'Upper bound for randomized sun heat damage.',
+    category: 'environment',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/MaxDimensionShip/X': {
+    label: 'Max Ship X',
+    description: 'Maximum ship dimension on the X axis.',
+    category: 'limits',
+    type: 'number',
+    validation: { integer: true, message: 'Ship dimensions must be whole numbers.' },
+  },
+  'GameConfig/MaxDimensionShip/Y': {
+    label: 'Max Ship Y',
+    description: 'Maximum ship dimension on the Y axis.',
+    category: 'limits',
+    type: 'number',
+    validation: { integer: true, message: 'Ship dimensions must be whole numbers.' },
+  },
+  'GameConfig/MaxDimensionShip/Z': {
+    label: 'Max Ship Z',
+    description: 'Maximum ship dimension on the Z axis.',
+    category: 'limits',
+    type: 'number',
+    validation: { integer: true, message: 'Ship dimensions must be whole numbers.' },
+  },
+  'GameConfig/MaxDimensionStation/X': {
+    label: 'Max Station X',
+    description: 'Maximum station dimension on the X axis.',
+    category: 'limits',
+    type: 'number',
+    validation: { integer: true, message: 'Station dimensions must be whole numbers.' },
+  },
+  'GameConfig/MaxDimensionStation/Y': {
+    label: 'Max Station Y',
+    description: 'Maximum station dimension on the Y axis.',
+    category: 'limits',
+    type: 'number',
+    validation: { integer: true, message: 'Station dimensions must be whole numbers.' },
+  },
+  'GameConfig/MaxDimensionStation/Z': {
+    label: 'Max Station Z',
+    description: 'Maximum station dimension on the Z axis.',
+    category: 'limits',
+    type: 'number',
+    validation: { integer: true, message: 'Station dimensions must be whole numbers.' },
+  },
+  'GameConfig/GroupLimits/Controller[]/ID': {
+    label: 'Controller ID',
+    description: 'Controller block ID used for group/computer limits.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Controller IDs must be whole numbers.' },
+  },
+  'GameConfig/GroupLimits/Controller[]/GroupMax': {
+    label: 'Group Max',
+    description: 'Maximum simultaneous groups for this controller.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Group max must be a whole number.' },
+  },
+  'GameConfig/GroupLimits/Controller[]/ComputerMax': {
+    label: 'Computer Max',
+    description: 'Maximum number of computers allowed for this controller.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Computer max must be a whole number.' },
+  },
+  'GameConfig/ShipLimits/Mass': {
+    label: 'Ship Mass Limit',
+    description: 'Maximum ship mass allowed.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/ShipLimits/Blocks': {
+    label: 'Ship Block Limit',
+    description: 'Maximum ship block count allowed.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Block limits must be whole numbers.' },
+  },
+  'GameConfig/PlanetLimits/Mass': {
+    label: 'Planet Mass Limit',
+    description: 'Maximum planet mass allowed.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/PlanetLimits/Blocks': {
+    label: 'Planet Block Limit',
+    description: 'Maximum planet block count allowed.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Block limits must be whole numbers.' },
+  },
+  'GameConfig/StationLimits/Mass': {
+    label: 'Station Mass Limit',
+    description: 'Maximum station mass allowed.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/StationLimits/Blocks': {
+    label: 'Station Block Limit',
+    description: 'Maximum station block count allowed.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Block limits must be whole numbers.' },
+  },
+};
+
+const GAME_CONFIG_COMMENT_TOGGLE_DEFAULTS: GameConfigCommentToggleEntry[] = [
+  {
+    id: 'group-limits',
+    label: 'Enable Group Limits',
+    description: 'Adds GroupLimits controller caps to GameConfig.xml.',
+    path: 'GameConfig/GroupLimits',
+    category: 'limits',
+    snippet: '<GroupLimits>\n    <Controller>\n      <ID>4</ID>\n      <GroupMax>30</GroupMax>\n    </Controller>\n    <Controller>\n      <ID>544</ID>\n      <ComputerMax>2</ComputerMax>\n    </Controller>\n  </GroupLimits>',
+  },
+  {
+    id: 'max-dimension-ship',
+    label: 'Enable MaxDimensionShip',
+    description: 'Adds MaxDimensionShip size limits.',
+    path: 'GameConfig/MaxDimensionShip',
+    category: 'limits',
+    snippet: '<MaxDimensionShip>\n    <X>100</X>\n    <Y>400</Y>\n    <Z>-1</Z>\n  </MaxDimensionShip>',
+  },
+  {
+    id: 'max-dimension-station',
+    label: 'Enable MaxDimensionStation',
+    description: 'Adds MaxDimensionStation size limits.',
+    path: 'GameConfig/MaxDimensionStation',
+    category: 'limits',
+    snippet: '<MaxDimensionStation>\n    <X>600</X>\n    <Y>800</Y>\n    <Z>1000</Z>\n  </MaxDimensionStation>',
+  },
+  {
+    id: 'ship-limits',
+    label: 'Enable ShipLimits',
+    description: 'Adds ship mass/block limits.',
+    path: 'GameConfig/ShipLimits',
+    category: 'limits',
+    snippet: '<ShipLimits>\n    <Mass>1000.0</Mass>\n    <Blocks>100</Blocks>\n  </ShipLimits>',
+  },
+  {
+    id: 'planet-limits',
+    label: 'Enable PlanetLimits',
+    description: 'Adds planet mass/block limits.',
+    path: 'GameConfig/PlanetLimits',
+    category: 'limits',
+    snippet: '<PlanetLimits>\n    <Mass>50000.0</Mass>\n    <Blocks>2000000</Blocks>\n  </PlanetLimits>',
+  },
+  {
+    id: 'station-limits',
+    label: 'Enable StationLimits',
+    description: 'Adds station mass/block limits.',
+    path: 'GameConfig/StationLimits',
+    category: 'limits',
+    snippet: '<StationLimits>\n    <Mass>5000.0</Mass>\n    <Blocks>500</Blocks>\n  </StationLimits>',
+  },
+];
+
+const GAME_CONFIG_HIDDEN_PATH_PREFIXES = [
+  'GameConfig/StartingGear/Block',
+  'GameConfig/StartingGear/Tool',
+  'GameConfig/StartingGear/Helmet',
+  'GameConfig/StartingGear/Flashlight',
+  'GameConfig/StartingGear/Logbook',
+  'GameConfig/StartingGear/Blueprint',
+  'GameConfig/StartingGear/BuildInhibiter',
+];
+
+const GAME_CONFIG_CATEGORY_RULES: GameConfigCategoryRule[] = [
+  { category: 'economy', startsWith: 'GameConfig/StartingGear' },
+  { category: 'environment', includes: 'sun' },
+  { category: 'environment', includes: 'heat' },
+  { category: 'limits', includes: 'limit' },
+  { category: 'limits', includes: 'maxdimension' },
+];
+
+const isServerPanelSchema = (value: unknown): value is ServerPanelSchema => (
+  !!value && typeof value === 'object' && !Array.isArray(value)
+);
+
+const parseGameConfigFieldType = (rawValue: string): GameConfigFieldType => {
+  const normalized = rawValue.trim().toLowerCase();
+  if (normalized === 'true' || normalized === 'false') return 'boolean';
+  if (/^-?\d+(\.\d+)?$/.test(normalized)) return 'number';
+  return 'string';
+};
+
+const humanizeGameConfigSegment = (segment: string): string => segment
+  .replace(/\[\d+\]/g, '')
+  .replace(/([a-z])([A-Z])/g, '$1 $2')
+  .replace(/_/g, ' ')
+  .trim()
+  .split(/\s+/)
+  .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+  .join(' ');
+
+const shouldHideGameConfigPath = (path: string, hiddenPrefixes: string[]): boolean => (
+  hiddenPrefixes.some((prefix) => path.startsWith(prefix))
+);
+
+const getGameConfigMetaForPath = (
+  fieldMetaByPath: Record<string, GameConfigFieldMeta>,
+  path: string,
+): GameConfigFieldMeta | undefined => {
+  const direct = fieldMetaByPath[path];
+  if (direct) return direct;
+  const wildcardPath = path.replace(/\[\d+\]/g, '[]');
+  return fieldMetaByPath[wildcardPath];
+};
+
+const getFactionConfigMetaForPath = (
+  fieldMetaByPath: Record<string, FactionConfigFieldMeta>,
+  path: string,
+): FactionConfigFieldMeta | undefined => {
+  const direct = fieldMetaByPath[path];
+  if (direct) return direct;
+  const wildcardPath = path.replace(/\[\d+\]/g, '[]');
+  return fieldMetaByPath[wildcardPath];
+};
+
+const runSchemaValidation = (
+  validation: ConfigSchemaValidation | undefined,
+  rawValue: string,
+  fieldType: ServerConfigFieldType | GameConfigFieldType,
+): ConfigFieldValidation | null => {
+  if (!validation) return null;
+
+  const trimmed = rawValue.trim();
+
+  if (fieldType === 'number' && validation.integer && !/^-?\d+$/.test(trimmed)) {
+    return { error: validation.message ?? 'Enter a whole number.', warning: null };
+  }
+
+  if (validation.minLength !== undefined && trimmed.length < validation.minLength) {
+    return { error: validation.message ?? `Value must be at least ${validation.minLength} characters.`, warning: null };
+  }
+
+  if (validation.maxLength !== undefined && trimmed.length > validation.maxLength) {
+    return { error: validation.message ?? `Value must be at most ${validation.maxLength} characters.`, warning: null };
+  }
+
+  if (validation.allowedValues && validation.allowedValues.length > 0 && !validation.allowedValues.includes(trimmed)) {
+    return { error: validation.message ?? `Value must be one of: ${validation.allowedValues.join(', ')}.`, warning: null };
+  }
+
+  if (validation.regex) {
+    try {
+      const regex = new RegExp(validation.regex);
+      if (!regex.test(trimmed)) {
+        return { error: validation.message ?? 'Value does not match the expected format.', warning: null };
+      }
+    } catch {
+      // Ignore malformed schema regex values to keep editing functional.
+    }
+  }
+
+  return null;
+};
+
+const inferGameConfigCategory = (path: string, rules: GameConfigCategoryRule[]): GameConfigCategory => {
+  const lowerPath = path.toLowerCase();
+  for (const rule of rules) {
+    if (rule.startsWith && path.startsWith(rule.startsWith)) return rule.category;
+    if (rule.includes && lowerPath.includes(rule.includes.toLowerCase())) return rule.category;
+  }
+  return 'other';
+};
+
+const inferFactionConfigCategory = (path: string, rules: FactionConfigCategoryRule[]): FactionConfigCategory => {
+  const lowerPath = path.toLowerCase();
+  for (const rule of rules) {
+    if (rule.startsWith && path.startsWith(rule.startsWith)) return rule.category;
+    if (rule.includes && lowerPath.includes(rule.includes.toLowerCase())) return rule.category;
+  }
+  return 'other';
+};
+
+const parseGameConfigXmlDocument = (xmlContent: string): Document => {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlContent, 'application/xml');
+  const parseError = doc.querySelector('parsererror');
+  if (parseError) {
+    throw new Error('Invalid XML content.');
+  }
+  return doc;
+};
+
+const findElementByGameConfigPath = (doc: Document, path: string): Element | null => {
+  const root = doc.documentElement;
+  if (!root) return null;
+
+  const segments = path.split('/');
+  if (segments.length === 0 || segments[0] !== root.tagName) return null;
+
+  let current: Element | null = root;
+  for (let i = 1; i < segments.length; i += 1) {
+    if (!current) return null;
+    const match = segments[i].match(/^([^\[]+)(?:\[(\d+)\])?$/);
+    if (!match) return null;
+
+    const tagName = match[1];
+    const requestedIndex = Number.parseInt(match[2] ?? '1', 10);
+    const siblings = Array.from(current.children).filter((child) => child.tagName === tagName);
+    current = siblings[requestedIndex - 1] ?? null;
+  }
+
+  return current;
+};
+
+const getGameConfigCommentToggleStates = (
+  xmlContent: string,
+  entries: GameConfigCommentToggleEntry[],
+): Record<string, boolean> => {
+  const states: Record<string, boolean> = {};
+  try {
+    const doc = parseGameConfigXmlDocument(xmlContent);
+    for (const entry of entries) {
+      states[entry.id] = !!findElementByGameConfigPath(doc, entry.path);
+    }
+  } catch {
+    for (const entry of entries) {
+      states[entry.id] = false;
+    }
+  }
+  return states;
+};
+
+const createElementFromSnippet = (doc: Document, snippet: string, expectedTag: string): Element | null => {
+  const parser = new DOMParser();
+  const wrapped = `<root>${snippet}</root>`;
+  const parsed = parser.parseFromString(wrapped, 'application/xml');
+  const parseError = parsed.querySelector('parsererror');
+  if (parseError) return null;
+
+  const element = Array.from(parsed.documentElement.children).find((child) => child.tagName === expectedTag);
+  if (!element) return null;
+  return doc.importNode(element, true);
+};
+
+const uncommentGameConfigEntryFromComments = (
+  doc: Document,
+  root: Element,
+  tagName: string,
+): boolean => {
+  for (const node of Array.from(root.childNodes)) {
+    if (node.nodeType !== Node.COMMENT_NODE) continue;
+    const commentText = node.nodeValue ?? '';
+    if (!commentText.includes(`<${tagName}`) || !commentText.includes(`</${tagName}>`)) continue;
+
+    const parser = new DOMParser();
+    const wrapped = `<root>${commentText}</root>`;
+    const parsed = parser.parseFromString(wrapped, 'application/xml');
+    const parseError = parsed.querySelector('parsererror');
+    if (parseError) continue;
+
+    const candidate = Array.from(parsed.documentElement.children).find((child) => child.tagName === tagName);
+    if (!candidate) continue;
+
+    const imported = doc.importNode(candidate, true);
+    root.replaceChild(imported, node);
+    return true;
+  }
+
+  return false;
+};
+
+const hasOnlyLeafChildren = (element: Element): boolean => {
+  const children = Array.from(element.children);
+  if (children.length === 0) return false;
+  return children.every((child) => child.children.length === 0);
+};
+
+const extractGameConfigListSections = (
+  xmlContent: string,
+  categoryOrder: GameConfigCategory[],
+  categoryRules: GameConfigCategoryRule[],
+): GameConfigListSection[] => {
+  const doc = parseGameConfigXmlDocument(xmlContent);
+  const root = doc.documentElement;
+  if (!root) return [];
+
+  const sections = new Map<string, GameConfigListSection>();
+
+  const walk = (element: Element, parentPath: string) => {
+    const childElements = Array.from(element.children);
+    if (childElements.length === 0) return;
+
+    const groupedChildren = childElements.reduce<Record<string, Element[]>>((acc, child) => {
+      const next = acc[child.tagName] ?? [];
+      next.push(child);
+      acc[child.tagName] = next;
+      return acc;
+    }, {});
+
+    for (const [tagName, siblings] of Object.entries(groupedChildren)) {
+      const isRowSet = siblings.length > 1 && siblings.every((sibling) => hasOnlyLeafChildren(sibling));
+      if (isRowSet) {
+        const sectionKey = `${parentPath}/${tagName}`;
+        const columns: GameConfigListColumn[] = [];
+        const columnIndex = new Map<string, number>();
+
+        for (const sibling of siblings) {
+          for (const child of Array.from(sibling.children)) {
+            if (!columnIndex.has(child.tagName)) {
+              columnIndex.set(child.tagName, columns.length);
+              columns.push({
+                key: child.tagName,
+                label: humanizeGameConfigSegment(child.tagName),
+                type: parseGameConfigFieldType((child.textContent ?? '').trim()),
+              });
+            }
+          }
+        }
+
+        const rows: GameConfigListRow[] = siblings.map((sibling, siblingIndex) => {
+          const childByTag = new Map(Array.from(sibling.children).map((child) => [child.tagName, child]));
+          const fieldPaths: Record<string, string> = {};
+
+          for (const column of columns) {
+            const rowPath = `${parentPath}/${tagName}[${siblingIndex + 1}]/${column.key}`;
+            fieldPaths[column.key] = rowPath;
+
+            const child = childByTag.get(column.key);
+            if (child) {
+              const childType = parseGameConfigFieldType((child.textContent ?? '').trim());
+              if (column.type !== childType) {
+                column.type = 'string';
+              }
+            }
+          }
+
+          return {
+            index: siblingIndex + 1,
+            fieldPaths,
+          };
+        });
+
+        sections.set(sectionKey, {
+          key: sectionKey,
+          label: humanizeGameConfigSegment(tagName),
+          description: `Repeated ${humanizeGameConfigSegment(tagName)} entries at ${parentPath}.`,
+          category: inferGameConfigCategory(sectionKey, categoryRules),
+          columns,
+          rows,
+        });
+      }
+    }
+
+    const siblingCounts = childElements.reduce<Record<string, number>>((acc, child) => {
+      acc[child.tagName] = (acc[child.tagName] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    const siblingSeen: Record<string, number> = {};
+    for (const child of childElements) {
+      siblingSeen[child.tagName] = (siblingSeen[child.tagName] ?? 0) + 1;
+      const index = siblingSeen[child.tagName];
+      const includeIndex = (siblingCounts[child.tagName] ?? 0) > 1;
+      const segment = includeIndex ? `${child.tagName}[${index}]` : child.tagName;
+      walk(child, `${parentPath}/${segment}`);
+    }
+  };
+
+  walk(root, root.tagName);
+
+  return Array.from(sections.values()).sort((a, b) => {
+    const categoryDiff = categoryOrder.indexOf(a.category) - categoryOrder.indexOf(b.category);
+    if (categoryDiff !== 0) return categoryDiff;
+    return a.label.localeCompare(b.label);
+  });
+};
+
+const extractGameConfigFields = (
+  xmlContent: string,
+  fieldMetaByPath: Record<string, GameConfigFieldMeta>,
+  categoryOrder: GameConfigCategory[],
+  hiddenPrefixes: string[],
+  categoryRules: GameConfigCategoryRule[],
+): { fields: GameConfigField[]; values: Record<string, string> } => {
+  const doc = parseGameConfigXmlDocument(xmlContent);
+  const root = doc.documentElement;
+  if (!root) return { fields: [], values: {} };
+
+  const values: Record<string, string> = {};
+  const fields: GameConfigField[] = [];
+
+  const walk = (element: Element, parentPath: string) => {
+    const childElements = Array.from(element.children);
+    if (childElements.length === 0) {
+      const path = parentPath;
+      const rawValue = (element.textContent ?? '').trim();
+      values[path] = rawValue;
+
+      if (shouldHideGameConfigPath(path, hiddenPrefixes)) return;
+
+      const explicitMeta = getGameConfigMetaForPath(fieldMetaByPath, path);
+      const inferredType = parseGameConfigFieldType(rawValue);
+      const type = explicitMeta?.type ?? inferredType;
+
+      fields.push({
+        path,
+        label: explicitMeta?.label ?? humanizeGameConfigSegment(path.split('/').pop() ?? path),
+        description: explicitMeta?.description ?? `GameConfig path: ${path}`,
+        category: explicitMeta?.category ?? inferGameConfigCategory(path, categoryRules),
+        type,
+        defaultValue: rawValue,
+        min: explicitMeta?.min,
+        max: explicitMeta?.max,
+        guidance: explicitMeta?.guidance,
+        validation: explicitMeta?.validation,
+      });
+      return;
+    }
+
+    const siblingCounts = childElements.reduce<Record<string, number>>((acc, child) => {
+      acc[child.tagName] = (acc[child.tagName] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    const siblingSeen: Record<string, number> = {};
+    for (const child of childElements) {
+      siblingSeen[child.tagName] = (siblingSeen[child.tagName] ?? 0) + 1;
+      const index = siblingSeen[child.tagName];
+      const includeIndex = (siblingCounts[child.tagName] ?? 0) > 1;
+      const segment = includeIndex ? `${child.tagName}[${index}]` : child.tagName;
+      walk(child, `${parentPath}/${segment}`);
+    }
+  };
+
+  walk(root, root.tagName);
+
+  fields.sort((a, b) => {
+    const categoryDiff = categoryOrder.indexOf(a.category) - categoryOrder.indexOf(b.category);
+    if (categoryDiff !== 0) return categoryDiff;
+    return a.label.localeCompare(b.label);
+  });
+
+  return { fields, values };
+};
+
+const extractFactionConfigFields = (
+  xmlContent: string,
+  fieldMetaByPath: Record<string, FactionConfigFieldMeta>,
+  categoryOrder: FactionConfigCategory[],
+  hiddenPrefixes: string[],
+  categoryRules: FactionConfigCategoryRule[],
+): { fields: FactionConfigField[]; values: Record<string, string> } => {
+  const doc = parseGameConfigXmlDocument(xmlContent);
+  const root = doc.documentElement;
+  if (!root) return { fields: [], values: {} };
+
+  const values: Record<string, string> = {};
+  const fields: FactionConfigField[] = [];
+
+  const walk = (element: Element, parentPath: string) => {
+    const childElements = Array.from(element.children);
+    if (childElements.length === 0) {
+      const path = parentPath;
+      const rawValue = (element.textContent ?? '').trim();
+      values[path] = rawValue;
+
+      if (shouldHideGameConfigPath(path, hiddenPrefixes)) return;
+
+      const explicitMeta = getFactionConfigMetaForPath(fieldMetaByPath, path);
+      const inferredType = parseGameConfigFieldType(rawValue);
+      const type = explicitMeta?.type ?? inferredType;
+
+      fields.push({
+        path,
+        label: explicitMeta?.label ?? humanizeGameConfigSegment(path.split('/').pop() ?? path),
+        description: explicitMeta?.description ?? `FactionConfig path: ${path}`,
+        category: explicitMeta?.category ?? inferFactionConfigCategory(path, categoryRules),
+        type,
+        defaultValue: rawValue,
+        min: explicitMeta?.min,
+        max: explicitMeta?.max,
+        guidance: explicitMeta?.guidance,
+        validation: explicitMeta?.validation,
+      });
+      return;
+    }
+
+    const siblingCounts = childElements.reduce<Record<string, number>>((acc, child) => {
+      acc[child.tagName] = (acc[child.tagName] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    const siblingSeen: Record<string, number> = {};
+    for (const child of childElements) {
+      siblingSeen[child.tagName] = (siblingSeen[child.tagName] ?? 0) + 1;
+      const index = siblingSeen[child.tagName];
+      const includeIndex = (siblingCounts[child.tagName] ?? 0) > 1;
+      const segment = includeIndex ? `${child.tagName}[${index}]` : child.tagName;
+      walk(child, `${parentPath}/${segment}`);
+    }
+  };
+
+  walk(root, root.tagName);
+
+  fields.sort((a, b) => {
+    const categoryDiff = categoryOrder.indexOf(a.category) - categoryOrder.indexOf(b.category);
+    if (categoryDiff !== 0) return categoryDiff;
+    return a.label.localeCompare(b.label);
+  });
+
+  return { fields, values };
+};
+
+const getGameConfigFieldValidation = (field: GameConfigField, rawValue: string): ConfigFieldValidation => {
+  const trimmed = rawValue.trim();
+
+  if (field.type === 'number') {
+    if (!trimmed) {
+      return { error: 'A numeric value is required.', warning: null };
+    }
+
+    const parsed = Number.parseFloat(trimmed);
+    if (!Number.isFinite(parsed)) {
+      return { error: 'Enter a valid number.', warning: null };
+    }
+
+    if (field.min !== undefined && parsed < field.min) {
+      return { error: null, warning: `Value is below minimum and will be clamped to ${field.min}.` };
+    }
+
+    if (field.max !== undefined && parsed > field.max) {
+      return { error: null, warning: `Value is above maximum and will be clamped to ${field.max}.` };
+    }
+
+    if (field.path === 'GameConfig/SunHeatDamage/SunDamageMax') {
+      const minValue = Number.parseFloat(field.defaultValue);
+      if (Number.isFinite(minValue) && parsed < minValue) {
+        return { error: null, warning: 'Sun damage max is lower than its loaded value; verify this is intended.' };
+      }
+    }
+  }
+
+  const schemaValidation = runSchemaValidation(field.validation, trimmed, field.type);
+  if (schemaValidation) {
+    return schemaValidation;
+  }
+
+  if (field.type === 'string' && !trimmed) {
+    return { error: null, warning: 'Empty value may be rejected by the game parser.' };
+  }
+
+  return { error: null, warning: null };
+};
+
+const getFactionConfigFieldValidation = (field: FactionConfigField, rawValue: string): ConfigFieldValidation => {
+  const trimmed = rawValue.trim();
+
+  if (field.type === 'number') {
+    if (!trimmed) {
+      return { error: 'A numeric value is required.', warning: null };
+    }
+
+    const parsed = Number.parseFloat(trimmed);
+    if (!Number.isFinite(parsed)) {
+      return { error: 'Enter a valid number.', warning: null };
+    }
+
+    if (field.min !== undefined && parsed < field.min) {
+      return { error: null, warning: `Value is below minimum and will be clamped to ${field.min}.` };
+    }
+
+    if (field.max !== undefined && parsed > field.max) {
+      return { error: null, warning: `Value is above maximum and will be clamped to ${field.max}.` };
+    }
+  }
+
+  const schemaValidation = runSchemaValidation(field.validation, trimmed, field.type);
+  if (schemaValidation) return schemaValidation;
+
+  if (field.type === 'string' && !trimmed) {
+    return { error: null, warning: 'Empty value may be rejected by the game parser.' };
+  }
+
+  return { error: null, warning: null };
+};
+
+const CONFIG_CATEGORY_LABELS: Record<ServerConfigCategory, string> = {
+  networking: 'Networking',
+  security: 'Security',
+  performance: 'Performance',
+  advanced: 'Advanced',
+};
+
+const CONFIG_CATEGORY_ORDER: ServerConfigCategory[] = ['networking', 'security', 'performance', 'advanced'];
+
+const SERVER_CONFIG_FIELDS: ServerConfigField[] = [
+  {
+    key: 'MAX_CLIENTS',
+    label: 'Max Players',
+    description: 'Maximum number of clients allowed on this server.',
+    category: 'networking',
+    type: 'number',
+    defaultValue: '32',
+    min: 0,
+    validation: { integer: true, message: 'Max players must be a whole number.' },
+  },
+  {
+    key: 'SERVER_LISTEN_IP',
+    label: 'Bind Address',
+    description: 'IP/interface to bind the server to. Use all to listen on every interface.',
+    category: 'networking',
+    type: 'string',
+    defaultValue: 'all',
+  },
+  {
+    key: 'ANNOUNCE_SERVER_TO_SERVERLIST',
+    label: 'Public Server',
+    description: 'Announce this server to the public StarMade server list.',
+    category: 'networking',
+    type: 'boolean',
+    defaultValue: 'false',
+  },
+  {
+    key: 'USE_STARMADE_AUTHENTICATION',
+    label: 'Use Authentication',
+    description: 'Allow StarMade account authentication for connections.',
+    category: 'security',
+    type: 'boolean',
+    defaultValue: 'false',
+  },
+  {
+    key: 'REQUIRE_STARMADE_AUTHENTICATION',
+    label: 'Require Authentication',
+    description: 'Require authenticated StarMade accounts to join.',
+    category: 'security',
+    type: 'boolean',
+    defaultValue: 'false',
+  },
+  {
+    key: 'USE_WHITELIST',
+    label: 'Use Whitelist',
+    description: 'Only allow players listed in whitelist.txt.',
+    category: 'security',
+    type: 'boolean',
+    defaultValue: 'false',
+  },
+  {
+    key: 'SECTOR_AUTOSAVE_SEC',
+    label: 'Autosave Interval (sec)',
+    description: 'How often sectors are autosaved. Use -1 to disable.',
+    category: 'performance',
+    type: 'number',
+    defaultValue: '300',
+    min: -1,
+    guidance: 'Very low intervals can increase disk activity; -1 disables autosave and is risky without manual backups.',
+    validation: { integer: true, message: 'Autosave interval must be a whole number.' },
+  },
+  {
+    key: 'THRUST_SPEED_LIMIT',
+    label: 'Thrust Speed Limit',
+    description: 'Maximum ship speed in m/s.',
+    category: 'performance',
+    type: 'number',
+    defaultValue: '75',
+    min: 0,
+    validation: { integer: true, message: 'Thrust speed limit must be a whole number.' },
+  },
+  {
+    key: 'SOCKET_BUFFER_SIZE',
+    label: 'Socket Buffer Size',
+    description: 'Incoming/outgoing socket buffer size in bytes.',
+    category: 'networking',
+    type: 'number',
+    defaultValue: '65536',
+    min: 1024,
+    validation: { integer: true, message: 'Socket buffer size must be a whole number.' },
+  },
+  {
+    key: 'USE_UDP',
+    label: 'Use UDP',
+    description: 'Use UDP for networking instead of TCP.',
+    category: 'networking',
+    type: 'boolean',
+    defaultValue: 'false',
+  },
+  {
+    key: 'TCP_NODELAY',
+    label: 'TCP No Delay',
+    description: 'Disable Nagle buffering for lower latency.',
+    category: 'networking',
+    type: 'boolean',
+    defaultValue: 'true',
+  },
+  {
+    key: 'NT_SPAM_PROTECT_ACTIVE',
+    label: 'Spam Protection Enabled',
+    description: 'Enable connection spam protection logic.',
+    category: 'security',
+    type: 'boolean',
+    defaultValue: 'true',
+  },
+  {
+    key: 'NT_SPAM_PROTECT_TIME_MS',
+    label: 'Spam Protect Window (ms)',
+    description: 'Time window used by spam protection.',
+    category: 'security',
+    type: 'number',
+    defaultValue: '30000',
+    min: 0,
+    validation: { integer: true, message: 'Spam protection window must be a whole number.' },
+  },
+  {
+    key: 'NT_SPAM_PROTECT_MAX_ATTEMPTS',
+    label: 'Spam Protect Max Attempts',
+    description: 'Maximum connection attempts allowed per window.',
+    category: 'security',
+    type: 'number',
+    defaultValue: '30',
+    min: 0,
+    validation: { integer: true, message: 'Spam protection attempts must be a whole number.' },
+  },
+  {
+    key: 'SECTOR_INACTIVE_TIMEOUT',
+    label: 'Sector Inactive Timeout (sec)',
+    description: 'Time before sectors go inactive (-1 disables).',
+    category: 'performance',
+    type: 'number',
+    defaultValue: '20',
+    min: -1,
+    validation: { integer: true, message: 'Sector timeout must be a whole number.' },
+  },
+  {
+    key: 'SECTOR_INACTIVE_CLEANUP_TIMEOUT',
+    label: 'Sector Cleanup Timeout (sec)',
+    description: 'Time before inactive sectors are removed from memory (-1 disables).',
+    category: 'performance',
+    type: 'number',
+    defaultValue: '10',
+    min: -1,
+    validation: { integer: true, message: 'Sector cleanup timeout must be a whole number.' },
+  },
+  {
+    key: 'MAX_SIMULTANEOUS_EXPLOSIONS',
+    label: 'Max Simultaneous Explosions',
+    description: 'Threaded explosion concurrency cap.',
+    category: 'performance',
+    type: 'number',
+    defaultValue: '10',
+    min: 1,
+    validation: { integer: true, message: 'Explosion concurrency must be a whole number.' },
+  },
+  {
+    key: 'CHUNK_REQUEST_THREAD_POOL_SIZE_TOTAL',
+    label: 'Chunk Thread Pool (Total)',
+    description: 'Total thread count for chunk requests.',
+    category: 'performance',
+    type: 'number',
+    defaultValue: '10',
+    min: 1,
+    guidance: 'Setting this too high can increase CPU contention and frame-time spikes.',
+    validation: { integer: true, message: 'Chunk pool size must be a whole number.' },
+  },
+  {
+    key: 'CHUNK_REQUEST_THREAD_POOL_SIZE_CPU',
+    label: 'Chunk Thread Pool (CPU)',
+    description: 'CPU generation threads used for chunk work.',
+    category: 'performance',
+    type: 'number',
+    defaultValue: '2',
+    min: 1,
+    guidance: 'Keep near available core count minus one to avoid heavy CPU spikes.',
+    validation: { integer: true, message: 'CPU chunk pool size must be a whole number.' },
+  },
+];
+
+const SERVER_CONFIG_DEFAULTS: Record<string, string> = Object.fromEntries(
+  SERVER_CONFIG_FIELDS.map((field) => [field.key, field.defaultValue]),
+);
+
+const inferServerConfigFieldType = (rawValue: string): ServerConfigFieldType => {
+  const normalized = rawValue.trim().toLowerCase();
+  if (normalized === 'true' || normalized === 'false') return 'boolean';
+  if (/^-?\d+$/.test(normalized)) return 'number';
+  return 'string';
+};
+
+const humanizeServerConfigKey = (key: string): string => key
+  .toLowerCase()
+  .split('_')
+  .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+  .join(' ');
+
+const getConfigFieldValidation = (field: ServerConfigField, rawValue: string): ConfigFieldValidation => {
+  const trimmed = rawValue.trim();
+
+  if (field.type === 'number') {
+    if (!trimmed) {
+      return { error: 'A numeric value is required.', warning: null };
+    }
+
+    const parsed = Number.parseInt(trimmed, 10);
+    if (!Number.isFinite(parsed)) {
+      return { error: 'Enter a whole number.', warning: null };
+    }
+
+    if (field.min !== undefined && parsed < field.min) {
+      return { error: null, warning: `Value is below minimum and will be clamped to ${field.min}.` };
+    }
+
+    if (field.max !== undefined && parsed > field.max) {
+      return { error: null, warning: `Value is above maximum and will be clamped to ${field.max}.` };
+    }
+
+    if (field.key === 'SECTOR_AUTOSAVE_SEC' && parsed > 0 && parsed < 30) {
+      return { error: null, warning: 'Frequent autosaves can cause stutter on slower disks.' };
+    }
+
+    if (field.key === 'SECTOR_AUTOSAVE_SEC' && parsed === -1) {
+      return { error: null, warning: 'Autosave disabled. Ensure you have another backup strategy.' };
+    }
+
+    if (
+      (field.key === 'CHUNK_REQUEST_THREAD_POOL_SIZE_TOTAL' || field.key === 'CHUNK_REQUEST_THREAD_POOL_SIZE_CPU')
+      && parsed > 32
+    ) {
+      return { error: null, warning: 'Very high thread counts can cause severe CPU spikes.' };
+    }
+  }
+
+  const schemaValidation = runSchemaValidation(field.validation, trimmed, field.type);
+  if (schemaValidation) {
+    return schemaValidation;
+  }
+
+  if (field.type === 'string' && !trimmed) {
+    return { error: null, warning: `Empty value will fall back to default (${field.defaultValue}).` };
+  }
+
+  return { error: null, warning: null };
+};
 
 interface ServerActionDefinition {
   id: ServerActionId;
@@ -208,18 +1514,84 @@ interface ServerActionDefinition {
 
 const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [activeTab, setActiveTab] = useState<ServerPanelTab>('control');
-  const [filter, setFilter] = useState<LogFilter>('all');
+  const [activeConfigTab, setActiveConfigTab] = useState<ConfigEditorTab>('server-cfg');
+  const [activeLogFilters, setActiveLogFilters] = useState<LogFilter[]>([...LOG_FILTER_OPTIONS]);
   const [autoScroll, setAutoScroll] = useState(true);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [lifecycleState, setLifecycleState] = useState<ServerLifecycleState>('stopped');
   const [runtimePid, setRuntimePid] = useState<number | undefined>(undefined);
   const [runtimeUptimeMs, setRuntimeUptimeMs] = useState<number | undefined>(undefined);
+  const [serverNameInput, setServerNameInput] = useState<string>('');
+  const [isSavingServerName, setIsSavingServerName] = useState(false);
+  const [serverPortInput, setServerPortInput] = useState<string>('4242');
+  const [isSavingServerPort, setIsSavingServerPort] = useState(false);
+  const [serverConfigSchemaFields, setServerConfigSchemaFields] = useState<ServerConfigField[]>(SERVER_CONFIG_FIELDS);
+  const [serverConfigCategoryLabels, setServerConfigCategoryLabels] = useState<Record<string, string>>(CONFIG_CATEGORY_LABELS);
+  const [serverConfigCategoryOrder, setServerConfigCategoryOrder] = useState<string[]>(CONFIG_CATEGORY_ORDER);
+  const [gameConfigFieldMetaByPath, setGameConfigFieldMetaByPath] = useState<Record<string, GameConfigFieldMeta>>(GAME_CONFIG_FIELD_META);
+  const [gameConfigCategoryLabels, setGameConfigCategoryLabels] = useState<Record<string, string>>(GAME_CONFIG_CATEGORY_LABELS);
+  const [gameConfigCategoryOrder, setGameConfigCategoryOrder] = useState<GameConfigCategory[]>(GAME_CONFIG_CATEGORY_ORDER);
+  const [gameConfigCommentToggleEntries, setGameConfigCommentToggleEntries] = useState<GameConfigCommentToggleEntry[]>(GAME_CONFIG_COMMENT_TOGGLE_DEFAULTS);
+  const [gameConfigHiddenPathPrefixes, setGameConfigHiddenPathPrefixes] = useState<string[]>(GAME_CONFIG_HIDDEN_PATH_PREFIXES);
+  const [gameConfigCategoryRules, setGameConfigCategoryRules] = useState<GameConfigCategoryRule[]>(GAME_CONFIG_CATEGORY_RULES);
+  const [factionConfigFieldMetaByPath, setFactionConfigFieldMetaByPath] = useState<Record<string, FactionConfigFieldMeta>>(FACTION_CONFIG_FIELD_META);
+  const [factionConfigCategoryLabels, setFactionConfigCategoryLabels] = useState<Record<string, string>>(FACTION_CONFIG_CATEGORY_LABELS);
+  const [factionConfigCategoryOrder, setFactionConfigCategoryOrder] = useState<FactionConfigCategory[]>(FACTION_CONFIG_CATEGORY_ORDER);
+  const [factionConfigHiddenPathPrefixes, setFactionConfigHiddenPathPrefixes] = useState<string[]>(FACTION_CONFIG_HIDDEN_PATH_PREFIXES);
+  const [factionConfigCategoryRules, setFactionConfigCategoryRules] = useState<FactionConfigCategoryRule[]>(FACTION_CONFIG_CATEGORY_RULES);
+  const [savingGameConfigToggleId, setSavingGameConfigToggleId] = useState<string | null>(null);
+  const [gameConfigCommentToggleStates, setGameConfigCommentToggleStates] = useState<Record<string, boolean>>({});
+  const [gameConfigToggleExpanded, setGameConfigToggleExpanded] = useState<Record<string, boolean>>({});
+  const [factionConfigXmlText, setFactionConfigXmlText] = useState('');
+  const [factionConfigFields, setFactionConfigFields] = useState<FactionConfigField[]>([]);
+  const [factionConfigValues, setFactionConfigValues] = useState<Record<string, string>>({});
+  const [factionConfigSavedValues, setFactionConfigSavedValues] = useState<Record<string, string>>({});
+  const [factionConfigSearchTerm, setFactionConfigSearchTerm] = useState('');
+  const [factionConfigCategoryFilter, setFactionConfigCategoryFilter] = useState<Set<string>>(new Set());
+  const [factionConfigLoadedServerId, setFactionConfigLoadedServerId] = useState<string | null>(null);
+  const [isFactionConfigLoading, setIsFactionConfigLoading] = useState(false);
+  const [savingFactionConfigPath, setSavingFactionConfigPath] = useState<string | null>(null);
+  const [factionConfigError, setFactionConfigError] = useState<string | null>(null);
+  const [factionConfigRelativePath, setFactionConfigRelativePath] = useState<string>(FACTION_CONFIG_PATH_CANDIDATES[0]);
+  const [configFields, setConfigFields] = useState<ServerConfigField[]>(SERVER_CONFIG_FIELDS);
+  const [serverConfigValues, setServerConfigValues] = useState<Record<string, string>>(SERVER_CONFIG_DEFAULTS);
+  const [configSearchTerm, setConfigSearchTerm] = useState('');
+  const [configCategoryFilter, setConfigCategoryFilter] = useState<Set<string>>(new Set());
+  const [isConfigLoading, setIsConfigLoading] = useState(false);
+  const [gameConfigXmlText, setGameConfigXmlText] = useState('');
+  const [gameConfigFields, setGameConfigFields] = useState<GameConfigField[]>([]);
+  const [gameConfigListSections, setGameConfigListSections] = useState<GameConfigListSection[]>([]);
+  const [gameConfigValues, setGameConfigValues] = useState<Record<string, string>>({});
+  const [gameConfigSavedValues, setGameConfigSavedValues] = useState<Record<string, string>>({});
+  const [gameConfigSearchTerm, setGameConfigSearchTerm] = useState('');
+  const [gameConfigCategoryFilter, setGameConfigCategoryFilter] = useState<Set<string>>(new Set());
+  const [gameConfigLoadedServerId, setGameConfigLoadedServerId] = useState<string | null>(null);
+  const [isGameConfigLoading, setIsGameConfigLoading] = useState(false);
+  const [savingGameConfigPath, setSavingGameConfigPath] = useState<string | null>(null);
+  const [gameConfigError, setGameConfigError] = useState<string | null>(null);
+  const [savingConfigKey, setSavingConfigKey] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [logPath, setLogPath] = useState<string | null>(null);
+  const [logCategories, setLogCategories] = useState<LogCategory[]>([]);
+  const [selectedLogRelativePath, setSelectedLogRelativePath] = useState<string | null>(null);
+  const [selectedLogPathByCategoryId, setSelectedLogPathByCategoryId] = useState<Record<string, string>>({});
+  const [isLogListLoading, setIsLogListLoading] = useState(false);
+  const [isLogFileLoading, setIsLogFileLoading] = useState(false);
+  const [isLogFileTruncated, setIsLogFileTruncated] = useState(false);
+  const [logLoadError, setLogLoadError] = useState<string | null>(null);
+  const [fileEntriesByDir, setFileEntriesByDir] = useState<Record<string, InstallationFileEntry[]>>({});
+  const [expandedFileDirs, setExpandedFileDirs] = useState<string[]>(['']);
+  const [openFileTabs, setOpenFileTabs] = useState<string[]>([]);
+  const [activeFileTabPath, setActiveFileTabPath] = useState<string | null>(null);
+  const [fileContentByPath, setFileContentByPath] = useState<Record<string, string>>({});
+  const [savedFileContentByPath, setSavedFileContentByPath] = useState<Record<string, string>>({});
+  const [isFileBrowserLoading, setIsFileBrowserLoading] = useState(false);
+  const [isFileEditorLoading, setIsFileEditorLoading] = useState(false);
+  const [isFileSaving, setIsFileSaving] = useState(false);
+  const [fileTabError, setFileTabError] = useState<string | null>(null);
   const [dashboardLayout, setDashboardLayout] = useState<DashboardLayout>(createDefaultDashboardLayout);
   const [dashboardLoaded, setDashboardLoaded] = useState(false);
   const [isLayoutEditMode, setIsLayoutEditMode] = useState(false);
-  const [isActionCatalogOpen, setIsActionCatalogOpen] = useState(false);
   const [selectedGroupId, setSelectedGroupId] = useState<string>('main');
   const [newGroupName, setNewGroupName] = useState('');
   const [draggedWidget, setDraggedWidget] = useState<DraggedWidget | null>(null);
@@ -240,6 +1612,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     selectedServer,
     selectedServerId,
     setSelectedServerId,
+    updateServer: updateServerItem,
     downloadStatuses,
   } = useData();
 
@@ -258,12 +1631,192 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const effectiveServerName = serverName || effectiveServer?.name || 'Server';
   const effectiveServerIp = effectiveServer?.serverIp?.trim() || '127.0.0.1';
+  const fallbackMaxPlayers = Math.max(0, effectiveServer?.maxPlayers ?? 32);
   const hasGameApi = typeof window !== 'undefined' && !!window.launcher?.game;
   const hasDownloadApi = typeof window !== 'undefined' && !!window.launcher?.download;
   const hasStoreApi = typeof window !== 'undefined' && !!window.launcher?.store;
 
+  const serverConfigDefaults = useMemo<Record<string, string>>(
+    () => Object.fromEntries(serverConfigSchemaFields.map((field) => [field.key, field.defaultValue])),
+    [serverConfigSchemaFields],
+  );
+
+  const serverConfigFieldKeys = useMemo(
+    () => new Set(serverConfigSchemaFields.map((field) => field.key)),
+    [serverConfigSchemaFields],
+  );
+
   const serverDownloadStatus = effectiveServer ? downloadStatuses[effectiveServer.id] : undefined;
   const isUpdating = serverDownloadStatus?.state === 'checksums' || serverDownloadStatus?.state === 'downloading';
+
+  const selectedLogCategoryId = useMemo(() => {
+    if (!selectedLogRelativePath) return null;
+    const category = logCategories.find((item) => item.files.some((file) => file.relativePath === selectedLogRelativePath));
+    return category?.id ?? null;
+  }, [logCategories, selectedLogRelativePath]);
+
+  const selectedLogCategoryFiles = useMemo(() => {
+    if (!selectedLogCategoryId) return [] as LogFileItem[];
+    return logCategories.find((category) => category.id === selectedLogCategoryId)?.files ?? [];
+  }, [logCategories, selectedLogCategoryId]);
+
+  const selectedLogCategory = useMemo(() => {
+    if (!selectedLogCategoryId) return null;
+    return logCategories.find((category) => category.id === selectedLogCategoryId) ?? null;
+  }, [logCategories, selectedLogCategoryId]);
+
+  const selectedLogRelativePathRef = useRef<string | null>(null);
+  const selectedLogPathByCategoryRef = useRef<Record<string, string>>({});
+
+  useEffect(() => {
+    selectedLogRelativePathRef.current = selectedLogRelativePath;
+  }, [selectedLogRelativePath]);
+
+  useEffect(() => {
+    selectedLogPathByCategoryRef.current = selectedLogPathByCategoryId;
+  }, [selectedLogPathByCategoryId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.launcher?.app?.getServerPanelSchema) return;
+
+    let cancelled = false;
+
+    const loadSchema = async () => {
+      try {
+        const raw = await window.launcher.app.getServerPanelSchema();
+        if (cancelled || !isServerPanelSchema(raw)) return;
+
+        const serverFields = Array.isArray(raw.serverConfig?.fields) && raw.serverConfig?.fields.length > 0
+          ? raw.serverConfig.fields
+          : SERVER_CONFIG_FIELDS;
+        const serverLabels = raw.serverConfig?.categoryLabels && typeof raw.serverConfig.categoryLabels === 'object'
+          ? raw.serverConfig.categoryLabels
+          : CONFIG_CATEGORY_LABELS;
+        const serverOrder = Array.isArray(raw.serverConfig?.categoryOrder) && raw.serverConfig.categoryOrder.length > 0
+          ? raw.serverConfig.categoryOrder
+          : CONFIG_CATEGORY_ORDER;
+
+        const gameMeta = raw.gameConfig?.fieldMeta && typeof raw.gameConfig.fieldMeta === 'object'
+          ? raw.gameConfig.fieldMeta
+          : GAME_CONFIG_FIELD_META;
+        const gameLabels = raw.gameConfig?.categoryLabels && typeof raw.gameConfig.categoryLabels === 'object'
+          ? raw.gameConfig.categoryLabels
+          : GAME_CONFIG_CATEGORY_LABELS;
+        const parsedGameOrder = Array.isArray(raw.gameConfig?.categoryOrder)
+          ? raw.gameConfig.categoryOrder.filter((entry): entry is GameConfigCategory => (
+            entry === 'economy' || entry === 'environment' || entry === 'limits' || entry === 'other'
+          ))
+          : [];
+        const gameOrder = parsedGameOrder.length > 0 ? parsedGameOrder : GAME_CONFIG_CATEGORY_ORDER;
+        const toggleEntries = Array.isArray(raw.gameConfig?.commentToggleEntries) && raw.gameConfig.commentToggleEntries.length > 0
+          ? raw.gameConfig.commentToggleEntries
+          : GAME_CONFIG_COMMENT_TOGGLE_DEFAULTS;
+        const hiddenPrefixes = Array.isArray(raw.gameConfig?.hiddenPathPrefixes)
+          ? raw.gameConfig.hiddenPathPrefixes.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+          : [];
+        const categoryRules = Array.isArray(raw.gameConfig?.categoryRules)
+          ? raw.gameConfig.categoryRules.filter((entry): entry is GameConfigCategoryRule => (
+            !!entry
+            && typeof entry === 'object'
+            && !Array.isArray(entry)
+            && (entry.category === 'economy' || entry.category === 'environment' || entry.category === 'limits' || entry.category === 'other')
+            && (typeof entry.startsWith === 'string' || typeof entry.includes === 'string')
+          ))
+          : [];
+        const factionMeta = raw.factionConfig?.fieldMeta && typeof raw.factionConfig.fieldMeta === 'object'
+          ? raw.factionConfig.fieldMeta
+          : FACTION_CONFIG_FIELD_META;
+        const factionLabels = raw.factionConfig?.categoryLabels && typeof raw.factionConfig.categoryLabels === 'object'
+          ? raw.factionConfig.categoryLabels
+          : FACTION_CONFIG_CATEGORY_LABELS;
+        const parsedFactionOrder = Array.isArray(raw.factionConfig?.categoryOrder)
+          ? raw.factionConfig.categoryOrder.filter((entry): entry is FactionConfigCategory => (
+            entry === 'activity' || entry === 'system-bonus' || entry === 'points' || entry === 'other'
+          ))
+          : [];
+        const factionOrder = parsedFactionOrder.length > 0 ? parsedFactionOrder : FACTION_CONFIG_CATEGORY_ORDER;
+        const factionHiddenPrefixes = Array.isArray(raw.factionConfig?.hiddenPathPrefixes)
+          ? raw.factionConfig.hiddenPathPrefixes.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+          : [];
+        const factionCategoryRules = Array.isArray(raw.factionConfig?.categoryRules)
+          ? raw.factionConfig.categoryRules.filter((entry): entry is FactionConfigCategoryRule => (
+            !!entry
+            && typeof entry === 'object'
+            && !Array.isArray(entry)
+            && (entry.category === 'activity' || entry.category === 'system-bonus' || entry.category === 'points' || entry.category === 'other')
+            && (typeof entry.startsWith === 'string' || typeof entry.includes === 'string')
+          ))
+          : [];
+
+        setServerConfigSchemaFields(serverFields);
+        setServerConfigCategoryLabels(serverLabels);
+        setServerConfigCategoryOrder(serverOrder);
+        setGameConfigFieldMetaByPath(gameMeta);
+        setGameConfigCategoryLabels(gameLabels);
+        setGameConfigCategoryOrder(gameOrder);
+        setGameConfigCommentToggleEntries(toggleEntries);
+        setGameConfigHiddenPathPrefixes(hiddenPrefixes.length > 0 ? hiddenPrefixes : GAME_CONFIG_HIDDEN_PATH_PREFIXES);
+        setGameConfigCategoryRules(categoryRules.length > 0 ? categoryRules : GAME_CONFIG_CATEGORY_RULES);
+        setFactionConfigFieldMetaByPath(factionMeta);
+        setFactionConfigCategoryLabels(factionLabels);
+        setFactionConfigCategoryOrder(factionOrder);
+        setFactionConfigHiddenPathPrefixes(factionHiddenPrefixes.length > 0 ? factionHiddenPrefixes : FACTION_CONFIG_HIDDEN_PATH_PREFIXES);
+        setFactionConfigCategoryRules(factionCategoryRules.length > 0 ? factionCategoryRules : FACTION_CONFIG_CATEGORY_RULES);
+      } catch (error) {
+        console.warn('[ServerPanel] Failed to load server panel schema:', error);
+      }
+    };
+
+    void loadSchema();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const reloadLogCatalog = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi) {
+      setLogCategories([]);
+      setSelectedLogRelativePath(null);
+      setSelectedLogPathByCategoryId({});
+      setLogPath(null);
+      return;
+    }
+
+    setIsLogListLoading(true);
+    setLogLoadError(null);
+    try {
+      const catalog = await window.launcher.game.listLogFiles(effectiveServer.path);
+      setLogCategories(catalog.categories);
+
+      const knownPaths = new Set(catalog.categories.flatMap((category) => category.files.map((file) => file.relativePath)));
+      const fallback = catalog.defaultRelativePath;
+      const currentSelection = selectedLogRelativePathRef.current;
+      const nextSelected = currentSelection && knownPaths.has(currentSelection)
+        ? currentSelection
+        : fallback;
+
+      const nextByCategory = { ...selectedLogPathByCategoryRef.current };
+      for (const category of catalog.categories) {
+        const currentForCategory = nextByCategory[category.id];
+        const inCategory = category.files.some((file) => file.relativePath === currentForCategory);
+        if (!inCategory && category.files[0]) {
+          nextByCategory[category.id] = category.files[0].relativePath;
+        }
+      }
+      setSelectedLogPathByCategoryId(nextByCategory);
+
+      setSelectedLogRelativePath(nextSelected ?? null);
+      setLogPath(nextSelected ? `logs/${nextSelected}` : null);
+    } catch (error) {
+      setLogCategories([]);
+      setSelectedLogRelativePath(null);
+      setLogPath(null);
+      setLogLoadError(`Failed to list logs folder contents: ${String(error)}`);
+    } finally {
+      setIsLogListLoading(false);
+    }
+  }, [effectiveServer, hasGameApi]);
 
   const refreshRuntimeStatus = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) {
@@ -301,31 +1854,438 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setLogs([]);
     setActionError(null);
     setLogPath(null);
+    setLogCategories([]);
+    setSelectedLogRelativePath(null);
+    setSelectedLogPathByCategoryId({});
+    setIsLogFileTruncated(false);
+    setLogLoadError(null);
+    setActiveConfigTab('server-cfg');
+    setGameConfigXmlText('');
+    setGameConfigFields([]);
+    setGameConfigListSections([]);
+    setGameConfigValues({});
+    setGameConfigSavedValues({});
+    setGameConfigSearchTerm('');
+    setGameConfigCategoryFilter(new Set());
+    setGameConfigCommentToggleStates({});
+    setGameConfigToggleExpanded({});
+    setSavingGameConfigToggleId(null);
+    setGameConfigLoadedServerId(null);
+    setSavingGameConfigPath(null);
+    setGameConfigError(null);
+    setFactionConfigXmlText('');
+    setFactionConfigFields([]);
+    setFactionConfigValues({});
+    setFactionConfigSavedValues({});
+    setFactionConfigSearchTerm('');
+    setFactionConfigCategoryFilter(new Set());
+    setFactionConfigLoadedServerId(null);
+    setSavingFactionConfigPath(null);
+    setFactionConfigError(null);
+    setFactionConfigRelativePath(FACTION_CONFIG_PATH_CANDIDATES[0]);
+    setFileEntriesByDir({});
+    setExpandedFileDirs(['']);
+    setOpenFileTabs([]);
+    setActiveFileTabPath(null);
+    setFileContentByPath({});
+    setSavedFileContentByPath({});
+    setFileTabError(null);
+    setServerNameInput(effectiveServer?.name ?? '');
+    setServerPortInput(effectiveServer?.port?.trim() || '4242');
   }, [effectiveServer?.id]);
 
+  const readFactionConfigXmlFromInstallation = useCallback(async (): Promise<{ content: string; relativePath: string; error?: string }> => {
+    if (!effectiveServer || !hasGameApi) {
+      return { content: '', relativePath: FACTION_CONFIG_PATH_CANDIDATES[0], error: 'Server context unavailable.' };
+    }
+
+    let firstError: string | undefined;
+    for (const relativePath of FACTION_CONFIG_PATH_CANDIDATES) {
+      const payload = await window.launcher.game.readInstallationFile(effectiveServer.path, relativePath);
+      if (!payload.error) {
+        return { content: payload.content ?? '', relativePath };
+      }
+      if (!firstError) firstError = payload.error;
+    }
+
+    return {
+      content: '',
+      relativePath: FACTION_CONFIG_PATH_CANDIDATES[0],
+      error: firstError ?? `Could not find ${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}.`,
+    };
+  }, [effectiveServer, hasGameApi]);
+
+  const writeFactionConfigXmlToInstallation = useCallback(async (content: string): Promise<{ success: boolean; relativePath?: string; error?: string }> => {
+    if (!effectiveServer || !hasGameApi) {
+      return { success: false, error: 'Server context unavailable.' };
+    }
+
+    const uniqueCandidates = [
+      factionConfigRelativePath,
+      ...FACTION_CONFIG_PATH_CANDIDATES.filter((path) => path !== factionConfigRelativePath),
+    ];
+
+    let firstError: string | undefined;
+    for (const relativePath of uniqueCandidates) {
+      const result = await window.launcher.game.writeInstallationFile(effectiveServer.path, relativePath, content);
+      if (result.success) {
+        return { success: true, relativePath };
+      }
+      if (!firstError) firstError = result.error;
+    }
+
+    return { success: false, error: firstError ?? `Could not write ${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}.` };
+  }, [effectiveServer, factionConfigRelativePath, hasGameApi]);
+
   useEffect(() => {
+    void reloadLogCatalog();
+  }, [reloadLogCatalog]);
+
+  const reloadServerConfigValues = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi) {
+      setConfigFields(serverConfigSchemaFields);
+      setServerConfigValues(serverConfigDefaults);
+      return;
+    }
+
+    setIsConfigLoading(true);
+    try {
+      const cfgEntries: ServerConfigEntry[] = await window.launcher.game.listServerConfigValues(effectiveServer.path);
+
+      const discoveredFields: ServerConfigField[] = cfgEntries
+        .filter((entry) => !serverConfigFieldKeys.has(entry.key))
+        .map((entry) => ({
+          key: entry.key,
+          label: humanizeServerConfigKey(entry.key),
+          description: entry.comment || 'Discovered key from server.cfg.',
+          category: 'advanced',
+          type: inferServerConfigFieldType(entry.value),
+          defaultValue: entry.value,
+        }))
+        .sort((a, b) => a.key.localeCompare(b.key));
+
+      const nextFields = [...serverConfigSchemaFields, ...discoveredFields];
+      const valueMap: Record<string, string> = Object.fromEntries(nextFields.map((field) => [field.key, field.defaultValue]));
+      for (const entry of cfgEntries) {
+        valueMap[entry.key] = entry.value;
+      }
+
+      setConfigFields(nextFields);
+      setServerConfigValues(valueMap);
+    } catch (error) {
+      console.warn('[ServerPanel] Failed to load configuration values from server.cfg:', error);
+      setConfigFields(serverConfigSchemaFields);
+      setServerConfigValues(serverConfigDefaults);
+    } finally {
+      setIsConfigLoading(false);
+    }
+  }, [
+    effectiveServer,
+    hasGameApi,
+    serverConfigDefaults,
+    serverConfigFieldKeys,
+    serverConfigSchemaFields,
+  ]);
+
+  useEffect(() => {
+    void reloadServerConfigValues();
+  }, [reloadServerConfigValues]);
+
+  const hydrateGameConfigState = useCallback((xmlContent: string, options?: { keepDrafts?: boolean }) => {
+    const parsed = extractGameConfigFields(
+      xmlContent,
+      gameConfigFieldMetaByPath,
+      gameConfigCategoryOrder,
+      gameConfigHiddenPathPrefixes,
+      gameConfigCategoryRules,
+    );
+    const listSections = extractGameConfigListSections(xmlContent, gameConfigCategoryOrder, gameConfigCategoryRules);
+    const toggleStates = getGameConfigCommentToggleStates(xmlContent, gameConfigCommentToggleEntries);
+    setGameConfigXmlText(xmlContent);
+    setGameConfigFields(parsed.fields);
+    setGameConfigListSections(listSections);
+    setGameConfigValues((prev) => (options?.keepDrafts ? { ...parsed.values, ...prev } : parsed.values));
+    setGameConfigSavedValues(parsed.values);
+    setGameConfigCommentToggleStates(toggleStates);
+  }, [
+    gameConfigCategoryOrder,
+    gameConfigCategoryRules,
+    gameConfigCommentToggleEntries,
+    gameConfigFieldMetaByPath,
+    gameConfigHiddenPathPrefixes,
+  ]);
+
+  useEffect(() => {
+    if (activeConfigTab !== 'game-config-xml') return;
+    if (!effectiveServer || !hasGameApi) return;
+    if (gameConfigLoadedServerId === effectiveServer.id) return;
+
+    let cancelled = false;
+    setIsGameConfigLoading(true);
+    setGameConfigError(null);
+
+    const loadGameConfigXml = async () => {
+      try {
+        const content = await window.launcher.game.readGameConfigXml(effectiveServer.path);
+        if (cancelled) return;
+
+        const next = content ?? '';
+        hydrateGameConfigState(next);
+        setGameConfigLoadedServerId(effectiveServer.id);
+      } catch (error) {
+        if (cancelled) return;
+        setGameConfigError(`Failed to load GameConfig.xml: ${String(error)}`);
+        setGameConfigFields([]);
+        setGameConfigListSections([]);
+        setGameConfigValues({});
+        setGameConfigSavedValues({});
+      } finally {
+        if (!cancelled) setIsGameConfigLoading(false);
+      }
+    };
+
+    void loadGameConfigXml();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConfigTab, effectiveServer, gameConfigLoadedServerId, hasGameApi, hydrateGameConfigState]);
+
+  const hydrateFactionConfigState = useCallback((xmlContent: string, options?: { keepDrafts?: boolean }) => {
+    const parsed = extractFactionConfigFields(
+      xmlContent,
+      factionConfigFieldMetaByPath,
+      factionConfigCategoryOrder,
+      factionConfigHiddenPathPrefixes,
+      factionConfigCategoryRules,
+    );
+    setFactionConfigXmlText(xmlContent);
+    setFactionConfigFields(parsed.fields);
+    setFactionConfigValues((prev) => (options?.keepDrafts ? { ...parsed.values, ...prev } : parsed.values));
+    setFactionConfigSavedValues(parsed.values);
+  }, [
+    factionConfigCategoryOrder,
+    factionConfigCategoryRules,
+    factionConfigFieldMetaByPath,
+    factionConfigHiddenPathPrefixes,
+  ]);
+
+  useEffect(() => {
+    if (activeConfigTab !== 'faction-config-xml') return;
+    if (!effectiveServer || !hasGameApi) return;
+    if (factionConfigLoadedServerId === effectiveServer.id) return;
+
+    let cancelled = false;
+    setIsFactionConfigLoading(true);
+    setFactionConfigError(null);
+
+    const loadFactionConfigXml = async () => {
+      try {
+        const payload = await readFactionConfigXmlFromInstallation();
+        if (cancelled) return;
+
+        if (payload.error) {
+          setFactionConfigError(`Failed to load FactionConfig.xml: ${payload.error}`);
+          setFactionConfigFields([]);
+          setFactionConfigValues({});
+          setFactionConfigSavedValues({});
+          return;
+        }
+
+        const next = payload.content ?? '';
+        hydrateFactionConfigState(next);
+        setFactionConfigRelativePath(payload.relativePath);
+        setFactionConfigLoadedServerId(effectiveServer.id);
+      } catch (error) {
+        if (cancelled) return;
+        setFactionConfigError(`Failed to load FactionConfig.xml: ${String(error)}`);
+        setFactionConfigFields([]);
+        setFactionConfigValues({});
+        setFactionConfigSavedValues({});
+      } finally {
+        if (!cancelled) setIsFactionConfigLoading(false);
+      }
+    };
+
+    void loadFactionConfigXml();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeConfigTab,
+    effectiveServer,
+    factionConfigLoadedServerId,
+    hasGameApi,
+    hydrateFactionConfigState,
+    readFactionConfigXmlFromInstallation,
+  ]);
+
+  const loadFileDirectory = useCallback(async (relativeDir = '') => {
     if (!effectiveServer || !hasGameApi) return;
 
-    window.launcher.game.getLogPath(effectiveServer.id).then(setLogPath).catch(() => {
-      setLogPath(null);
-    });
-
-    return window.launcher.game.onLog((data) => {
-      if (data.installationId !== effectiveServer.id) return;
-
-      const entry: LogEntry = {
-        timestamp: new Date().toLocaleTimeString(),
-        level: normalizeLogLevel(data.level),
-        message: data.message,
-      };
-
-      setLogs((prev) => {
-        const next = [...prev, entry];
-        if (next.length <= LOG_BUFFER_CAP) return next;
-        return next.slice(next.length - LOG_BUFFER_CAP);
-      });
-    });
+    setIsFileBrowserLoading(true);
+    try {
+      const entries = await window.launcher.game.listInstallationFiles(effectiveServer.path, relativeDir);
+      setFileEntriesByDir((prev) => ({ ...prev, [relativeDir]: entries }));
+    } catch (error) {
+      setFileTabError(`Failed to list files in ${relativeDir || '/'}: ${String(error)}`);
+    } finally {
+      setIsFileBrowserLoading(false);
+    }
   }, [effectiveServer, hasGameApi]);
+
+  useEffect(() => {
+    if (activeTab !== 'files') return;
+    if (!effectiveServer || !hasGameApi) return;
+    if (fileEntriesByDir['']) return;
+    void loadFileDirectory('');
+  }, [activeTab, effectiveServer, fileEntriesByDir, hasGameApi, loadFileDirectory]);
+
+  const toggleFileDirectory = useCallback((relativeDir: string) => {
+    setExpandedFileDirs((prev) => {
+      const isExpanded = prev.includes(relativeDir);
+      if (isExpanded) {
+        return prev.filter((dir) => dir !== relativeDir);
+      }
+      return [...prev, relativeDir];
+    });
+
+    if (!fileEntriesByDir[relativeDir]) {
+      void loadFileDirectory(relativeDir);
+    }
+  }, [fileEntriesByDir, loadFileDirectory]);
+
+  const openFileInTab = useCallback(async (relativePath: string) => {
+    if (!effectiveServer || !hasGameApi) return;
+
+    setOpenFileTabs((prev) => (prev.includes(relativePath) ? prev : [...prev, relativePath]));
+    setActiveFileTabPath(relativePath);
+
+    if (relativePath in fileContentByPath) return;
+
+    setIsFileEditorLoading(true);
+    setFileTabError(null);
+    try {
+      const payload = await window.launcher.game.readInstallationFile(effectiveServer.path, relativePath);
+      if (payload.error) {
+        setFileTabError(`Failed to open ${relativePath}: ${payload.error}`);
+        return;
+      }
+
+      setFileContentByPath((prev) => ({ ...prev, [relativePath]: payload.content }));
+      setSavedFileContentByPath((prev) => ({ ...prev, [relativePath]: payload.content }));
+    } catch (error) {
+      setFileTabError(`Failed to open ${relativePath}: ${String(error)}`);
+    } finally {
+      setIsFileEditorLoading(false);
+    }
+  }, [effectiveServer, fileContentByPath, hasGameApi]);
+
+  const closeFileTab = useCallback((relativePath: string) => {
+    setOpenFileTabs((prev) => {
+      const next = prev.filter((path) => path !== relativePath);
+      setActiveFileTabPath((current) => {
+        if (current !== relativePath) return current;
+        return next.length > 0 ? next[next.length - 1] : null;
+      });
+      return next;
+    });
+  }, []);
+
+  const reloadActiveFileTab = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || !activeFileTabPath) return;
+
+    setIsFileEditorLoading(true);
+    setFileTabError(null);
+    try {
+      const payload = await window.launcher.game.readInstallationFile(effectiveServer.path, activeFileTabPath);
+      if (payload.error) {
+        setFileTabError(`Failed to reload ${activeFileTabPath}: ${payload.error}`);
+        return;
+      }
+      setFileContentByPath((prev) => ({ ...prev, [activeFileTabPath]: payload.content }));
+      setSavedFileContentByPath((prev) => ({ ...prev, [activeFileTabPath]: payload.content }));
+    } catch (error) {
+      setFileTabError(`Failed to reload ${activeFileTabPath}: ${String(error)}`);
+    } finally {
+      setIsFileEditorLoading(false);
+    }
+  }, [activeFileTabPath, effectiveServer, hasGameApi]);
+
+  const saveActiveFileTab = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || !activeFileTabPath || isFileSaving) return;
+
+    setIsFileSaving(true);
+    setFileTabError(null);
+    try {
+      const content = fileContentByPath[activeFileTabPath] ?? '';
+      const result = await window.launcher.game.writeInstallationFile(effectiveServer.path, activeFileTabPath, content);
+      if (!result.success) {
+        setFileTabError(result.error ?? `Failed to save ${activeFileTabPath}.`);
+        return;
+      }
+
+      setSavedFileContentByPath((prev) => ({ ...prev, [activeFileTabPath]: content }));
+    } catch (error) {
+      setFileTabError(`Failed to save ${activeFileTabPath}: ${String(error)}`);
+    } finally {
+      setIsFileSaving(false);
+    }
+  }, [activeFileTabPath, effectiveServer, fileContentByPath, hasGameApi, isFileSaving]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!effectiveServer || !hasGameApi || !selectedLogRelativePath) {
+      setLogs([]);
+      setIsLogFileTruncated(false);
+      setIsLogFileLoading(false);
+      return;
+    }
+
+    setIsLogFileLoading(true);
+    setLogLoadError(null);
+    setLogPath(`logs/${selectedLogRelativePath}`);
+
+    const loadLogFile = async () => {
+      try {
+        const payload = await window.launcher.game.readLogFile(effectiveServer.path, selectedLogRelativePath);
+        if (cancelled) return;
+
+        if (payload.error) {
+          setLogs([]);
+          setIsLogFileTruncated(false);
+          setLogLoadError(`Failed to read ${selectedLogRelativePath}: ${payload.error}`);
+          return;
+        }
+
+        const lines = payload.content.split(/\r?\n/).filter((line) => line.trim().length > 0);
+        const parsed = lines.map(parseLogLine);
+        const bounded = parsed.length <= LOG_BUFFER_CAP
+          ? parsed
+          : parsed.slice(parsed.length - LOG_BUFFER_CAP);
+
+        setLogs(bounded);
+        setIsLogFileTruncated(payload.truncated);
+      } catch (error) {
+        if (cancelled) return;
+        setLogs([]);
+        setIsLogFileTruncated(false);
+        setLogLoadError(`Failed to load ${selectedLogRelativePath}: ${String(error)}`);
+      } finally {
+        if (!cancelled) {
+          setIsLogFileLoading(false);
+        }
+      }
+    };
+
+    void loadLogFile();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveServer, hasGameApi, selectedLogRelativePath]);
 
   useEffect(() => {
     if (autoScroll && logContainerRef.current) {
@@ -428,7 +2388,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   useEffect(() => {
     if (isLayoutEditMode) return;
-    setIsActionCatalogOpen(false);
     setDraggedWidget(null);
     setDraggedGroupId(null);
     setDraggedQuickAction(null);
@@ -512,13 +2471,47 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [effectiveServer, hasDownloadApi, resolveBuildPath]);
 
   const filteredLogs = logs.filter((log) => {
-    if (filter === 'all') return true;
-    if (filter === 'errors') return log.level === 'ERROR' || log.level === 'FATAL';
-    if (filter === 'warnings') return log.level === 'WARNING';
-    if (filter === 'info') return log.level === 'INFO' || log.level === 'stdout';
-    if (filter === 'debug') return log.level === 'DEBUG';
-    return true;
+    if (activeLogFilters.length === 0) return false;
+
+    if (activeLogFilters.includes('errors') && (log.level === 'ERROR' || log.level === 'FATAL')) {
+      return true;
+    }
+    if (activeLogFilters.includes('warnings') && log.level === 'WARNING') {
+      return true;
+    }
+    if (activeLogFilters.includes('info') && (log.level === 'INFO' || log.level === 'stdout')) {
+      return true;
+    }
+    if (activeLogFilters.includes('debug') && log.level === 'DEBUG') {
+      return true;
+    }
+
+    return false;
   });
+
+  const activeFileTabContent = activeFileTabPath ? (fileContentByPath[activeFileTabPath] ?? '') : '';
+  const activeFileTabSavedContent = activeFileTabPath ? (savedFileContentByPath[activeFileTabPath] ?? '') : '';
+  const activeFileTabHasUnsavedChanges = activeFileTabPath
+    ? activeFileTabContent !== activeFileTabSavedContent
+    : false;
+
+  const areAllLogFiltersEnabled = activeLogFilters.length === LOG_FILTER_OPTIONS.length;
+
+  const toggleLogFilter = useCallback((filter: LogFilter) => {
+    setActiveLogFilters((prev) => {
+      if (prev.includes(filter)) {
+        // Keep at least one type active to avoid an unintentionally empty pane.
+        if (prev.length <= 1) return prev;
+        return prev.filter((item) => item !== filter);
+      }
+
+      return [...prev, filter];
+    });
+  }, []);
+
+  const selectAllLogFilters = useCallback(() => {
+    setActiveLogFilters([...LOG_FILTER_OPTIONS]);
+  }, []);
 
   const canStart = !!effectiveServer && !isUpdating && lifecycleState !== 'running' && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
   const canStop = !!effectiveServer && !isUpdating && (lifecycleState === 'running' || lifecycleState === 'starting');
@@ -674,6 +2667,24 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setSelectedGroupId('main');
   }, []);
 
+  const toggleGroupCollapsed = useCallback((groupId: string) => {
+    setDashboardLayout((prev) => {
+      const next = cloneLayout(prev);
+      const group = next.groups.find((candidate) => candidate.id === groupId);
+      if (!group) return prev;
+      group.collapsed = !group.collapsed;
+      return next;
+    });
+  }, []);
+
+  const setAllGroupsCollapsed = useCallback((collapsed: boolean) => {
+    setDashboardLayout((prev) => {
+      const next = cloneLayout(prev);
+      next.groups = next.groups.map((group) => ({ ...group, collapsed }));
+      return next;
+    });
+  }, []);
+
   const beginGroupResize = useCallback((groupId: string, event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     const element = groupContainerRefs.current[groupId];
@@ -769,10 +2780,25 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     [dashboardLayout.quickActionIds, serverActions],
   );
 
+  const quickConfigFields = useMemo(
+    () => dashboardLayout.quickConfigKeys
+      .map((configKey) => configFields.find((field) => field.key === configKey))
+      .filter((field): field is ServerConfigField => !!field),
+    [configFields, dashboardLayout.quickConfigKeys],
+  );
+
   const updateQuickActions = useCallback((updater: (prev: ServerActionId[]) => ServerActionId[]) => {
     setDashboardLayout((prev) => {
       const next = cloneLayout(prev);
       next.quickActionIds = updater(next.quickActionIds);
+      return next;
+    });
+  }, []);
+
+  const updateQuickConfigKeys = useCallback((updater: (prev: DashboardConfigControlKey[]) => DashboardConfigControlKey[]) => {
+    setDashboardLayout((prev) => {
+      const next = cloneLayout(prev);
+      next.quickConfigKeys = updater(next.quickConfigKeys);
       return next;
     });
   }, []);
@@ -784,6 +2810,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         : [...prev, actionId]
     ));
   }, [updateQuickActions]);
+
+  const toggleQuickConfigKey = useCallback((configKey: DashboardConfigControlKey) => {
+    updateQuickConfigKeys((prev) => (
+      prev.includes(configKey)
+        ? prev.filter((key) => key !== configKey)
+        : [...prev, configKey]
+    ));
+  }, [updateQuickConfigKeys]);
 
   const moveQuickActionToIndex = useCallback((actionId: ServerActionId, targetIndex: number) => {
     updateQuickActions((prev) => {
@@ -808,6 +2842,21 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const handleClearLogs = () => setLogs([]);
 
+  const handleClearCategoryLogs = useCallback((categoryId: string) => {
+    if (selectedLogCategoryId === categoryId) {
+      setLogs([]);
+      setIsLogFileTruncated(false);
+    }
+
+    // Forget prior per-category tab selection so reopening defaults to latest.
+    setSelectedLogPathByCategoryId((prev) => {
+      if (!(categoryId in prev)) return prev;
+      const next = { ...prev };
+      delete next[categoryId];
+      return next;
+    });
+  }, [selectedLogCategoryId]);
+
   const handleOpenLogFolder = async () => {
     if (!effectiveServer || !hasGameApi) return;
     await window.launcher.game.openLogLocation(effectiveServer.path).catch((error) => {
@@ -830,6 +2879,329 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
+
+  const reloadGameConfigXml = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi) return;
+
+    setIsGameConfigLoading(true);
+    setGameConfigError(null);
+    try {
+      const content = await window.launcher.game.readGameConfigXml(effectiveServer.path);
+      const next = content ?? '';
+      hydrateGameConfigState(next);
+      setGameConfigLoadedServerId(effectiveServer.id);
+    } catch (error) {
+      setGameConfigError(`Failed to reload GameConfig.xml: ${String(error)}`);
+    } finally {
+      setIsGameConfigLoading(false);
+    }
+  }, [effectiveServer, hasGameApi, hydrateGameConfigState]);
+
+  const reloadFactionConfigXml = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi) return;
+
+    setIsFactionConfigLoading(true);
+    setFactionConfigError(null);
+    try {
+      const payload = await readFactionConfigXmlFromInstallation();
+      if (payload.error) {
+        setFactionConfigError(`Failed to reload FactionConfig.xml: ${payload.error}`);
+        return;
+      }
+      const next = payload.content ?? '';
+      hydrateFactionConfigState(next);
+      setFactionConfigRelativePath(payload.relativePath);
+      setFactionConfigLoadedServerId(effectiveServer.id);
+    } catch (error) {
+      setFactionConfigError(`Failed to reload FactionConfig.xml: ${String(error)}`);
+    } finally {
+      setIsFactionConfigLoading(false);
+    }
+  }, [effectiveServer, hasGameApi, hydrateFactionConfigState, readFactionConfigXmlFromInstallation]);
+
+  const setGameConfigCommentToggle = useCallback(async (entry: GameConfigCommentToggleEntry, enabled: boolean) => {
+    if (!effectiveServer || !hasGameApi || savingGameConfigPath || savingGameConfigToggleId) return;
+
+    setSavingGameConfigToggleId(entry.id);
+    setGameConfigError(null);
+
+    try {
+      const doc = parseGameConfigXmlDocument(gameConfigXmlText);
+      const root = doc.documentElement;
+      if (!root || root.tagName !== 'GameConfig') {
+        throw new Error('GameConfig.xml root node is invalid.');
+      }
+
+      const target = findElementByGameConfigPath(doc, entry.path);
+      const tagName = entry.path.split('/').pop();
+      if (!tagName) {
+        throw new Error(`Invalid toggle path: ${entry.path}`);
+      }
+
+      if (enabled) {
+        if (!target) {
+          const restoredFromComment = uncommentGameConfigEntryFromComments(doc, root, tagName);
+          if (!restoredFromComment) {
+            const created = createElementFromSnippet(doc, entry.snippet, tagName);
+            if (!created) {
+              throw new Error(`Invalid snippet for ${entry.label}.`);
+            }
+            root.appendChild(doc.createTextNode('\n\n  '));
+            root.appendChild(created);
+            root.appendChild(doc.createTextNode('\n'));
+          }
+        }
+      } else if (target) {
+        const serializedTarget = new XMLSerializer().serializeToString(target);
+        const replacement = doc.createComment(`\n  ${serializedTarget}\n  `);
+        target.parentNode?.replaceChild(replacement, target);
+      }
+
+      const serialized = new XMLSerializer().serializeToString(doc);
+      const result = await window.launcher.game.writeGameConfigXml(effectiveServer.path, serialized);
+      if (!result.success) {
+        setGameConfigError(result.error ?? `Failed to update ${entry.label} in GameConfig.xml.`);
+        return;
+      }
+
+      hydrateGameConfigState(serialized, { keepDrafts: true });
+      setGameConfigLoadedServerId(effectiveServer.id);
+    } catch (error) {
+      setGameConfigError(`Failed to toggle ${entry.label}: ${String(error)}`);
+    } finally {
+      setSavingGameConfigToggleId(null);
+    }
+  }, [
+    effectiveServer,
+    gameConfigXmlText,
+    hasGameApi,
+    hydrateGameConfigState,
+    savingGameConfigPath,
+    savingGameConfigToggleId,
+  ]);
+
+  const saveGameConfigField = useCallback(async (field: GameConfigField, explicitValue?: string) => {
+    if (!effectiveServer || !hasGameApi || savingGameConfigPath || savingGameConfigToggleId) return;
+
+    const currentRaw = explicitValue ?? gameConfigValues[field.path] ?? field.defaultValue;
+    const validation = getGameConfigFieldValidation(field, currentRaw);
+    if (validation.error) return;
+
+    let sanitized = currentRaw.trim();
+    if (field.type === 'boolean') {
+      sanitized = String(parseCfgBoolean(currentRaw, false));
+    } else if (field.type === 'number') {
+      const parsed = Number.parseFloat(currentRaw);
+      if (!Number.isFinite(parsed)) return;
+
+      const min = field.min ?? Number.NEGATIVE_INFINITY;
+      const max = field.max ?? Number.POSITIVE_INFINITY;
+      sanitized = String(Math.max(min, Math.min(max, parsed)));
+    }
+
+    setSavingGameConfigPath(field.path);
+    setGameConfigError(null);
+    setGameConfigValues((prev) => ({ ...prev, [field.path]: sanitized }));
+
+    try {
+      const doc = parseGameConfigXmlDocument(gameConfigXmlText);
+      const target = findElementByGameConfigPath(doc, field.path);
+      if (!target) {
+        setGameConfigError(`Could not locate ${field.path} in GameConfig.xml.`);
+        return;
+      }
+
+      target.textContent = sanitized;
+      const serialized = new XMLSerializer().serializeToString(doc);
+      const result = await window.launcher.game.writeGameConfigXml(effectiveServer.path, serialized);
+      if (!result.success) {
+        setGameConfigError(result.error ?? `Failed to save ${field.label} to GameConfig.xml.`);
+        return;
+      }
+
+      hydrateGameConfigState(serialized, { keepDrafts: true });
+      setGameConfigLoadedServerId(effectiveServer.id);
+    } catch (error) {
+      setGameConfigError(`Failed to save ${field.label}: ${String(error)}`);
+    } finally {
+      setSavingGameConfigPath(null);
+    }
+  }, [effectiveServer, gameConfigValues, gameConfigXmlText, hasGameApi, hydrateGameConfigState, savingGameConfigPath, savingGameConfigToggleId]);
+
+  const saveFactionConfigField = useCallback(async (field: FactionConfigField, explicitValue?: string) => {
+    if (!effectiveServer || !hasGameApi || savingFactionConfigPath) return;
+
+    const currentRaw = explicitValue ?? factionConfigValues[field.path] ?? field.defaultValue;
+    const validation = getFactionConfigFieldValidation(field, currentRaw);
+    if (validation.error) return;
+
+    let sanitized = currentRaw.trim();
+    if (field.type === 'boolean') {
+      sanitized = String(parseCfgBoolean(currentRaw, false));
+    } else if (field.type === 'number') {
+      const parsed = Number.parseFloat(currentRaw);
+      if (!Number.isFinite(parsed)) return;
+
+      const min = field.min ?? Number.NEGATIVE_INFINITY;
+      const max = field.max ?? Number.POSITIVE_INFINITY;
+      sanitized = String(Math.max(min, Math.min(max, parsed)));
+    }
+
+    setSavingFactionConfigPath(field.path);
+    setFactionConfigError(null);
+    setFactionConfigValues((prev) => ({ ...prev, [field.path]: sanitized }));
+
+    try {
+      const doc = parseGameConfigXmlDocument(factionConfigXmlText);
+      const target = findElementByGameConfigPath(doc, field.path);
+      if (!target) {
+        setFactionConfigError(`Could not locate ${field.path} in FactionConfig.xml.`);
+        return;
+      }
+
+      target.textContent = sanitized;
+      const serialized = new XMLSerializer().serializeToString(doc);
+      const result = await writeFactionConfigXmlToInstallation(serialized);
+      if (!result.success) {
+        setFactionConfigError(result.error ?? `Failed to save ${field.label} to FactionConfig.xml.`);
+        return;
+      }
+
+      if (result.relativePath) {
+        setFactionConfigRelativePath(result.relativePath);
+      }
+
+      hydrateFactionConfigState(serialized, { keepDrafts: true });
+      setFactionConfigLoadedServerId(effectiveServer.id);
+    } catch (error) {
+      setFactionConfigError(`Failed to save ${field.label}: ${String(error)}`);
+    } finally {
+      setSavingFactionConfigPath(null);
+    }
+  }, [
+    effectiveServer,
+    factionConfigValues,
+    factionConfigXmlText,
+    hasGameApi,
+    hydrateFactionConfigState,
+    savingFactionConfigPath,
+    writeFactionConfigXmlToInstallation,
+  ]);
+
+  const persistServerName = useCallback(async () => {
+    if (!effectiveServer || isSavingServerName) return;
+
+    const sanitized = serverNameInput.trim() || effectiveServer.name;
+    setServerNameInput(sanitized);
+    if (sanitized === effectiveServer.name) return;
+
+    setIsSavingServerName(true);
+    setActionError(null);
+    try {
+      updateServerItem({ ...effectiveServer, name: sanitized });
+    } catch (error) {
+      setActionError(`Failed to save server name: ${String(error)}`);
+      setServerNameInput(effectiveServer.name);
+    } finally {
+      setIsSavingServerName(false);
+    }
+  }, [effectiveServer, isSavingServerName, serverNameInput, updateServerItem]);
+
+  const persistServerPort = useCallback(async () => {
+    if (!effectiveServer || isSavingServerPort) return;
+
+    const parsed = Number.parseInt(serverPortInput.trim() || '4242', 10);
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 65535) {
+      setActionError('Server port must be between 1 and 65535.');
+      setServerPortInput(effectiveServer.port?.trim() || '4242');
+      return;
+    }
+
+    const sanitized = String(parsed);
+    setServerPortInput(sanitized);
+    if (sanitized === (effectiveServer.port?.trim() || '4242')) return;
+
+    setIsSavingServerPort(true);
+    setActionError(null);
+    try {
+      updateServerItem({ ...effectiveServer, port: sanitized });
+    } catch (error) {
+      setActionError(`Failed to save server port: ${String(error)}`);
+      setServerPortInput(effectiveServer.port?.trim() || '4242');
+    } finally {
+      setIsSavingServerPort(false);
+    }
+  }, [effectiveServer, isSavingServerPort, serverPortInput, updateServerItem]);
+
+  const persistServerCfgValue = useCallback(async (key: string, value: string): Promise<boolean> => {
+    if (!effectiveServer || !hasGameApi) return false;
+    const result = await window.launcher.game.writeServerConfigValue(effectiveServer.path, key, value);
+    if (!result.success) {
+      setActionError(result.error ?? `Failed to save ${key} in server.cfg.`);
+      return false;
+    }
+    return true;
+  }, [effectiveServer, hasGameApi]);
+
+  const saveConfigField = useCallback(async (field: ServerConfigField, explicitValue?: string) => {
+    if (savingConfigKey) return;
+
+    const currentRaw = explicitValue ?? serverConfigValues[field.key] ?? field.defaultValue;
+    const validation = getConfigFieldValidation(field, currentRaw);
+    if (validation.error) return;
+    let nextValue = currentRaw;
+
+    if (field.type === 'boolean') {
+      nextValue = String(parseCfgBoolean(currentRaw, field.defaultValue === 'true'));
+    } else if (field.type === 'number') {
+      const parsed = Number.parseInt(currentRaw, 10);
+      if (Number.isFinite(parsed)) {
+        const min = field.min ?? Number.NEGATIVE_INFINITY;
+        const max = field.max ?? Number.POSITIVE_INFINITY;
+        nextValue = String(Math.max(min, Math.min(max, parsed)));
+      } else {
+        nextValue = field.defaultValue;
+      }
+    } else {
+      nextValue = currentRaw.trim();
+      if (!nextValue) nextValue = field.defaultValue;
+    }
+
+    setServerConfigValues((prev) => ({ ...prev, [field.key]: nextValue }));
+    setSavingConfigKey(field.key);
+    setActionError(null);
+
+    try {
+      const ok = await persistServerCfgValue(field.key, nextValue);
+      if (!ok) return;
+
+      if (field.key === 'MAX_CLIENTS') {
+        const parsed = Number.parseInt(nextValue, 10);
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          if (effectiveServer && effectiveServer.maxPlayers !== parsed) {
+            updateServerItem({ ...effectiveServer, maxPlayers: parsed });
+          }
+        }
+      }
+
+      if (field.key === 'SERVER_LISTEN_IP') {
+        if (effectiveServer && effectiveServer.serverIp !== nextValue) {
+          updateServerItem({ ...effectiveServer, serverIp: nextValue });
+        }
+      }
+
+      if (field.key === 'USE_STARMADE_AUTHENTICATION') {
+        const enabled = parseCfgBoolean(nextValue, false);
+        if (!enabled) {
+          setServerConfigValues((prev) => ({ ...prev, REQUIRE_STARMADE_AUTHENTICATION: 'false' }));
+        }
+      }
+    } catch (error) {
+      setActionError(`Failed to save ${field.key}: ${String(error)}`);
+    } finally {
+      setSavingConfigKey(null);
+    }
+  }, [effectiveServer, persistServerCfgValue, savingConfigKey, serverConfigValues, updateServerItem]);
 
   const renderDragHandle = (label: string) => (
     <span
@@ -876,28 +3248,147 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     </div>
   );
 
+  const getDashboardConfigField = (key: string): ServerConfigField | null => (
+    configFields.find((field) => field.key === key) ?? null
+  );
+
+  const getDashboardConfigValue = (key: string): string => {
+    const field = getDashboardConfigField(key);
+    if (!field) return '';
+    return serverConfigValues[key] ?? field.defaultValue;
+  };
+
+  const renderDashboardConfigField = (
+    key: string,
+    options?: { labelWidthClassName?: string; requireKey?: string; compact?: boolean },
+  ) => {
+    const field = getDashboardConfigField(key);
+    if (!field) return null;
+
+    const rawValue = getDashboardConfigValue(key);
+    const validation = getConfigFieldValidation(field, rawValue);
+    const isSavingThisField = savingConfigKey === field.key;
+    const isRequirementMet = options?.requireKey
+      ? parseCfgBoolean(getDashboardConfigValue(options.requireKey), false)
+      : true;
+    const isDisabled = !!savingConfigKey || !isRequirementMet;
+
+    if (field.type === 'boolean') {
+      return (
+        <div key={field.key} className="space-y-1">
+          <label className="flex items-center gap-2 text-sm text-gray-300">
+            <input
+              type="checkbox"
+              checked={parseCfgBoolean(rawValue, field.defaultValue === 'true')}
+              onChange={(event) => {
+                const next = String(event.target.checked);
+                setServerConfigValues((prev) => ({ ...prev, [field.key]: next }));
+                void saveConfigField(field, next);
+              }}
+              disabled={isDisabled || !!validation.error}
+              className="h-4 w-4 rounded"
+            />
+            <span>{options?.compact ? 'Enabled' : field.label}</span>
+            {isSavingThisField && <span className="text-[10px] uppercase tracking-wider text-gray-500">Saving...</span>}
+          </label>
+          {(validation.error || validation.warning || !isRequirementMet) && (
+            <p className={`text-[10px] ${validation.error ? 'text-red-300' : 'text-amber-300'}`}>
+              {validation.error ?? validation.warning ?? `${field.label} requires ${getDashboardConfigField(options?.requireKey ?? '')?.label ?? options?.requireKey} to be enabled.`}
+            </p>
+          )}
+        </div>
+      );
+    }
+
+    if (options?.compact) {
+      return (
+        <div key={field.key} className="space-y-1">
+          <input
+            type={field.type === 'number' ? 'number' : 'text'}
+            min={field.type === 'number' && field.min !== undefined ? field.min : undefined}
+            max={field.type === 'number' && field.max !== undefined ? field.max : undefined}
+            value={rawValue}
+            onChange={(event) => {
+              const next = event.target.value;
+              setServerConfigValues((prev) => ({ ...prev, [field.key]: next }));
+            }}
+            onBlur={() => { void saveConfigField(field); }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                void saveConfigField(field);
+              }
+            }}
+            disabled={!!savingConfigKey}
+            className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+          />
+          {(validation.error || validation.warning) && (
+            <p className={`text-[10px] ${validation.error ? 'text-red-300' : 'text-amber-300'}`}>
+              {validation.error ?? validation.warning}
+            </p>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <label key={field.key} className="flex items-start gap-3 text-sm">
+        <span className={`${options?.labelWidthClassName ?? 'w-36'} pt-2 text-gray-300`}>{field.label}:</span>
+        <div className="flex-1">
+          <input
+            type={field.type === 'number' ? 'number' : 'text'}
+            min={field.type === 'number' && field.min !== undefined ? field.min : undefined}
+            max={field.type === 'number' && field.max !== undefined ? field.max : undefined}
+            value={rawValue}
+            onChange={(event) => {
+              const next = event.target.value;
+              setServerConfigValues((prev) => ({ ...prev, [field.key]: next }));
+            }}
+            onBlur={() => { void saveConfigField(field); }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                void saveConfigField(field);
+              }
+            }}
+            disabled={!!savingConfigKey}
+            className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+          />
+          {(validation.error || validation.warning) && (
+            <p className={`mt-1 text-[10px] ${validation.error ? 'text-red-300' : 'text-amber-300'}`}>
+              {validation.error ?? validation.warning}
+            </p>
+          )}
+        </div>
+      </label>
+    );
+  };
+
   const renderServerInfoWidget = () => (
     <div className="space-y-3">
       <label className="flex items-center gap-3 text-sm">
-        <span className="w-36 text-gray-300">Server Name:</span>
+        <span className="w-36 text-gray-300">Launcher Name:</span>
         <input
-          value={effectiveServerName}
-          readOnly
+          value={serverNameInput}
+          onChange={(event) => setServerNameInput(event.target.value)}
+          onBlur={() => { void persistServerName(); }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              void persistServerName();
+            }
+          }}
+          disabled={isSavingServerName}
           className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
         />
       </label>
+      {renderDashboardConfigField('SERVER_LIST_NAME')}
+      {renderDashboardConfigField('SERVER_LIST_DESCRIPTION')}
+      {renderDashboardConfigField('HOST_NAME_TO_ANNOUNCE_TO_SERVER_LIST')}
       <label className="flex items-center gap-3 text-sm">
         <span className="w-36 text-gray-300">Install Path:</span>
         <input
           value={effectiveServer.path || 'Not configured'}
-          readOnly
-          className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
-        />
-      </label>
-      <label className="flex items-center gap-3 text-sm">
-        <span className="w-36 text-gray-300">Server IP:</span>
-        <input
-          value={effectiveServerIp}
           readOnly
           className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
         />
@@ -908,41 +3399,31 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const renderConnectionWidget = () => (
     <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
       <div className="space-y-3">
-        <label className="flex items-center gap-3 text-sm">
-          <span className="w-28 text-gray-300">Bind Address:</span>
-          <input
-            value={effectiveServerIp}
-            readOnly
-            className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
-          />
-        </label>
+        {renderDashboardConfigField('SERVER_LISTEN_IP', { labelWidthClassName: 'w-28' })}
         <label className="flex items-center gap-3 text-sm">
           <span className="w-28 text-gray-300">Server Port:</span>
           <input
-            value={effectiveServer.port || '4242'}
-            readOnly
+            value={serverPortInput}
+            onChange={(event) => setServerPortInput(event.target.value)}
+            onBlur={() => { void persistServerPort(); }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                void persistServerPort();
+              }
+            }}
+            disabled={isSavingServerPort}
             className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
           />
         </label>
-        <label className="flex items-center gap-3 text-sm">
-          <span className="w-28 text-gray-300">Max Players:</span>
-          <input type="range" min={0} max={200} value={0} disabled className="w-full cursor-not-allowed accent-starmade-accent opacity-60" />
-        </label>
+        {renderDashboardConfigField('MAX_CLIENTS', { labelWidthClassName: 'w-28' })}
       </div>
 
       <div className="space-y-3 rounded-md border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={false} disabled className="h-4 w-4 rounded" />
-          <span>Public Server</span>
-        </label>
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={false} disabled className="h-4 w-4 rounded" />
-          <span>Use Authentication</span>
-        </label>
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={false} disabled className="h-4 w-4 rounded" />
-          <span>Require Authentication</span>
-        </label>
+        {renderDashboardConfigField('ANNOUNCE_SERVER_TO_SERVERLIST')}
+        {renderDashboardConfigField('USE_STARMADE_AUTHENTICATION')}
+        {renderDashboardConfigField('REQUIRE_STARMADE_AUTHENTICATION', { requireKey: 'USE_STARMADE_AUTHENTICATION' })}
+        {renderDashboardConfigField('USE_WHITELIST')}
       </div>
     </div>
   );
@@ -966,9 +3447,26 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     return 'border-white/15 bg-black/30 text-gray-100 hover:bg-black/40';
   };
 
+  const dashboardConfigCatalogFields = DASHBOARD_CONFIG_CONTROL_KEYS
+    .map((configKey) => configFields.find((field) => field.key === configKey))
+    .filter((field): field is ServerConfigField => !!field);
+
+  const renderDashboardToggleButton = (isPinned: boolean, onClick: () => void) => (
+    <button
+      onClick={onClick}
+      className={`rounded border px-2 py-1 text-[11px] font-semibold uppercase tracking-wider transition-colors ${
+        isPinned
+          ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white hover:bg-starmade-accent/30'
+          : 'border-white/15 bg-black/25 text-gray-300 hover:bg-black/40'
+      }`}
+    >
+      {isPinned ? 'On Dashboard' : 'Add to Dashboard'}
+    </button>
+  );
+
   const renderActionGrid = (
     actions: ServerActionDefinition[],
-    options?: { showQuickToggle?: boolean; enableQuickDrag?: boolean; allowCatalogDrag?: boolean; emptyMessage?: string },
+    options?: { showDashboardToggle?: boolean; enableQuickDrag?: boolean; emptyMessage?: string },
   ) => {
     if (actions.length === 0) {
       return (
@@ -978,17 +3476,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       );
     }
 
-    const gridClassName = options?.showQuickToggle
+    const gridClassName = options?.showDashboardToggle
       ? 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3'
       : 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4';
 
     return (
       <div className={gridClassName}>
+        {options?.enableQuickDrag && isLayoutEditMode && renderQuickActionDropZone(0, 'col-span-full')}
         {actions.map((action) => {
           const isPinned = dashboardLayout.quickActionIds.includes(action.id);
           const quickActionIndex = dashboardLayout.quickActionIds.indexOf(action.id);
-          const canDrag = isLayoutEditMode && ((!!options?.enableQuickDrag && isPinned) || !!options?.allowCatalogDrag);
-          const canAcceptDrop = !!options?.enableQuickDrag && isLayoutEditMode && !!draggedQuickAction;
+          const canDrag = isLayoutEditMode && !!options?.enableQuickDrag && isPinned;
           return (
             <React.Fragment key={action.id}>
               <div
@@ -1002,26 +3500,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   setDraggedQuickAction(null);
                   setQuickActionDropTarget(null);
                 }}
-                onDragEnter={() => {
-                  if (!canAcceptDrop || quickActionIndex < 0) return;
-                  setQuickActionDropTarget(quickActionIndex);
-                }}
-                onDragOver={(event) => {
-                  if (!canAcceptDrop || quickActionIndex < 0) return;
-                  event.preventDefault();
-                  setQuickActionDropTarget(quickActionIndex);
-                }}
-                onDrop={(event) => {
-                  if (!canAcceptDrop || quickActionIndex < 0) return;
-                  event.preventDefault();
-                  handleQuickActionDrop(quickActionIndex);
-                }}
                 className={`rounded-lg border p-4 transition-all ${
                   draggedQuickAction?.actionId === action.id
                     ? 'border-starmade-accent/50 bg-starmade-accent/10 opacity-60 shadow-[0_0_0_1px_rgba(34,123,134,0.25)]'
-                    : quickActionDropTarget === quickActionIndex
-                      ? 'border-starmade-accent/50 bg-starmade-accent/10 shadow-[0_0_0_1px_rgba(34,123,134,0.25)]'
-                      : 'border-white/10 bg-black/20 hover:border-white/20'
+                    : 'border-white/10 bg-black/20 hover:border-white/20'
                 } ${canDrag ? 'cursor-move' : ''}`}
               >
               <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
@@ -1032,19 +3514,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   </div>
                   <p className="mt-1 text-sm text-gray-400">{action.description}</p>
                 </div>
-                {options?.showQuickToggle && isLayoutEditMode && (
+                {options?.showDashboardToggle && (
                   <div className="flex shrink-0 flex-col items-end gap-2">
-                    <button
-                      onClick={() => toggleQuickAction(action.id)}
-                      className={`rounded border px-2 py-1 text-[11px] font-semibold uppercase tracking-wider transition-colors ${
-                        isPinned
-                          ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white hover:bg-starmade-accent/30'
-                          : 'border-white/15 bg-black/25 text-gray-300 hover:bg-black/40'
-                      }`}
-                    >
-                      {isPinned ? 'On Dashboard' : 'Add to Dashboard'}
-                    </button>
-
+                    {renderDashboardToggleButton(isPinned, () => toggleQuickAction(action.id))}
                   </div>
                 )}
               </div>
@@ -1059,7 +3531,48 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 {action.label}
               </button>
               </div>
+              {options?.enableQuickDrag && isLayoutEditMode && renderQuickActionDropZone((isPinned ? quickActionIndex : dashboardLayout.quickActionIds.length) + 1, 'col-span-full')}
             </React.Fragment>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderConfigControlGrid = (
+    fields: ServerConfigField[],
+    options?: { showDashboardToggle?: boolean; emptyMessage?: string },
+  ) => {
+    if (fields.length === 0) {
+      return (
+        <div className="rounded-md border border-dashed border-white/15 bg-black/20 p-4 text-sm text-gray-400">
+          {options?.emptyMessage ?? 'No config controls available.'}
+        </div>
+      );
+    }
+
+    return (
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3">
+        {fields.map((field) => {
+          const isPinned = dashboardLayout.quickConfigKeys.includes(field.key as DashboardConfigControlKey);
+          return (
+            <div key={field.key} className="rounded-lg border border-white/10 bg-black/20 p-4 transition-all hover:border-white/20">
+              <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex flex-wrap items-center gap-2">
+                    <h4 className="text-base font-semibold text-white">{field.label}</h4>
+                  </div>
+                  <p className="mt-1 text-sm text-gray-400">{field.description}</p>
+                </div>
+                {options?.showDashboardToggle && renderDashboardToggleButton(isPinned, () => toggleQuickConfigKey(field.key as DashboardConfigControlKey))}
+              </div>
+
+              <p className="mb-4 text-xs text-gray-500">{field.key}</p>
+              {renderDashboardConfigField(field.key, {
+                requireKey: field.key === 'REQUIRE_STARMADE_AUTHENTICATION' ? 'USE_STARMADE_AUTHENTICATION' : undefined,
+                compact: true,
+              })}
+            </div>
           );
         })}
       </div>
@@ -1073,38 +3586,98 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setQuickActionDropTarget(null);
   }, [draggedQuickAction, moveQuickActionToIndex]);
 
+  const renderQuickActionDropZone = (targetIndex: number, className = '', label?: string) => (
+    draggedQuickAction ? (
+      <div
+        key={`quick-action-drop-${targetIndex}-${className}`}
+        onDragEnter={() => setQuickActionDropTarget(targetIndex)}
+        onDragOver={(event) => {
+          event.preventDefault();
+          setQuickActionDropTarget(targetIndex);
+        }}
+        onDragLeave={() => {
+          if (quickActionDropTarget === targetIndex) {
+            setQuickActionDropTarget(null);
+          }
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          handleQuickActionDrop(targetIndex);
+        }}
+        className={`${label ? 'min-h-14 p-3 text-xs font-semibold uppercase tracking-wider' : 'h-3'} rounded border border-dashed transition-colors ${
+          quickActionDropTarget === targetIndex
+            ? 'border-starmade-accent bg-starmade-accent/20 shadow-[0_0_0_1px_rgba(34,123,134,0.35)]'
+            : 'border-starmade-accent/60 bg-starmade-accent/10'
+        } ${className}`}
+      >
+        {label ? label : null}
+      </div>
+    ) : null
+  );
+
   const renderControlsWidget = () => (
-    <div
-      className={`space-y-2 rounded-md transition-colors ${
-        isLayoutEditMode && !!draggedQuickAction && quickActionDropTarget === dashboardLayout.quickActionIds.length
-          ? 'border border-starmade-accent/50 bg-starmade-accent/10 p-2'
-          : ''
-      }`}
-      onDragEnter={() => {
-        if (!isLayoutEditMode || !draggedQuickAction) return;
-        setQuickActionDropTarget(dashboardLayout.quickActionIds.length);
-      }}
-      onDragOver={(event) => {
-        if (!isLayoutEditMode || !draggedQuickAction) return;
-        event.preventDefault();
-        setQuickActionDropTarget(dashboardLayout.quickActionIds.length);
-      }}
-      onDrop={(event) => {
-        if (!isLayoutEditMode || !draggedQuickAction) return;
-        event.preventDefault();
-        handleQuickActionDrop(dashboardLayout.quickActionIds.length);
-      }}
-    >
-      {isLayoutEditMode && draggedQuickAction && (
-        <div className="rounded border border-dashed border-starmade-accent/60 bg-starmade-accent/10 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-200">
-          Drop action here to pin/reorder quick actions
+    <div className="space-y-4">
+      {isLayoutEditMode && draggedQuickAction && renderQuickActionDropZone(0, 'w-full', 'Drop action here to pin/reorder quick actions')}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Pinned Actions</p>
+        </div>
+        {renderActionGrid(quickActions, {
+          showDashboardToggle: isLayoutEditMode,
+          enableQuickDrag: isLayoutEditMode,
+          emptyMessage: 'Use the Actions tab to pin server actions to this widget.',
+        })}
+      </div>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Pinned Config Controls</p>
+        </div>
+        {renderConfigControlGrid(quickConfigFields, {
+          showDashboardToggle: isLayoutEditMode,
+          emptyMessage: 'Use the Actions tab to pin config controls to this widget.',
+        })}
+      </div>
+    </div>
+  );
+
+  const renderActionsPanel = () => (
+    <div className="flex h-full min-h-0 flex-col gap-4">
+      {actionError && (
+        <div className="rounded-md border border-red-500/40 bg-red-950/30 px-4 py-2 text-sm text-red-300">
+          {actionError}
         </div>
       )}
-      {renderActionGrid(quickActions, {
-        showQuickToggle: isLayoutEditMode,
-        enableQuickDrag: isLayoutEditMode,
-        emptyMessage: 'Open Add Actions in edit mode and drag actions onto this widget.',
-      })}
+
+      <div className="rounded-lg border border-white/10 bg-black/20 p-4">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-300">Actions And Controls</h3>
+        <p className="mt-1 text-xs text-gray-500">
+          This panel lists all actionable buttons and reusable config controls. Use Add to Dashboard to pin any of them into the dashboard controls widget.
+        </p>
+      </div>
+
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto pr-1">
+        <section className="space-y-3">
+          <div>
+            <h4 className="text-sm font-semibold uppercase tracking-wider text-gray-300">Server Actions</h4>
+            <p className="mt-1 text-xs text-gray-500">Start, stop, restart, and update controls for the selected server.</p>
+          </div>
+          {renderActionGrid(serverActions, {
+            showDashboardToggle: true,
+            emptyMessage: 'No server actions available.',
+          })}
+        </section>
+
+        <section className="space-y-3">
+          <div>
+            <h4 className="text-sm font-semibold uppercase tracking-wider text-gray-300">Config Controls</h4>
+            <p className="mt-1 text-xs text-gray-500">Editable server.cfg values that can also be pinned into the dashboard controls widget.</p>
+          </div>
+          {renderConfigControlGrid(dashboardConfigCatalogFields, {
+            showDashboardToggle: true,
+            emptyMessage: 'No dashboard config controls are available for this server.',
+          })}
+        </section>
+      </div>
     </div>
   );
 
@@ -1195,6 +3768,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const renderDashboardGroup = (group: DashboardGroup) => {
     const minHeight = getGroupMinHeight(group);
     const height = Math.max(group.height ?? minHeight, minHeight);
+    const isCollapsed = !!group.collapsed;
     const isResizing = groupResizeDraft?.groupId === group.id;
     const isDraggedGroup = draggedGroupId === group.id;
 
@@ -1227,6 +3801,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               className="min-w-[160px] flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-1.5 text-sm text-gray-200"
             />
             <button
+              onClick={() => toggleGroupCollapsed(group.id)}
+              className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold text-gray-300 hover:bg-black/45"
+            >
+              {isCollapsed ? 'Expand' : 'Collapse'}
+            </button>
+            <button
               onClick={() => deleteGroup(group.id)}
               disabled={dashboardLayout.groups.length <= 1}
               className="rounded border border-red-500/40 bg-red-950/30 px-2 py-1 text-xs font-semibold text-red-300 disabled:cursor-not-allowed disabled:opacity-40"
@@ -1236,68 +3816,84 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             <span className="ml-auto text-xs uppercase tracking-wider text-gray-500">Min {minHeight}px</span>
           </>
         ) : (
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-300">{group.title}</h3>
+          <>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-300">{group.title}</h3>
+            <button
+              onClick={() => toggleGroupCollapsed(group.id)}
+              className="ml-auto rounded border border-white/15 bg-black/30 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-300 hover:bg-black/45"
+            >
+              {isCollapsed ? 'Expand' : 'Collapse'}
+            </button>
+          </>
         )}
       </div>
 
-      <div
-        ref={(element) => {
-          groupContainerRefs.current[group.id] = element;
-        }}
-        style={{ height: `${height}px`, minHeight: `${minHeight}px` }}
-        className={`space-y-2 overflow-y-auto pr-1 ${isResizing ? 'select-none' : ''}`}
-      >
-        {renderDropZone(group.id, 0)}
-        {group.widgetIds.map((widgetId, index) => {
-          const widgetLabel = ALL_WIDGETS.find((widget) => widget.id === widgetId)?.label ?? widgetId;
-          const isDragged = draggedWidget?.widgetId === widgetId && draggedWidget.sourceGroupId === group.id;
-          return (
-            <React.Fragment key={`${group.id}-${widgetId}`}>
-              {isLayoutEditMode ? (
-                <div
-                  draggable
-                  onDragStart={(event) => {
-                    event.stopPropagation();
-                    setDraggedWidget({ widgetId, sourceGroupId: group.id });
-                  }}
-                  onDragEnd={(event) => {
-                    event.stopPropagation();
-                    setDraggedWidget(null);
-                    setWidgetDropTarget(null);
-                  }}
-                  className={`rounded-lg border p-2 transition-all ${
-                    isDragged
-                      ? 'border-starmade-accent/50 bg-starmade-accent/10 opacity-60 shadow-[0_0_0_1px_rgba(34,123,134,0.25)]'
-                      : 'border-white/10 bg-black/15 hover:border-white/20'
-                  }`}
-                >
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      {renderDragHandle(`Drag ${widgetLabel}`)}
-                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">{widgetLabel}</p>
+      {!isCollapsed && (
+        <div
+          ref={(element) => {
+            groupContainerRefs.current[group.id] = element;
+          }}
+          style={{ height: `${height}px`, minHeight: `${minHeight}px` }}
+          className={`space-y-2 overflow-y-auto pr-1 ${isResizing ? 'select-none' : ''}`}
+        >
+          {renderDropZone(group.id, 0)}
+          {group.widgetIds.map((widgetId, index) => {
+            const widgetLabel = ALL_WIDGETS.find((widget) => widget.id === widgetId)?.label ?? widgetId;
+            const isDragged = draggedWidget?.widgetId === widgetId && draggedWidget.sourceGroupId === group.id;
+            return (
+              <React.Fragment key={`${group.id}-${widgetId}`}>
+                {isLayoutEditMode ? (
+                  <div
+                    draggable
+                    onDragStart={(event) => {
+                      event.stopPropagation();
+                      setDraggedWidget({ widgetId, sourceGroupId: group.id });
+                    }}
+                    onDragEnd={(event) => {
+                      event.stopPropagation();
+                      setDraggedWidget(null);
+                      setWidgetDropTarget(null);
+                    }}
+                    className={`rounded-lg border p-2 transition-all ${
+                      isDragged
+                        ? 'border-starmade-accent/50 bg-starmade-accent/10 opacity-60 shadow-[0_0_0_1px_rgba(34,123,134,0.25)]'
+                        : 'border-white/10 bg-black/15 hover:border-white/20'
+                    }`}
+                  >
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        {renderDragHandle(`Drag ${widgetLabel}`)}
+                        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">{widgetLabel}</p>
+                      </div>
+                      <button
+                        onClick={() => removeWidgetToHidden(widgetId, group.id)}
+                        className="rounded border border-white/15 bg-black/30 px-2 py-0.5 text-xs text-gray-300 hover:bg-black/45"
+                      >
+                        Remove
+                      </button>
                     </div>
-                    <button
-                      onClick={() => removeWidgetToHidden(widgetId, group.id)}
-                      className="rounded border border-white/15 bg-black/30 px-2 py-0.5 text-xs text-gray-300 hover:bg-black/45"
-                    >
-                      Remove
-                    </button>
+                    {renderWidgetBody(widgetId)}
                   </div>
-                  {renderWidgetBody(widgetId)}
-                </div>
-              ) : (
-                <div>
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">{widgetLabel}</p>
-                  {renderWidgetBody(widgetId)}
-                </div>
-              )}
-              {renderDropZone(group.id, index + 1)}
-            </React.Fragment>
-          );
-        })}
-      </div>
+                ) : (
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">{widgetLabel}</p>
+                    {renderWidgetBody(widgetId)}
+                  </div>
+                )}
+                {renderDropZone(group.id, index + 1)}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      )}
 
-      {isLayoutEditMode && (
+      {isCollapsed && (
+        <div className="rounded-md border border-white/10 bg-black/15 px-3 py-2 text-xs text-gray-500">
+          Group collapsed. Expand to view widgets.
+        </div>
+      )}
+
+      {isLayoutEditMode && !isCollapsed && (
         <div className="mt-2 flex items-center justify-end gap-2 text-[11px] uppercase tracking-wider text-gray-500">
           <span>{Math.round(height)}px</span>
           <button
@@ -1325,13 +3921,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           </div>
         )}
 
-        <div className="relative rounded-lg border border-white/10 bg-black/20 p-3">
+        <div className="rounded-lg border border-white/10 bg-black/20 p-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-300">Dashboard Layout</h3>
               <p className="mt-1 text-xs text-gray-500">
                 {isLayoutEditMode
-                  ? 'Drag groups/widgets/actions, rename groups, and pin quick actions while edit mode is enabled.'
+                  ? 'Drag groups and widgets, rename groups, and use the Actions tab to pin controls while edit mode is enabled.'
                   : 'Enable edit mode to customize your monitoring dashboard.'}
               </p>
             </div>
@@ -1345,6 +3941,18 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               }`}
             >
               {isLayoutEditMode ? 'Done Editing' : 'Edit Layout'}
+            </button>
+            <button
+              onClick={() => setAllGroupsCollapsed(true)}
+              className="rounded border border-white/15 bg-black/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-gray-200 transition-colors hover:bg-black/45"
+            >
+              Collapse All
+            </button>
+            <button
+              onClick={() => setAllGroupsCollapsed(false)}
+              className="rounded border border-white/15 bg-black/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-gray-200 transition-colors hover:bg-black/45"
+            >
+              Expand All
             </button>
           </div>
 
@@ -1380,14 +3988,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   Reset Default
                 </button>
                 <button
-                  onClick={() => setIsActionCatalogOpen((prev) => !prev)}
-                  className={`rounded border px-2 py-1 text-sm font-semibold transition-colors ${
-                    isActionCatalogOpen
-                      ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white hover:bg-starmade-accent/30'
-                      : 'border-white/15 bg-black/30 text-gray-200 hover:bg-black/45'
-                  }`}
+                  onClick={() => setActiveTab('actions')}
+                  className="rounded border border-white/15 bg-black/30 px-2 py-1 text-sm font-semibold text-gray-200 hover:bg-black/45"
                 >
-                  {isActionCatalogOpen ? 'Hide Actions' : 'Add Actions'}
+                  Open Actions Tab
                 </button>
               </div>
 
@@ -1407,24 +4011,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   ))
                 )}
               </div>
-              <p className="mt-2 text-xs text-gray-500">Tip: drag groups to reorder columns, and drag widgets to move them between groups.</p>
+              <p className="mt-2 text-xs text-gray-500">Tip: drag groups to reorder columns, drag widgets to move them between groups, and use the Actions tab to pin controls into Server Controls.</p>
             </>
-          )}
-
-          {isLayoutEditMode && isActionCatalogOpen && (
-            <div className="pointer-events-auto absolute right-3 top-[calc(100%+0.5rem)] z-30 w-[min(56rem,calc(100vw-7rem))] rounded-lg border border-white/15 bg-black/90 p-3 shadow-2xl backdrop-blur">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <h4 className="text-sm font-semibold uppercase tracking-wider text-gray-300">Action Catalog</h4>
-                <p className="text-xs text-gray-500">Drag an action card into Server Controls to pin it on the dashboard.</p>
-              </div>
-              <div className="max-h-[50vh] overflow-y-auto pr-1">
-                {renderActionGrid(serverActions, {
-                  showQuickToggle: true,
-                  allowCatalogDrag: true,
-                  emptyMessage: 'No actions available.',
-                })}
-              </div>
-            </div>
           )}
         </div>
 
@@ -1449,56 +4037,171 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const renderLogs = () => (
     <div className="flex h-full min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 px-4 py-3">
-        <div>
-          <h3 className="font-display text-lg font-bold uppercase tracking-wider text-white">Server Logs</h3>
-          <p className="text-sm text-gray-400">{effectiveServerName}{logPath ? ` - ${logPath}` : ''}</p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-1 text-sm">
-            {(['all', 'info', 'warnings', 'errors', 'debug'] as LogFilter[]).map((option) => (
-              <button
-                key={option}
-                onClick={() => setFilter(option)}
-                className={`rounded px-3 py-1 capitalize transition-colors ${
-                  filter === option ? 'bg-starmade-accent text-white' : 'bg-slate-700 text-gray-300 hover:bg-slate-600'
-                }`}
-              >
-                {option}
-              </button>
-            ))}
+      <div className="border-b border-white/10 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h3 className="font-display text-lg font-bold uppercase tracking-wider text-white">Server Logs</h3>
+            <p className="text-sm text-gray-400">{effectiveServerName}{logPath ? ` - ${logPath}` : ''}</p>
           </div>
 
-          <label className="flex items-center gap-2 text-sm text-gray-300">
-            <input
-              type="checkbox"
-              checked={autoScroll}
-              onChange={(event) => setAutoScroll(event.target.checked)}
-              className="h-4 w-4 rounded border-gray-600 bg-slate-700"
-            />
-            Auto-scroll
-          </label>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-1 text-sm">
+              <button
+                onClick={selectAllLogFilters}
+                className={`rounded px-3 py-1 capitalize transition-colors ${
+                  areAllLogFiltersEnabled ? 'bg-starmade-accent text-white' : 'bg-slate-700 text-gray-300 hover:bg-slate-600'
+                }`}
+              >
+                all
+              </button>
+              {LOG_FILTER_OPTIONS.map((option) => (
+                <button
+                  key={option}
+                  onClick={() => toggleLogFilter(option)}
+                  className={`rounded px-3 py-1 capitalize transition-colors ${
+                    activeLogFilters.includes(option) ? 'bg-starmade-accent text-white' : 'bg-slate-700 text-gray-300 hover:bg-slate-600'
+                  }`}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+
+            <label className="flex items-center gap-2 text-sm text-gray-300">
+              <input
+                type="checkbox"
+                checked={autoScroll}
+                onChange={(event) => setAutoScroll(event.target.checked)}
+                className="h-4 w-4 rounded border-gray-600 bg-slate-700"
+              />
+              Auto-scroll
+            </label>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-md border border-white/10 bg-black/25 p-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-300">Log Categories</p>
+            <button
+              onClick={() => { void reloadLogCatalog(); }}
+              disabled={isLogListLoading}
+              className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isLogListLoading ? 'Refreshing...' : 'Refresh List'}
+            </button>
+          </div>
+
+          {logCategories.length === 0 ? (
+            <p className="text-sm text-gray-400">{isLogListLoading ? 'Scanning logs folder...' : 'No log files found in logs/.'}</p>
+          ) : (
+            <>
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                {logCategories.map((category) => {
+                  const isSelectedCategory = selectedLogCategoryId === category.id;
+                  return (
+                    <div key={category.id} className="inline-flex items-center gap-1">
+                      <button
+                        onClick={() => {
+                          const remembered = selectedLogPathByCategoryId[category.id];
+                          const rememberedInCategory = category.files.find((file) => file.relativePath === remembered);
+                          const next = rememberedInCategory?.relativePath ?? category.files[0]?.relativePath ?? null;
+                          setSelectedLogRelativePath(next);
+                        }}
+                        className={`rounded border px-2 py-1 text-xs font-semibold uppercase tracking-wider transition-colors ${
+                          isSelectedCategory
+                            ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white'
+                            : 'border-white/15 bg-black/30 text-gray-300 hover:bg-black/45'
+                        }`}
+                      >
+                        {category.label} ({category.files.length})
+                      </button>
+                      <button
+                        onClick={() => handleClearCategoryLogs(category.id)}
+                        className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-300 hover:bg-black/45"
+                        title={`Clear ${category.label} view`}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                  {selectedLogCategory ? `${selectedLogCategory.label} Files` : 'Files'}
+                </span>
+                {selectedLogCategoryFiles.map((file) => {
+                  const isActiveFile = selectedLogRelativePath === file.relativePath;
+                  return (
+                    <button
+                      key={file.relativePath}
+                      onClick={() => {
+                        setSelectedLogRelativePath(file.relativePath);
+                        if (selectedLogCategoryId) {
+                          setSelectedLogPathByCategoryId((prev) => ({
+                            ...prev,
+                            [selectedLogCategoryId]: file.relativePath,
+                          }));
+                        }
+                      }}
+                      className={`rounded border px-2 py-1 text-xs font-semibold transition-colors ${
+                        isActiveFile
+                          ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white'
+                          : 'border-white/15 bg-black/30 text-gray-300 hover:bg-black/45'
+                      }`}
+                    >
+                      {file.fileName}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {selectedLogRelativePath && (() => {
+                const selectedFile = selectedLogCategoryFiles.find((file) => file.relativePath === selectedLogRelativePath)
+                  ?? logCategories.flatMap((category) => category.files).find((file) => file.relativePath === selectedLogRelativePath);
+
+                if (!selectedFile) return null;
+
+                return (
+                  <p className="mt-2 text-xs text-gray-400">
+                    {selectedFile.fileName} - {formatLogFileSize(selectedFile.sizeBytes)} - modified {formatLogModifiedTime(selectedFile.modifiedMs)}
+                  </p>
+                );
+              })()}
+            </>
+          )}
+
+          {logLoadError && (
+            <p className="mt-2 text-sm text-red-300">{logLoadError}</p>
+          )}
         </div>
       </div>
 
       <div ref={logContainerRef} className="flex-1 overflow-y-auto p-4 font-mono text-sm">
-        <div className="space-y-1">
-          {filteredLogs.length === 0 && (
-            <p className="text-gray-500">No log lines yet for this server.</p>
-          )}
-          {filteredLogs.map((log, index) => (
-            <div key={`${log.timestamp}-${index}`} className="flex gap-3 rounded px-2 py-1 hover:bg-white/5">
-              <span className="flex-shrink-0 text-gray-500">{log.timestamp}</span>
-              <span className={`flex-shrink-0 font-semibold ${getLogLevelColor(log.level)}`}>[{log.level}]</span>
-              <span className="break-all text-gray-300">{log.message}</span>
-            </div>
-          ))}
-        </div>
+        {isLogFileLoading ? (
+          <p className="text-gray-400">Loading log file...</p>
+        ) : (
+          <div className="space-y-1">
+            {filteredLogs.length === 0 && (
+              <p className="text-gray-500">No log lines yet for this server.</p>
+            )}
+            {filteredLogs.map((log, index) => (
+              <div key={`${log.timestamp}-${index}`} className="flex gap-3 rounded px-2 py-1 hover:bg-white/5">
+                <span className="flex-shrink-0 text-gray-500">{log.timestamp}</span>
+                <span className={`flex-shrink-0 font-semibold ${getLogLevelColor(log.level)}`}>[{log.level}]</span>
+                <span className="break-all text-gray-300">{log.message}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="flex items-center justify-between gap-3 border-t border-white/10 bg-black/20 px-4 py-3">
-        <p className="text-sm text-gray-400">{filteredLogs.length} / {LOG_BUFFER_CAP} buffered log entries</p>
+        <p className="text-sm text-gray-400">
+          {filteredLogs.length} / {LOG_BUFFER_CAP} buffered log entries
+          {isLogFileTruncated ? ' (tail view)' : ''}
+        </p>
         <div className="flex gap-2">
           <button onClick={handleClearLogs} className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600">
             Clear
@@ -1509,6 +4212,545 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           <button onClick={handleExportLogs} className="rounded-md bg-starmade-accent px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-starmade-accent/80">
             Export
           </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderServerCfgConfiguration = () => {
+    const model: ConfigPanelModel = {
+      title: 'Server Configuration',
+      subtitle: 'Values are read from and written to server.cfg in this installation.',
+      loadingText: 'Loading configuration from server.cfg...',
+      searchPlaceholder: 'Search key, label, or description',
+      emptyMessage: 'No configuration keys match the current search/filter.',
+      categoryOrder: serverConfigCategoryOrder,
+      categoryLabels: serverConfigCategoryLabels,
+      fields: configFields.map((field) => ({
+        id: field.key,
+        keyDisplay: field.key,
+        label: field.label,
+        description: field.description,
+        category: field.category,
+        type: field.type,
+        defaultValue: field.defaultValue,
+        min: field.min,
+        max: field.max,
+        guidance: field.guidance,
+      })),
+      values: serverConfigValues,
+      setValues: setServerConfigValues,
+      searchTerm: configSearchTerm,
+      setSearchTerm: setConfigSearchTerm,
+      categoryFilter: configCategoryFilter,
+      setCategoryFilter: setConfigCategoryFilter,
+      isLoading: isConfigLoading,
+      savingFieldId: savingConfigKey,
+      hasUnsavedChanges: false,
+      error: null,
+      onSaveField: async (id, explicitValue) => {
+        const field = configFields.find((f) => f.key === id);
+        if (field) await saveConfigField(field, explicitValue);
+      },
+      onValidateField: (id, rawValue) => {
+        const field = configFields.find((f) => f.key === id);
+        return field ? getConfigFieldValidation(field, rawValue) : { error: null, warning: null };
+      },
+      reloadLabel: 'Reload',
+      onReload: reloadServerConfigValues,
+      reloadDisabled: !effectiveServer || !hasGameApi || isConfigLoading || !!savingConfigKey,
+    };
+    return <ConfigPanel model={model} />;
+  };
+
+  const renderGameConfigXmlConfiguration = () => {
+    const hasUnsavedChanges = Object.keys(gameConfigValues).some(
+      (path) => gameConfigValues[path] !== (gameConfigSavedValues[path] ?? ''),
+    );
+    const needle = gameConfigSearchTerm.trim().toLowerCase();
+    const enabledTogglePaths = new Set(
+      gameConfigCommentToggleEntries
+        .filter((entry) => gameConfigCommentToggleStates[entry.id])
+        .map((entry) => entry.path),
+    );
+
+    const filteredGameConfigListSections = gameConfigListSections
+      .filter((section) => {
+        for (const enabledPath of enabledTogglePaths) {
+          if (section.key.startsWith(enabledPath)) return false;
+        }
+        if (gameConfigCategoryFilter.size > 0 && !gameConfigCategoryFilter.has(section.category)) return false;
+        if (!needle) return true;
+        if (section.key.toLowerCase().includes(needle) || section.label.toLowerCase().includes(needle)) return true;
+        return section.columns.some((column) => column.label.toLowerCase().includes(needle) || column.key.toLowerCase().includes(needle));
+      })
+      .map((section) => {
+        if (!needle) return section;
+        const rows = section.rows.filter((row) => section.columns.some((column) => {
+          const path = row.fieldPaths[column.key];
+          const value = (gameConfigValues[path] ?? gameConfigSavedValues[path] ?? '').toLowerCase();
+          return value.includes(needle) || path.toLowerCase().includes(needle);
+        }));
+        return { ...section, rows };
+      })
+      .filter((section) => section.rows.length > 0);
+
+    const visibleCommentToggleEntries = gameConfigCommentToggleEntries.filter((entry) => {
+      if (gameConfigCategoryFilter.size > 0 && !gameConfigCategoryFilter.has(entry.category)) return false;
+      if (!needle) return true;
+      return (
+        entry.label.toLowerCase().includes(needle)
+        || entry.description.toLowerCase().includes(needle)
+        || entry.path.toLowerCase().includes(needle)
+      );
+    });
+
+    const bodyExtras = (
+      <section className="space-y-3">
+        <div className="rounded-md border border-white/10 bg-black/20 p-3">
+          <p className="text-sm font-semibold text-white">Optional Commented Entries</p>
+          <p className="mt-1 text-xs text-gray-400">
+            Toggle these to comment/uncomment optional top-level blocks in GameConfig.xml.
+          </p>
+
+          {visibleCommentToggleEntries.length === 0 ? (
+            <p className="mt-3 text-sm text-gray-400">No optional entries match the current search/filter.</p>
+          ) : (
+            <div className="mt-3 space-y-2">
+              {visibleCommentToggleEntries.map((entry) => {
+                const checked = gameConfigCommentToggleStates[entry.id] ?? false;
+                const isSaving = savingGameConfigToggleId === entry.id;
+                return (
+                  <label key={entry.id} className="flex items-start gap-2 rounded border border-white/10 bg-black/20 px-3 py-2 text-sm text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(event) => {
+                        void setGameConfigCommentToggle(entry, event.target.checked);
+                      }}
+                      disabled={!!savingGameConfigPath || !!savingGameConfigToggleId}
+                      className="mt-0.5 h-4 w-4 rounded"
+                    />
+                    <span className="flex-1">
+                      <span className="font-semibold text-white">{entry.label}</span>
+                      <span className="mt-0.5 block text-xs text-gray-400">{entry.description}</span>
+                      <span className="mt-1 block font-mono text-[11px] text-gray-500">{entry.path}</span>
+                    </span>
+                    {isSaving && <span className="text-xs uppercase tracking-wider text-gray-500">Saving...</span>}
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {filteredGameConfigListSections.length > 0 && (
+          <div className="space-y-4">
+            {filteredGameConfigListSections.map((section) => (
+              <div key={section.key} className="rounded-md border border-white/10 bg-black/20 p-3">
+                <div className="mb-2">
+                  <p className="text-sm font-semibold text-white">{section.label}</p>
+                  <p className="text-xs text-gray-400">{section.description}</p>
+                  <p className="mt-1 text-[11px] font-mono text-gray-500">{section.key}</p>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="min-w-full border-collapse text-sm">
+                    <thead>
+                      <tr>
+                        <th className="border-b border-white/10 px-2 py-2 text-left text-xs uppercase tracking-wider text-gray-400">#</th>
+                        {section.columns.map((column) => (
+                          <th key={`${section.key}-${column.key}`} className="border-b border-white/10 px-2 py-2 text-left text-xs uppercase tracking-wider text-gray-400">
+                            {column.label}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {section.rows.map((row) => (
+                        <tr key={`${section.key}-row-${row.index}`}>
+                          <td className="border-b border-white/5 px-2 py-2 align-top text-xs text-gray-500">{row.index}</td>
+                          {section.columns.map((column) => {
+                            const fieldPath = row.fieldPaths[column.key];
+                            const rawValue = gameConfigValues[fieldPath] ?? '';
+                            const explicitMeta = getGameConfigMetaForPath(gameConfigFieldMetaByPath, fieldPath);
+                            const pseudoField: GameConfigField = {
+                              path: fieldPath,
+                              label: explicitMeta?.label ?? `${section.label} ${column.label}`,
+                              description: explicitMeta?.description ?? `${section.key} row ${row.index}`,
+                              category: explicitMeta?.category ?? section.category,
+                              type: explicitMeta?.type ?? column.type,
+                              defaultValue: gameConfigSavedValues[fieldPath] ?? rawValue,
+                              min: explicitMeta?.min,
+                              max: explicitMeta?.max,
+                              guidance: explicitMeta?.guidance,
+                              validation: explicitMeta?.validation,
+                            };
+                            const validation = getGameConfigFieldValidation(pseudoField, rawValue);
+                            const isSavingThisField = savingGameConfigPath === fieldPath;
+
+                            return (
+                              <td key={fieldPath} className="border-b border-white/5 px-2 py-2 align-top">
+                                <div className="flex min-w-[180px] items-center gap-2">
+                                  {column.type === 'boolean' ? (
+                                    <label className="inline-flex items-center gap-2 text-xs text-gray-300">
+                                      <input
+                                        type="checkbox"
+                                        checked={parseCfgBoolean(rawValue, false)}
+                                        onChange={(event) => {
+                                          const next = String(event.target.checked);
+                                          setGameConfigValues((prev) => ({ ...prev, [fieldPath]: next }));
+                                          void saveGameConfigField(pseudoField, next);
+                                        }}
+                                        disabled={!!savingGameConfigPath || !!validation.error}
+                                        className="h-4 w-4 rounded"
+                                      />
+                                      Enabled
+                                    </label>
+                                  ) : (
+                                    <>
+                                      <input
+                                        type={column.type === 'number' ? 'number' : 'text'}
+                                        value={rawValue}
+                                        onChange={(event) => {
+                                          const next = event.target.value;
+                                          setGameConfigValues((prev) => ({ ...prev, [fieldPath]: next }));
+                                        }}
+                                        onBlur={() => { void saveGameConfigField(pseudoField); }}
+                                        onKeyDown={(event) => {
+                                          if (event.key === 'Enter') {
+                                            event.preventDefault();
+                                            void saveGameConfigField(pseudoField);
+                                          }
+                                        }}
+                                        disabled={!!savingGameConfigPath}
+                                        className="w-full rounded-md border border-white/15 bg-black/30 px-2 py-1.5 text-xs text-gray-200"
+                                      />
+                                      <button
+                                        onClick={() => { void saveGameConfigField(pseudoField); }}
+                                        disabled={!!savingGameConfigPath || !!validation.error}
+                                        className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+                                      >
+                                        {isSavingThisField ? 'Saving...' : 'Save'}
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                                {(validation.error || validation.warning) && (
+                                  <p className={`mt-1 text-[10px] ${validation.error ? 'text-red-300' : 'text-amber-300'}`}>
+                                    {validation.error ?? validation.warning}
+                                  </p>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    );
+
+    const model: ConfigPanelModel = {
+      title: 'GameConfig.xml',
+      subtitle: 'Edit game settings using typed fields and save each value directly to GameConfig.xml.',
+      loadingText: 'Loading GameConfig.xml...',
+      searchPlaceholder: 'Search GameConfig fields...',
+      emptyMessage: 'No GameConfig fields match the current search/filter.',
+      categoryOrder: gameConfigCategoryOrder,
+      categoryLabels: gameConfigCategoryLabels,
+      fields: gameConfigFieldsOutsideToggleGroups.map((field) => ({
+        id: field.path,
+        keyDisplay: field.path,
+        label: field.label,
+        description: field.description,
+        category: field.category,
+        type: field.type,
+        defaultValue: field.defaultValue,
+        min: field.min,
+        max: field.max,
+        guidance: field.guidance,
+      })),
+      values: gameConfigValues,
+      setValues: setGameConfigValues,
+      searchTerm: gameConfigSearchTerm,
+      setSearchTerm: setGameConfigSearchTerm,
+      categoryFilter: gameConfigCategoryFilter,
+      setCategoryFilter: setGameConfigCategoryFilter,
+      isLoading: isGameConfigLoading,
+      savingFieldId: savingGameConfigPath,
+      hasUnsavedChanges,
+      error: gameConfigError,
+      onSaveField: async (id, explicitValue) => {
+        const field = gameConfigFields.find((f) => f.path === id);
+        if (field) await saveGameConfigField(field, explicitValue);
+      },
+      onValidateField: (id, rawValue) => {
+        const field = gameConfigFields.find((f) => f.path === id);
+        return field ? getGameConfigFieldValidation(field, rawValue) : { error: null, warning: null };
+      },
+      reloadLabel: 'Reload',
+      onReload: reloadGameConfigXml,
+      reloadDisabled: !effectiveServer || !hasGameApi || isGameConfigLoading || !!savingGameConfigPath || !!savingGameConfigToggleId,
+      categoryExtras: gameConfigCategoryExtras,
+      bodyExtras,
+    };
+
+    return <ConfigPanel model={model} />;
+  };
+
+  const renderFactionConfigXmlConfiguration = () => {
+    const hasUnsavedChanges = Object.keys(factionConfigValues).some(
+      (path) => factionConfigValues[path] !== (factionConfigSavedValues[path] ?? ''),
+    );
+
+    const model: ConfigPanelModel = {
+      title: 'FactionConfig.xml',
+      subtitle: 'Edit faction settings and save each value directly to FactionConfig.xml.',
+      loadingText: 'Loading FactionConfig.xml...',
+      searchPlaceholder: 'Search faction config fields...',
+      emptyMessage: 'No faction config fields match the current search/filter.',
+      categoryOrder: factionConfigCategoryOrder,
+      categoryLabels: factionConfigCategoryLabels,
+      fields: factionConfigFields.map((field) => ({
+        id: field.path,
+        keyDisplay: field.path,
+        label: field.label,
+        description: field.description,
+        category: field.category,
+        type: field.type,
+        defaultValue: field.defaultValue,
+        min: field.min,
+        max: field.max,
+        guidance: field.guidance,
+      })),
+      values: factionConfigValues,
+      setValues: setFactionConfigValues,
+      searchTerm: factionConfigSearchTerm,
+      setSearchTerm: setFactionConfigSearchTerm,
+      categoryFilter: factionConfigCategoryFilter,
+      setCategoryFilter: setFactionConfigCategoryFilter,
+      isLoading: isFactionConfigLoading,
+      savingFieldId: savingFactionConfigPath,
+      hasUnsavedChanges,
+      error: factionConfigError,
+      onSaveField: async (id, explicitValue) => {
+        const field = factionConfigFields.find((f) => f.path === id);
+        if (field) await saveFactionConfigField(field, explicitValue);
+      },
+      onValidateField: (id, rawValue) => {
+        const field = factionConfigFields.find((f) => f.path === id);
+        return field ? getFactionConfigFieldValidation(field, rawValue) : { error: null, warning: null };
+      },
+      reloadLabel: 'Reload',
+      onReload: reloadFactionConfigXml,
+      reloadDisabled: !effectiveServer || !hasGameApi || isFactionConfigLoading || !!savingFactionConfigPath,
+    };
+
+    return <ConfigPanel model={model} />;
+  };
+
+  const renderConfiguration = () => (
+    <div className="flex h-full min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
+      <div className="border-b border-white/10 px-4 py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setActiveConfigTab('server-cfg')}
+            className={`rounded-md border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
+              activeConfigTab === 'server-cfg'
+                ? 'border-starmade-accent bg-starmade-accent/20 text-white'
+                : 'border-white/15 bg-black/25 text-gray-300 hover:bg-black/40'
+            }`}
+          >
+            server.cfg
+          </button>
+          <button
+            onClick={() => setActiveConfigTab('game-config-xml')}
+            className={`rounded-md border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
+              activeConfigTab === 'game-config-xml'
+                ? 'border-starmade-accent bg-starmade-accent/20 text-white'
+                : 'border-white/15 bg-black/25 text-gray-300 hover:bg-black/40'
+            }`}
+          >
+            GameConfig.xml
+          </button>
+          <button
+            onClick={() => setActiveConfigTab('faction-config-xml')}
+            className={`rounded-md border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
+              activeConfigTab === 'faction-config-xml'
+                ? 'border-starmade-accent bg-starmade-accent/20 text-white'
+                : 'border-white/15 bg-black/25 text-gray-300 hover:bg-black/40'
+            }`}
+          >
+            FactionConfig.xml
+          </button>
+        </div>
+      </div>
+
+      {activeConfigTab === 'server-cfg'
+        ? renderServerCfgConfiguration()
+        : activeConfigTab === 'game-config-xml'
+          ? renderGameConfigXmlConfiguration()
+          : renderFactionConfigXmlConfiguration()}
+    </div>
+  );
+
+  const renderFileTree = (relativeDir: string, depth = 0): React.ReactNode => {
+    const entries = fileEntriesByDir[relativeDir] ?? [];
+    if (entries.length === 0) {
+      return depth === 0 ? <p className="px-2 py-1 text-xs text-gray-500">No files found.</p> : null;
+    }
+
+    return entries.map((entry) => {
+      const isDirExpanded = expandedFileDirs.includes(entry.relativePath);
+      const isTabOpen = openFileTabs.includes(entry.relativePath);
+
+      if (entry.isDirectory) {
+        return (
+          <div key={entry.relativePath}>
+            <button
+              onClick={() => toggleFileDirectory(entry.relativePath)}
+              className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm text-gray-200 hover:bg-white/5"
+              style={{ paddingLeft: `${8 + (depth * 14)}px` }}
+            >
+              <span className="w-3 text-xs text-gray-400">{isDirExpanded ? 'v' : '>'}</span>
+              <span className="font-semibold text-gray-300">{entry.name}/</span>
+            </button>
+            {isDirExpanded && (
+              <div>{renderFileTree(entry.relativePath, depth + 1)}</div>
+            )}
+          </div>
+        );
+      }
+
+      return (
+        <button
+          key={entry.relativePath}
+          onClick={() => { void openFileInTab(entry.relativePath); }}
+          className={`flex w-full items-center rounded px-2 py-1 text-left text-sm transition-colors ${
+            activeFileTabPath === entry.relativePath
+              ? 'bg-starmade-accent/20 text-white'
+              : 'text-gray-300 hover:bg-white/5'
+          }`}
+          style={{ paddingLeft: `${22 + (depth * 14)}px` }}
+        >
+          <span className="truncate">{entry.name}</span>
+          {isTabOpen && <span className="ml-2 text-[10px] uppercase tracking-wider text-gray-500">Open</span>}
+        </button>
+      );
+    });
+  };
+
+  const renderFilesTab = () => (
+    <div className="grid h-full min-h-0 grid-cols-1 gap-3 xl:grid-cols-[320px_1fr]">
+      <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
+        <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+          <div>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">Server Files</h3>
+            <p className="text-xs text-gray-500">Browse and open files from this server install.</p>
+          </div>
+          <button
+            onClick={() => { void loadFileDirectory(''); }}
+            disabled={isFileBrowserLoading || !effectiveServer}
+            className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isFileBrowserLoading ? 'Loading...' : 'Refresh'}
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          {renderFileTree('')}
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
+        <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+          <div>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">Manual File Editor</h3>
+            <p className="text-xs text-gray-500">Use Configuration tab for structured editing, or edit raw files here.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { void reloadActiveFileTab(); }}
+              disabled={!activeFileTabPath || isFileEditorLoading || isFileSaving}
+              className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Reload
+            </button>
+            <button
+              onClick={() => { void saveActiveFileTab(); }}
+              disabled={!activeFileTabPath || isFileEditorLoading || isFileSaving || !activeFileTabHasUnsavedChanges}
+              className="rounded bg-starmade-accent px-3 py-1 text-xs font-semibold uppercase tracking-wider text-white hover:bg-starmade-accent/80 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isFileSaving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </div>
+
+        <div className="border-b border-white/10 px-2 py-1">
+          <div className="flex flex-wrap items-center gap-1">
+            {openFileTabs.length === 0 ? (
+              <p className="px-2 py-1 text-xs text-gray-500">Open a file from the browser to begin editing.</p>
+            ) : (
+              openFileTabs.map((tabPath) => {
+                const tabFileName = tabPath.split('/').pop() || tabPath;
+                const tabHasUnsavedChanges = (fileContentByPath[tabPath] ?? '') !== (savedFileContentByPath[tabPath] ?? '');
+                const isActive = activeFileTabPath === tabPath;
+
+                return (
+                  <div key={tabPath} className={`inline-flex items-center rounded border ${
+                    isActive
+                      ? 'border-starmade-accent/40 bg-starmade-accent/20'
+                      : 'border-white/15 bg-black/25'
+                  }`}>
+                    <button
+                      onClick={() => setActiveFileTabPath(tabPath)}
+                      className="px-2 py-1 text-xs text-gray-200"
+                    >
+                      {tabFileName}{tabHasUnsavedChanges ? ' *' : ''}
+                    </button>
+                    <button
+                      onClick={() => closeFileTab(tabPath)}
+                      className="px-2 py-1 text-xs text-gray-400 hover:text-white"
+                      title="Close tab"
+                    >
+                      x
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {fileTabError && (
+          <div className="border-b border-red-500/30 bg-red-950/20 px-3 py-2 text-sm text-red-300">
+            {fileTabError}
+          </div>
+        )}
+
+        <div className="min-h-0 flex-1 p-3">
+          {!activeFileTabPath ? (
+            <div className="flex h-full items-center justify-center rounded-md border border-dashed border-white/15 bg-black/20 p-6 text-center text-sm text-gray-400">
+              Open a file from the left pane. For guided settings, use the Configuration tab.
+            </div>
+          ) : isFileEditorLoading ? (
+            <p className="text-sm text-gray-400">Loading {activeFileTabPath}...</p>
+          ) : (
+            <textarea
+              value={activeFileTabContent}
+              onChange={(event) => {
+                const next = event.target.value;
+                setFileContentByPath((prev) => ({ ...prev, [activeFileTabPath]: next }));
+              }}
+              spellCheck={false}
+              className="h-full w-full resize-none rounded-md border border-white/15 bg-black/40 p-3 font-mono text-xs leading-5 text-gray-200 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+            />
+          )}
         </div>
       </div>
     </div>
@@ -1525,19 +4767,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const renderActiveTab = () => {
     if (activeTab === 'control') return renderControlPanel();
+    if (activeTab === 'actions') return renderActionsPanel();
     if (activeTab === 'logs') return renderLogs();
-    if (activeTab === 'configuration') {
-      return renderPlaceholderTab(
-        'Configuration',
-        'Configuration file editing will be connected after we map exact game config paths.'
-      );
-    }
-    if (activeTab === 'files') {
-      return renderPlaceholderTab(
-        'Files',
-        'Server file browser placeholder. We will hook this tab to the server directory tree in a later pass.'
-      );
-    }
+    if (activeTab === 'configuration') return renderConfiguration();
+    if (activeTab === 'files') return renderFilesTab();
     return renderPlaceholderTab(
       'Database',
       'Database tools placeholder. This area is reserved for universe/player data operations later.'

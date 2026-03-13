@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { CogIcon, FolderIcon, TrashIcon, PlayIcon, DownloadIcon, DocumentTextIcon } from './icons';
+import { CogIcon, FolderIcon, TrashIcon, PlayIcon, DownloadIcon, DocumentTextIcon, RestoreIcon } from './icons';
 import { getIconComponent } from '../../utils/getIconComponent';
 import type { ManagedItem, DownloadStatus } from '../../types';
 import Tooltip from './Tooltip';
@@ -14,6 +14,7 @@ interface ItemCardProps {
   onOpenFolder?: (path: string) => void;
   onAction?: (item: ManagedItem) => void;
   onViewLogs?: (item: ManagedItem) => void;
+  onRestore?: (item: ManagedItem) => void;
   actionButtonText: string;
   statusLabel: string;
   downloadStatus?: DownloadStatus;
@@ -34,7 +35,7 @@ function formatSpeed(bytesPerSec: number): string {
 
 const ItemCard: React.FC<ItemCardProps> = ({
   item, isFeatured, onEdit, onDelete,
-  onDownload, onCancelDownload, onOpenFolder, onAction, onViewLogs,
+  onDownload, onCancelDownload, onOpenFolder, onAction, onViewLogs, onRestore,
   actionButtonText, statusLabel,
   downloadStatus,
 }) => {
@@ -197,6 +198,17 @@ const ItemCard: React.FC<ItemCardProps> = ({
                 aria-label="View Logs"
               >
                 <DocumentTextIcon className="w-5 h-5 text-starmade-accent" />
+              </button>
+            </Tooltip>
+          )}
+          {onRestore && (
+            <Tooltip text="Restore from Backup">
+              <button
+                onClick={() => onRestore(item)}
+                className="p-2 rounded-md hover:bg-starmade-accent/20 transition-colors"
+                aria-label="Restore from Backup"
+              >
+                <RestoreIcon className="w-5 h-5 text-gray-400 hover:text-starmade-accent" />
               </button>
             </Tooltip>
           )}

@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  screen,
   ipcMain,
   Menu,
   shell,
@@ -10,15 +11,17 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import os from 'os';
+import { Worker } from 'worker_threads';
 import { IPC } from './ipc-channels.js';
 import { storeGet, storeSet, storeDelete } from './store.js';
 import { fetchAllVersions, invalidateVersionCache } from './versions.js';
 import { startDownload, cancelDownload } from './downloader.js';
 import type { DownloadProgress } from './downloader.js';
 import { downloadJava, detectSystemJava, resolveJavaPath, getDefaultJavaPaths, findJavaExecutableInDir } from './java.js';
-import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, getGraphicsInfo } from './launcher.js';
+import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, getGraphicsInfo, listServerLogFiles, readServerLogFile } from './launcher.js';
 import type { UpdateInfo } from './updater.js';
 import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from './updater.js';
+import { createBackup, listBackups, restoreBackup } from './backup.js';
 import { loginWithPassword, refreshAccessToken, registerAccount, logoutAccount, getAuthStatus, getAccessTokenForLaunch } from './auth.js';
 import { isRunningOnWayland } from './wayland-detect.js';
 import { isRunningAsAppImage } from './appimage-detect.js';
@@ -114,6 +117,11 @@ function getLauncherDir(): string {
 let mainWindow: BrowserWindow | null = null;
 
 function createWindow(): void {
+  const { height: workAreaHeight } = screen.getPrimaryDisplay().workAreaSize;
+  const useShortScreenSizing = workAreaHeight < 720;
+  const initialHeight = useShortScreenSizing ? workAreaHeight : 900;
+  const minHeight = useShortScreenSizing ? Math.min(600, workAreaHeight) : 600;
+
   // Resolve the icon path: in packaged builds the icon is copied to
   // resources/icon.png via extraResources so it lives outside the asar and
   // can be used as a real file path.  In dev we reference it directly from
@@ -124,9 +132,11 @@ function createWindow(): void {
 
   mainWindow = new BrowserWindow({
     width: 1280,
-    height: 900,
+    height: initialHeight,
     minWidth: 960,
-    minHeight: 600,
+    minHeight,
+    resizable: true,
+    thickFrame: true,
     frame: false,
     titleBarStyle: 'hidden',
     backgroundColor: '#0D0D1B',
@@ -349,6 +359,34 @@ ipcMain.handle(IPC.GAME_GET_LOG_PATH, (_event, installationId: string) => {
   return getLogPath(installationId);
 });
 
+ipcMain.handle(IPC.GAME_LIST_LOG_FILES, (_event, installationPath: string) => {
+  if (!installationPath) {
+    return { categories: [], defaultRelativePath: null };
+  }
+
+  try {
+    return listServerLogFiles(installationPath);
+  } catch (error) {
+    console.warn('[logs] Failed to list log files:', { installationPath, error });
+    return { categories: [], defaultRelativePath: null };
+  }
+});
+
+ipcMain.handle(IPC.GAME_READ_LOG_FILE, (_event, installationPath: string, relativePath: string, maxBytes?: number) => {
+  if (!installationPath || !relativePath) {
+    return { content: '', truncated: false, error: 'Missing installation path or log file path.' };
+  }
+
+  try {
+    const payload = readServerLogFile(installationPath, relativePath, maxBytes);
+    return { ...payload, error: undefined as string | undefined };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn('[logs] Failed to read log file:', { installationPath, relativePath, error: message });
+    return { content: '', truncated: false, error: message };
+  }
+});
+
 ipcMain.handle(IPC.GAME_OPEN_LOG_LOCATION, (_event, installationPath: string) => {
   openLogLocation(installationPath);
   return { success: true };
@@ -356,6 +394,266 @@ ipcMain.handle(IPC.GAME_OPEN_LOG_LOCATION, (_event, installationPath: string) =>
 
 ipcMain.handle(IPC.GAME_GET_GRAPHICS_INFO, (_event, installationPath: string) => {
   return getGraphicsInfo(installationPath);
+});
+
+function readServerCfgKey(installationPath: string, key: string): string | null {
+  const cfgPath = path.join(installationPath, 'server.cfg');
+  if (!fs.existsSync(cfgPath)) return null;
+
+  const content = fs.readFileSync(cfgPath, 'utf8');
+  const lines = content.split(/\r?\n/);
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const lineRegex = new RegExp(`^\\s*${escapedKey}\\s*=\\s*(.*?)\\s*(?:\\/\\/.*)?$`);
+
+  for (const line of lines) {
+    const match = line.match(lineRegex);
+    if (match) {
+      return match[1].trim();
+    }
+  }
+
+  return null;
+}
+
+function listServerCfgEntries(installationPath: string): Array<{ key: string; value: string; comment: string | null }> {
+  const cfgPath = path.join(installationPath, 'server.cfg');
+  if (!fs.existsSync(cfgPath)) return [];
+
+  const content = fs.readFileSync(cfgPath, 'utf8');
+  const lines = content.split(/\r?\n/);
+  const entries: Array<{ key: string; value: string; comment: string | null }> = [];
+  const seen = new Set<string>();
+
+  for (const line of lines) {
+    const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*(?:\/\/\s*(.*))?$/);
+    if (!match) continue;
+
+    const key = match[1].trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+
+    entries.push({
+      key,
+      value: (match[2] ?? '').trim(),
+      comment: match[3]?.trim() || null,
+    });
+  }
+
+  return entries;
+}
+
+function writeServerCfgKey(installationPath: string, key: string, value: string): { success: boolean; error?: string } {
+  const cfgPath = path.join(installationPath, 'server.cfg');
+  if (!fs.existsSync(cfgPath)) {
+    return { success: false, error: `server.cfg not found at ${cfgPath}` };
+  }
+
+  const content = fs.readFileSync(cfgPath, 'utf8');
+  const lines = content.split(/\r?\n/);
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const lineRegex = new RegExp(`^(\\s*${escapedKey}\\s*=\\s*)(.*?)(\\s*(?:\\/\\/.*)?)$`);
+
+  let updated = false;
+  const nextLines = lines.map((line) => {
+    if (updated) return line;
+    const match = line.match(lineRegex);
+    if (!match) return line;
+
+    updated = true;
+    const prefix = match[1] ?? `${key} = `;
+    const suffix = match[3] ?? '';
+    return `${prefix}${value}${suffix}`;
+  });
+
+  if (!updated) {
+    nextLines.push(`${key} = ${value}`);
+  }
+
+  fs.writeFileSync(cfgPath, nextLines.join('\n'), 'utf8');
+  return { success: true };
+}
+
+function resolveExistingConfigPath(installationPath: string, relativeCandidates: string[]): string | null {
+  for (const relativePath of relativeCandidates) {
+    const candidate = path.join(installationPath, relativePath);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function readGameConfigXml(installationPath: string): string | null {
+  const configPath = resolveExistingConfigPath(installationPath, ['GameConfig.xml', 'StarMade/GameConfig.xml']);
+  if (!configPath) return null;
+  return fs.readFileSync(configPath, 'utf8');
+}
+
+function writeGameConfigXml(installationPath: string, xmlContent: string): { success: boolean; error?: string } {
+  const configPath = resolveExistingConfigPath(installationPath, ['GameConfig.xml', 'StarMade/GameConfig.xml']);
+  if (!configPath) {
+    return {
+      success: false,
+      error: `GameConfig.xml not found at ${path.join(installationPath, 'GameConfig.xml')} or ${path.join(installationPath, 'StarMade', 'GameConfig.xml')}`,
+    };
+  }
+
+  fs.writeFileSync(configPath, xmlContent, 'utf8');
+  return { success: true };
+}
+
+function resolveInstallationTargetPath(installationPath: string, relativePath: string): string {
+  const root = path.resolve(installationPath);
+  const target = path.resolve(path.join(root, relativePath));
+  if (target !== root && !target.startsWith(`${root}${path.sep}`)) {
+    throw new Error('Invalid file path.');
+  }
+  return target;
+}
+
+function listInstallationEntries(
+  installationPath: string,
+  relativeDir = '',
+): Array<{ name: string; relativePath: string; isDirectory: boolean; sizeBytes: number; modifiedMs: number }> {
+  const dirPath = resolveInstallationTargetPath(installationPath, relativeDir || '.');
+  const stats = fs.statSync(dirPath);
+  if (!stats.isDirectory()) {
+    throw new Error('Target path is not a directory.');
+  }
+
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true }).map((entry) => {
+    const absoluteEntryPath = path.join(dirPath, entry.name);
+    const entryStat = fs.statSync(absoluteEntryPath);
+    const relativePath = path.relative(path.resolve(installationPath), absoluteEntryPath).split(path.sep).join('/');
+
+    return {
+      name: entry.name,
+      relativePath,
+      isDirectory: entry.isDirectory(),
+      sizeBytes: entry.isDirectory() ? 0 : entryStat.size,
+      modifiedMs: entryStat.mtimeMs,
+    };
+  });
+
+  entries.sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  return entries;
+}
+
+function readInstallationTextFile(installationPath: string, relativePath: string): string {
+  const targetPath = resolveInstallationTargetPath(installationPath, relativePath);
+  const stats = fs.statSync(targetPath);
+  if (!stats.isFile()) {
+    throw new Error('Target path is not a file.');
+  }
+  return fs.readFileSync(targetPath, 'utf8');
+}
+
+function writeInstallationTextFile(installationPath: string, relativePath: string, content: string): { success: boolean; error?: string } {
+  const targetPath = resolveInstallationTargetPath(installationPath, relativePath);
+  const stats = fs.statSync(targetPath);
+  if (!stats.isFile()) {
+    return { success: false, error: 'Target path is not a file.' };
+  }
+
+  fs.writeFileSync(targetPath, content, 'utf8');
+  return { success: true };
+}
+
+ipcMain.handle(IPC.GAME_SERVER_CFG_GET, (_event, installationPath: string, key: string) => {
+  if (!installationPath || !key) return null;
+  try {
+    return readServerCfgKey(installationPath, key);
+  } catch (error) {
+    console.warn('[server-cfg] Failed to read key:', { installationPath, key, error });
+    return null;
+  }
+});
+
+ipcMain.handle(IPC.GAME_SERVER_CFG_LIST, (_event, installationPath: string) => {
+  if (!installationPath) return [];
+  try {
+    return listServerCfgEntries(installationPath);
+  } catch (error) {
+    console.warn('[server-cfg] Failed to list keys:', { installationPath, error });
+    return [];
+  }
+});
+
+ipcMain.handle(IPC.GAME_SERVER_CFG_SET, (_event, installationPath: string, key: string, value: string) => {
+  if (!installationPath || !key) {
+    return { success: false, error: 'installationPath and key are required.' };
+  }
+  try {
+    return writeServerCfgKey(installationPath, key, value);
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.GAME_CONFIG_XML_GET, (_event, installationPath: string) => {
+  if (!installationPath) return null;
+  try {
+    return readGameConfigXml(installationPath);
+  } catch (error) {
+    console.warn('[game-config] Failed to read GameConfig.xml:', { installationPath, error });
+    return null;
+  }
+});
+
+ipcMain.handle(IPC.GAME_CONFIG_XML_SET, (_event, installationPath: string, xmlContent: string) => {
+  if (!installationPath) {
+    return { success: false, error: 'installationPath is required.' };
+  }
+  if (typeof xmlContent !== 'string') {
+    return { success: false, error: 'xmlContent must be a string.' };
+  }
+
+  try {
+    return writeGameConfigXml(installationPath, xmlContent);
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.GAME_FILES_LIST, (_event, installationPath: string, relativeDir?: string) => {
+  if (!installationPath) return [];
+  try {
+    return listInstallationEntries(installationPath, relativeDir ?? '');
+  } catch (error) {
+    console.warn('[files] Failed to list entries:', { installationPath, relativeDir, error });
+    return [];
+  }
+});
+
+ipcMain.handle(IPC.GAME_FILE_READ, (_event, installationPath: string, relativePath: string) => {
+  if (!installationPath || !relativePath) return { content: '', error: 'installationPath and relativePath are required.' };
+  try {
+    const content = readInstallationTextFile(installationPath, relativePath);
+    return { content, error: undefined as string | undefined };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { content: '', error: message };
+  }
+});
+
+ipcMain.handle(IPC.GAME_FILE_WRITE, (_event, installationPath: string, relativePath: string, content: string) => {
+  if (!installationPath || !relativePath) {
+    return { success: false, error: 'installationPath and relativePath are required.' };
+  }
+  if (typeof content !== 'string') {
+    return { success: false, error: 'content must be a string.' };
+  }
+
+  try {
+    return writeInstallationTextFile(installationPath, relativePath, content);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, error: message };
+  }
 });
 
 // ─── Session file reader ─────────────────────────────────────────────────────
@@ -463,8 +761,402 @@ ipcMain.handle(IPC.DIALOG_OPEN_FILE, async (_event, defaultPath?: string, type?:
 
 // ─── App handlers ────────────────────────────────────────────────────────────
 
+function readServerPanelSchema(): unknown {
+  const readJsonObject = (candidatePath: string): Record<string, unknown> | null => {
+    try {
+      if (!fs.existsSync(candidatePath)) return null;
+      const raw = fs.readFileSync(candidatePath, 'utf8');
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch (error) {
+      console.warn('[schema] Failed to read schema file:', { candidatePath, error });
+    }
+    return null;
+  };
+
+  const userConfigDir = path.join(app.getPath('userData'), 'config');
+  const bundledConfigDir = path.join(__dirname, '..', 'presets', 'config');
+
+  const serverSchema = readJsonObject(path.join(userConfigDir, 'server-config-schema.json'))
+    ?? readJsonObject(path.join(bundledConfigDir, 'server-config-schema.json'));
+  const gameSchema = readJsonObject(path.join(userConfigDir, 'gameconfig-schema.json'))
+    ?? readJsonObject(path.join(bundledConfigDir, 'gameconfig-schema.json'));
+  const factionSchema = readJsonObject(path.join(userConfigDir, 'factionconfig-schema.json'))
+    ?? readJsonObject(path.join(bundledConfigDir, 'factionconfig-schema.json'));
+
+  if (serverSchema || gameSchema || factionSchema) {
+    const merged = {
+      version: 1,
+      ...(serverSchema ?? {}),
+      ...(gameSchema ?? {}),
+      ...(factionSchema ?? {}),
+    };
+    return merged;
+  }
+
+  // Backward-compatibility fallback for previous combined schema filename.
+  return readJsonObject(path.join(userConfigDir, 'server-panel-schema.json'))
+    ?? readJsonObject(path.join(bundledConfigDir, 'server-panel-schema.json'))
+    ?? null;
+}
+
 ipcMain.handle(IPC.APP_GET_USER_DATA, () => app.getPath('userData'));
 ipcMain.handle(IPC.APP_GET_SYSTEM_MEMORY, () => Math.floor(os.totalmem() / (1024 * 1024)));
+ipcMain.handle(IPC.APP_GET_SERVER_PANEL_SCHEMA, () => readServerPanelSchema());
+
+// ─── Installation file management handlers ───────────────────────────────────
+
+/**
+ * Well-known files and folders found in a valid StarMade installation.
+ * Used by `isStarMadeInstallDir` to verify a directory before deleting it.
+ */
+const STARMADE_MARKERS = new Set([
+  'StarMade.jar', // Main game JAR
+  'version.txt',  // Version descriptor written by the game/launcher
+  'data',         // Game data folder (saves, universe, etc.)
+  'logs',         // Game log folder
+  'StarMade',     // Nested StarMade subdirectory (some installs)
+]);
+
+/**
+ * Returns true when `targetPath` is safe to recursively delete.
+ *
+ * Safety checks:
+ * - Must be an absolute path with at least 2 directory levels below the
+ *   filesystem root (prevents deleting root, drive root, or a top-level
+ *   system directory such as /home or C:\Users).
+ * - Must not equal, nor be a parent of, any well-known system directory.
+ *   On Windows the protected list is built from environment variables so it
+ *   correctly uses the real absolute paths regardless of the drive letter.
+ */
+function isSafeDeletionPath(targetPath: string): boolean {
+  const normalized = path.normalize(targetPath);
+
+  // Must be absolute.
+  if (!path.isAbsolute(normalized)) return false;
+
+  // Strip the filesystem root (e.g. '/' or 'C:\') and require at least two
+  // meaningful path components beneath it, e.g.:
+  //   /home            → 1 component → BLOCKED
+  //   /home/alice      → 2 components → BLOCKED (home roots listed below)
+  //   /home/alice/game → 3 components → OK (if not in blocked list)
+  const { root } = path.parse(normalized);
+  const relParts = normalized.slice(root.length).split(path.sep).filter(Boolean);
+  if (relParts.length < 2) return false;
+
+  // Build the complete set of paths that must never be deleted.
+  const blockedPaths = new Set<string>();
+
+  if (process.platform === 'win32') {
+    // Drive root (e.g. C:\) – already captured via path.parse().root above.
+    blockedPaths.add(path.normalize(root));
+
+    // Absolute system directories derived from well-known environment variables.
+    for (const envPath of [
+      process.env.SystemRoot,           // C:\Windows
+      process.env.ProgramFiles,         // C:\Program Files
+      process.env['ProgramFiles(x86)'], // C:\Program Files (x86)
+    ]) {
+      if (envPath) blockedPaths.add(path.normalize(envPath));
+    }
+
+    // Parent directory of all user home folders (e.g. C:\Users).
+    blockedPaths.add(path.dirname(os.homedir()));
+  } else {
+    // Unix / macOS well-known system directories (all expressed as absolute paths).
+    for (const p of [
+      '/', '/bin', '/boot', '/dev', '/etc', '/lib', '/lib64',
+      '/proc', '/root', '/sbin', '/sys', '/tmp', '/usr', '/var',
+      '/home',   // parent of Linux user dirs — must NOT be deleted
+      '/Users',  // parent of macOS user dirs — must NOT be deleted
+    ]) {
+      blockedPaths.add(path.normalize(p));
+    }
+  }
+
+  const lowerNormalized = normalized.toLowerCase();
+  for (const blocked of blockedPaths) {
+    const lowerBlocked = blocked.toLowerCase();
+    // Block if normalized equals the protected path.
+    if (lowerNormalized === lowerBlocked) return false;
+    // Block if normalized is a *parent* of a protected path
+    // (e.g. prevent someone sneaking in the parent of C:\Windows).
+    if (lowerBlocked.startsWith(lowerNormalized + path.sep)) return false;
+  }
+
+  return true;
+}
+
+/**
+ * Returns true when `targetPath` appears to be a launcher-managed StarMade
+ * installation directory.
+ *
+ * An empty directory is considered safe to remove (it may have been created
+ * just before a download was cancelled or never started).
+ *
+ * For non-empty directories we require at least one well-known StarMade
+ * marker file/folder to be present.  This prevents accidental deletion of
+ * unrelated directories that happen to have the same path as a misconfigured
+ * installation record.
+ */
+function isStarMadeInstallDir(targetPath: string): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(targetPath);
+  } catch {
+    // If we cannot read the directory (e.g. permissions), be conservative.
+    return false;
+  }
+
+  // Empty directory – safe to delete (created pre-download or after a cancel).
+  if (entries.length === 0) return true;
+
+  // At least one well-known StarMade marker must be present.
+  return entries.some(e => STARMADE_MARKERS.has(e));
+}
+
+ipcMain.handle(IPC.INSTALLATION_DELETE_FILES, async (_event, targetPath: string) => {
+  if (typeof targetPath !== 'string' || targetPath.trim() === '') {
+    return { success: false, error: 'Invalid path.' };
+  }
+  if (!isSafeDeletionPath(targetPath)) {
+    return { success: false, error: 'Path is not safe to delete.' };
+  }
+
+  // Directory already absent – nothing to do.
+  if (!fs.existsSync(targetPath)) {
+    return { success: true };
+  }
+
+  if (!isStarMadeInstallDir(targetPath)) {
+    return {
+      success: false,
+      error: `The directory does not appear to be a StarMade installation: ${targetPath}`,
+    };
+  }
+
+  try {
+    await fs.promises.rm(targetPath, { recursive: true, force: true });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+});
+
+// ─── Installation backup / restore handlers ──────────────────────────────────
+
+/**
+ * Strict allowlist for installation IDs used in backup directory paths.
+ * IDs are generated via Date.now().toString() so only digits are ever expected,
+ * but we also permit hyphens and underscores for forward compatibility.
+ * Path separators and dots are explicitly excluded to prevent directory traversal.
+ */
+const SAFE_ID_RE = /^[a-zA-Z0-9_-]+$/;
+
+/**
+ * Returns the directory used to store backups for a given installation.
+ * Backups live under `<userData>/backups/<installationId>/`.
+ *
+ * Throws if `installationId` fails the safe-ID check.
+ */
+function getBackupDir(installationId: string): string {
+  if (!SAFE_ID_RE.test(installationId)) {
+    throw new Error(`Invalid installation ID: "${installationId}"`);
+  }
+  const backupsRoot = path.join(app.getPath('userData'), 'backups');
+  const backupDir = path.join(backupsRoot, installationId);
+  // Paranoia check: ensure the resolved path stays inside the backups root.
+  const normalizedRoot = path.normalize(backupsRoot) + path.sep;
+  if (!path.normalize(backupDir).startsWith(normalizedRoot)) {
+    throw new Error('Installation ID resolves outside the backups directory.');
+  }
+  return backupDir;
+}
+
+/**
+ * Run `adm-zip` folder compression in a worker thread so the Electron main
+ * thread (and therefore the IPC event-loop) stays responsive during large
+ * backups.
+ */
+function createZipInWorker(sourcePath: string, destPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    // In the packaged app the worker lives at dist-electron/backup-worker.js.
+    // In development it is at the same path relative to __dirname.
+    const workerPath = path.join(__dirname, 'backup-worker.js');
+    const worker = new Worker(workerPath, {
+      workerData: { sourcePath, destPath },
+    });
+    worker.on('message', (msg: { type: string; message?: string }) => {
+      if (msg.type === 'done') resolve();
+      else reject(new Error(msg.message ?? 'Unknown worker error'));
+    });
+    worker.on('error', reject);
+    worker.on('exit', (code) => {
+      if (code !== 0) reject(new Error(`Backup worker exited with code ${code}`));
+    });
+  });
+}
+
+ipcMain.handle(
+  IPC.INSTALLATION_BACKUP,
+  async (
+    _event,
+    payload: { installationPath: string; installationId: string; installationName: string },
+  ) => {
+    const { installationPath, installationId, installationName } = payload ?? {};
+
+    if (typeof installationPath !== 'string' || installationPath.trim() === '') {
+      return { success: false, error: 'Invalid installation path.' };
+    }
+    if (typeof installationId !== 'string' || installationId.trim() === '') {
+      return { success: false, error: 'Invalid installation ID.' };
+    }
+
+    if (!fs.existsSync(installationPath)) {
+      return { success: false, error: 'Installation directory does not exist.' };
+    }
+
+    let backupDir: string;
+    try {
+      backupDir = getBackupDir(installationId);
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
+
+    try {
+      fs.mkdirSync(backupDir, { recursive: true });
+    } catch (err) {
+      return { success: false, error: `Failed to create backup directory: ${String(err)}` };
+    }
+
+    // Build a safe filename from the installation name and a timestamp.
+    const safeName = (installationName ?? 'backup').replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') || 'backup';
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupFileName = `${safeName}_${timestamp}.zip`;
+    const backupPath = path.join(backupDir, backupFileName);
+
+    try {
+      // Run compression in a worker thread to keep the main thread responsive.
+      await createZipInWorker(installationPath, backupPath);
+      return { success: true, backupPath };
+    } catch (err) {
+      // Clean up partial zip if it was created.
+      try { fs.unlinkSync(backupPath); } catch (cleanupErr) {
+        console.warn('[backup] Failed to clean up partial zip:', cleanupErr);
+      }
+      return { success: false, error: String(err) };
+    }
+  },
+);
+
+ipcMain.handle(
+  IPC.INSTALLATION_RESTORE,
+  async (_event, payload: { backupPath: string; targetPath: string }) => {
+    const { backupPath, targetPath } = payload ?? {};
+
+    if (typeof backupPath !== 'string' || backupPath.trim() === '') {
+      return { success: false, error: 'Invalid backup path.' };
+    }
+    if (typeof targetPath !== 'string' || targetPath.trim() === '') {
+      return { success: false, error: 'Invalid target path.' };
+    }
+
+    // Validate backupPath is a .zip file inside the launcher-managed backups directory.
+    const backupsRoot = path.normalize(path.join(app.getPath('userData'), 'backups'));
+    const normalizedBackup = path.normalize(backupPath);
+    if (
+      !normalizedBackup.startsWith(backupsRoot + path.sep) ||
+      !normalizedBackup.endsWith('.zip')
+    ) {
+      return { success: false, error: 'Backup path is not a valid launcher-managed backup.' };
+    }
+
+    if (!fs.existsSync(backupPath)) {
+      return { success: false, error: 'Backup file does not exist.' };
+    }
+    if (!isSafeDeletionPath(targetPath)) {
+      return { success: false, error: 'Target path is not safe.' };
+    }
+
+    // Require the target to look like a StarMade installation (or be absent/empty)
+    // before deleting it, to prevent wiping unrelated directories.
+    if (fs.existsSync(targetPath) && !isStarMadeInstallDir(targetPath)) {
+      return {
+        success: false,
+        error: `The directory does not appear to be a StarMade installation: ${targetPath}`,
+      };
+    }
+
+    // ── Atomic-style restore ─────────────────────────────────────────────────
+    // Extract into a temp directory first.  Only replace the target directory
+    // after a successful extraction so the user is never left without files.
+    const tempDir = `${targetPath}.restore-tmp-${Date.now()}`;
+    try {
+      fs.mkdirSync(tempDir, { recursive: true });
+
+      const AdmZip = (await import('adm-zip')).default;
+      const zip = new AdmZip(backupPath);
+      zip.extractAllTo(tempDir, /* overwrite */ true);
+
+      // Atomically swap: remove old installation, rename temp into place.
+      if (fs.existsSync(targetPath)) {
+        await fs.promises.rm(targetPath, { recursive: true, force: true });
+      }
+      fs.renameSync(tempDir, targetPath);
+
+      return { success: true };
+    } catch (err) {
+      // Clean up temp dir on failure; log but don't surface cleanup errors.
+      try {
+        await fs.promises.rm(tempDir, { recursive: true, force: true });
+      } catch (cleanupErr) {
+        console.warn('[restore] Failed to clean up temp directory:', cleanupErr);
+      }
+      return { success: false, error: String(err) };
+    }
+  },
+);
+
+ipcMain.handle(IPC.INSTALLATION_LIST_BACKUPS, async (_event, installationId: string) => {
+  if (typeof installationId !== 'string' || installationId.trim() === '') {
+    return [];
+  }
+
+  let backupDir: string;
+  try {
+    backupDir = getBackupDir(installationId);
+  } catch {
+    return [];
+  }
+
+  if (!fs.existsSync(backupDir)) return [];
+
+  try {
+    const files = fs.readdirSync(backupDir).filter(f => f.endsWith('.zip'));
+    const result = files
+      .map(f => {
+        const filePath = path.join(backupDir, f);
+        try {
+          const stat = fs.statSync(filePath);
+          return {
+            name: f,
+            path: filePath,
+            createdAt: stat.birthtime.toISOString(),
+            sizeBytes: stat.size,
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter((b): b is NonNullable<typeof b> => b !== null)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return result;
+  } catch {
+    return [];
+  }
+});
 
 // ─── Shell handlers ──────────────────────────────────────────────────────────
 
@@ -525,24 +1217,15 @@ ipcMain.handle(IPC.ICONS_LIST, async () => {
  * `presetsInitialized`).
  */
 function copyPresetsToUserData(): void {
-  if (storeGet('presetsInitialized') === true) return;
-
   const presetsDir = path.join(__dirname, '..', 'presets');
   const userDataDir = app.getPath('userData');
 
-  const categories: Array<{ src: string; dest: string }> = [
-    { src: path.join(presetsDir, 'backgrounds'), dest: path.join(userDataDir, 'backgrounds') },
-    { src: path.join(presetsDir, 'icons'),       dest: path.join(userDataDir, 'icons') },
-  ];
-
-  let hadError = false;
-
-  for (const { src, dest } of categories) {
-    if (!fs.existsSync(src)) continue;
+  const copyCategory = (src: string, dest: string, fileFilter: (fileName: string) => boolean): boolean => {
+    if (!fs.existsSync(src)) return true;
 
     try {
       fs.mkdirSync(dest, { recursive: true });
-      const files = fs.readdirSync(src).filter(f => IMAGE_EXTS.has(path.extname(f).toLowerCase()));
+      const files = fs.readdirSync(src).filter(fileFilter);
       for (const file of files) {
         const srcFile  = path.join(src, file);
         const destFile = path.join(dest, file);
@@ -551,8 +1234,39 @@ function copyPresetsToUserData(): void {
           fs.copyFileSync(srcFile, destFile);
         }
       }
+      return true;
     } catch (err) {
       console.error(`[presets] Failed to copy presets from ${src} to ${dest}:`, err);
+      return false;
+    }
+  };
+
+  // Keep schema files updated for both fresh and existing users.
+  copyCategory(
+    path.join(presetsDir, 'config'),
+    path.join(userDataDir, 'config'),
+    (fileName) => fileName.toLowerCase().endsWith('.json'),
+  );
+
+  if (storeGet('presetsInitialized') === true) return;
+
+  const categories: Array<{ src: string; dest: string; fileFilter: (fileName: string) => boolean }> = [
+    {
+      src: path.join(presetsDir, 'backgrounds'),
+      dest: path.join(userDataDir, 'backgrounds'),
+      fileFilter: (fileName) => IMAGE_EXTS.has(path.extname(fileName).toLowerCase()),
+    },
+    {
+      src: path.join(presetsDir, 'icons'),
+      dest: path.join(userDataDir, 'icons'),
+      fileFilter: (fileName) => IMAGE_EXTS.has(path.extname(fileName).toLowerCase()),
+    },
+  ];
+
+  let hadError = false;
+
+  for (const { src, dest, fileFilter } of categories) {
+    if (!copyCategory(src, dest, fileFilter)) {
       hadError = true;
     }
   }
@@ -684,9 +1398,15 @@ ipcMain.handle(IPC.AUTH_GET_STATUS, (_event, { accountId }: { accountId: string 
 
 ipcMain.handle(IPC.UPDATER_GET_VERSION, () => app.getVersion());
 
-ipcMain.handle(IPC.UPDATER_CHECK, async (): Promise<UpdateInfo> => {
-  return checkForUpdates();
-});
+ipcMain.handle(
+  IPC.UPDATER_CHECK,
+  async (
+    _event,
+    options?: { includePreReleases?: boolean },
+  ): Promise<UpdateInfo> => {
+    return checkForUpdates(options);
+  },
+);
 
 ipcMain.handle(
   IPC.UPDATER_DOWNLOAD,
@@ -732,6 +1452,32 @@ ipcMain.handle(
 ipcMain.handle(IPC.UPDATER_OPEN_RELEASES_PAGE, () => {
   openReleasesPage();
 });
+
+// ─── Backup / Restore ─────────────────────────────────────────────────────────
+
+ipcMain.handle(IPC.BACKUP_CREATE, async () => {
+  return createBackup();
+});
+
+ipcMain.handle(IPC.BACKUP_LIST, async () => {
+  return listBackups();
+});
+
+ipcMain.handle(
+  IPC.BACKUP_RESTORE,
+  async (
+    _event,
+    { backupPath }: { backupPath: string },
+  ): Promise<{ success: boolean; error?: string }> => {
+    const result = await restoreBackup(backupPath);
+    if (result.success) {
+      // Restart the app so the restored data is picked up by all modules.
+      app.relaunch();
+      app.quit();
+    }
+    return result;
+  },
+);
 
 /** Milliseconds to wait after window creation before sending the update-available event. */
 const WINDOW_READY_DELAY_MS = 2_000;
@@ -783,17 +1529,19 @@ async function runStartupLegacyScan(): Promise<void> {
 /**
  * Perform a background update check on launch and push a notification to the
  * renderer if a newer version is available.  Respects the user's
- * `checkForUpdates` launcher setting.
+ * `checkForUpdates` and `useBetaChannel` launcher settings.
  */
 async function runStartupUpdateCheck(): Promise<void> {
   try {
     const stored = storeGet('launcherSettings');
+    let includePreReleases = false;
     if (stored && typeof stored === 'object') {
       const settings = stored as Record<string, unknown>;
       if (settings.checkForUpdates === false) return;
+      if (settings.useBetaChannel === true) includePreReleases = true;
     }
 
-    const info = await checkForUpdates();
+    const info = await checkForUpdates({ includePreReleases });
     if (info.available) {
       // Delay so the window is fully loaded before the modal appears.
       setTimeout(() => {

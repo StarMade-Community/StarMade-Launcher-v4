@@ -10,6 +10,8 @@ declare global {
         getUserDataPath: () => Promise<string>;
         /** Returns total system RAM in MB. */
         getSystemMemory: () => Promise<number>;
+        /** Returns server panel schema JSON used by config editors. */
+        getServerPanelSchema: () => Promise<unknown>;
       };
 
       window: {
@@ -109,10 +111,54 @@ declare global {
         listRunning: () => Promise<Array<{ installationId: string; pid?: number; isServer: boolean; uptime: number }>>;
         /** Get log file path for a running game. */
         getLogPath: (installationId: string) => Promise<string | null>;
+        /** List categorized log files from an installation's logs folder. */
+        listLogFiles: (installationPath: string) => Promise<{
+          categories: Array<{
+            id: string;
+            label: string;
+            files: Array<{
+              fileName: string;
+              relativePath: string;
+              sizeBytes: number;
+              modifiedMs: number;
+              categoryId: string;
+              categoryLabel: string;
+            }>;
+          }>;
+          defaultRelativePath: string | null;
+        }>;
+        /** Read the tail of one log file from an installation's logs folder. */
+        readLogFile: (installationPath: string, relativePath: string, maxBytes?: number) => Promise<{
+          content: string;
+          truncated: boolean;
+          error?: string;
+        }>;
         /** Open log directory in file manager. */
         openLogLocation: (installationPath: string) => Promise<{ success: boolean }>;
         /** Get GraphicsInfo.txt content if it exists. */
         getGraphicsInfo: (installationPath: string) => Promise<string | null>;
+        /** Read a value from server.cfg by key (e.g. MAX_CLIENTS). */
+        readServerConfigValue: (installationPath: string, key: string) => Promise<string | null>;
+        /** List parsed key/value entries from server.cfg. */
+        listServerConfigValues: (installationPath: string) => Promise<Array<{ key: string; value: string; comment: string | null }>>;
+        /** Set a value in server.cfg by key (e.g. MAX_CLIENTS). */
+        writeServerConfigValue: (installationPath: string, key: string, value: string) => Promise<{ success: boolean; error?: string }>;
+        /** Read installation GameConfig.xml file content. */
+        readGameConfigXml: (installationPath: string) => Promise<string | null>;
+        /** Write installation GameConfig.xml file content. */
+        writeGameConfigXml: (installationPath: string, xmlContent: string) => Promise<{ success: boolean; error?: string }>;
+        /** List entries in an installation directory (relative path). */
+        listInstallationFiles: (installationPath: string, relativeDir?: string) => Promise<Array<{
+          name: string;
+          relativePath: string;
+          isDirectory: boolean;
+          sizeBytes: number;
+          modifiedMs: number;
+        }>>;
+        /** Read a text file from an installation directory. */
+        readInstallationFile: (installationPath: string, relativePath: string) => Promise<{ content: string; error?: string }>;
+        /** Write a text file in an installation directory. */
+        writeInstallationFile: (installationPath: string, relativePath: string, content: string) => Promise<{ success: boolean; error?: string }>;
         /** Subscribe to game log events. Returns a cleanup function. */
         onLog: (cb: (data: { installationId: string; level: string; message: string }) => void) => () => void;
         /**
@@ -143,6 +189,39 @@ declare global {
         openPath: (targetPath: string) => Promise<{ success: boolean; error?: string }>;
         /** Open a URL in the system default browser (http/https only). */
         openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
+      };
+
+      /** Installation file management APIs */
+      installation: {
+        /**
+         * Recursively delete all files at the given path.
+         * Returns `{ success: true }` when done (or when the directory was already absent),
+         * or `{ success: false, error }` on failure.
+         */
+        deleteFiles: (targetPath: string) => Promise<{ success: boolean; error?: string }>;
+        /**
+         * Create a compressed (.zip) backup of the installation directory.
+         * Returns `{ success: true, backupPath }` on success or `{ success: false, error }` on failure.
+         */
+        backup: (
+          installationPath: string,
+          installationId: string,
+          installationName: string,
+        ) => Promise<{ success: boolean; backupPath?: string; error?: string }>;
+        /**
+         * Restore an installation from a compressed backup.
+         * Returns `{ success: true }` or `{ success: false, error }`.
+         */
+        restore: (
+          backupPath: string,
+          targetPath: string,
+        ) => Promise<{ success: boolean; error?: string }>;
+        /**
+         * List available backups for an installation (newest first).
+         */
+        listBackups: (
+          installationId: string,
+        ) => Promise<Array<{ name: string; path: string; createdAt: string; sizeBytes: number }>>;
       };
 
       /** Background image APIs */

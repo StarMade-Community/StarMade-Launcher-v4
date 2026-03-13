@@ -15,6 +15,9 @@ const launcherApi = {
       ipcRenderer.invoke(IPC.APP_GET_USER_DATA), /** Returns total system RAM in MB. */
     getSystemMemory: (): Promise<number> =>
       ipcRenderer.invoke(IPC.APP_GET_SYSTEM_MEMORY),
+    /** Returns the server panel schema JSON used to drive config editor metadata. */
+    getServerPanelSchema: (): Promise<unknown> =>
+      ipcRenderer.invoke(IPC.APP_GET_SERVER_PANEL_SCHEMA),
   },
 
   window: {
@@ -145,6 +148,30 @@ const launcherApi = {
     getLogPath: (installationId: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.GAME_GET_LOG_PATH, installationId),
 
+    /** List categorized log files from an installation's logs folder. */
+    listLogFiles: (installationPath: string): Promise<{
+      categories: Array<{
+        id: string;
+        label: string;
+        files: Array<{
+          fileName: string;
+          relativePath: string;
+          sizeBytes: number;
+          modifiedMs: number;
+          categoryId: string;
+          categoryLabel: string;
+        }>;
+      }>;
+      defaultRelativePath: string | null;
+    }> => ipcRenderer.invoke(IPC.GAME_LIST_LOG_FILES, installationPath),
+
+    /** Read the tail of one log file from an installation's logs folder. */
+    readLogFile: (installationPath: string, relativePath: string, maxBytes?: number): Promise<{
+      content: string;
+      truncated: boolean;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.GAME_READ_LOG_FILE, installationPath, relativePath, maxBytes),
+
     /** Open log directory in file manager. */
     openLogLocation: (installationPath: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke(IPC.GAME_OPEN_LOG_LOCATION, installationPath),
@@ -152,6 +179,43 @@ const launcherApi = {
     /** Get GraphicsInfo.txt content if it exists. */
     getGraphicsInfo: (installationPath: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.GAME_GET_GRAPHICS_INFO, installationPath),
+
+    /** Read a value from server.cfg by key (e.g. MAX_CLIENTS). */
+    readServerConfigValue: (installationPath: string, key: string): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.GAME_SERVER_CFG_GET, installationPath, key),
+
+    /** List parsed key/value entries from server.cfg. */
+    listServerConfigValues: (installationPath: string): Promise<Array<{ key: string; value: string; comment: string | null }>> =>
+      ipcRenderer.invoke(IPC.GAME_SERVER_CFG_LIST, installationPath),
+
+    /** Set a value in server.cfg by key (e.g. MAX_CLIENTS). */
+    writeServerConfigValue: (installationPath: string, key: string, value: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_SERVER_CFG_SET, installationPath, key, value),
+
+    /** Read installation GameConfig.xml file content. */
+    readGameConfigXml: (installationPath: string): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.GAME_CONFIG_XML_GET, installationPath),
+
+    /** Write installation GameConfig.xml file content. */
+    writeGameConfigXml: (installationPath: string, xmlContent: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_CONFIG_XML_SET, installationPath, xmlContent),
+
+    /** List entries in an installation directory (relative path). */
+    listInstallationFiles: (installationPath: string, relativeDir?: string): Promise<Array<{
+      name: string;
+      relativePath: string;
+      isDirectory: boolean;
+      sizeBytes: number;
+      modifiedMs: number;
+    }>> => ipcRenderer.invoke(IPC.GAME_FILES_LIST, installationPath, relativeDir),
+
+    /** Read a text file from an installation directory. */
+    readInstallationFile: (installationPath: string, relativePath: string): Promise<{ content: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_FILE_READ, installationPath, relativePath),
+
+    /** Write a text file in an installation directory. */
+    writeInstallationFile: (installationPath: string, relativePath: string, content: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_FILE_WRITE, installationPath, relativePath, content),
 
     /**
      * Read the `launcher-session.json` file written by the game into the
@@ -192,6 +256,47 @@ const launcherApi = {
     /** Open a URL in the system default browser (http/https only). */
     openExternal: (url: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC.SHELL_OPEN_EXTERNAL, url),
+  },
+
+  /** Installation file management APIs */
+  installation: {
+    /**
+     * Recursively delete the physical files at the given path.
+     * Returns { success: true } when the directory was removed (or was already
+     * absent), or { success: false, error } on failure.
+     */
+    deleteFiles: (targetPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.INSTALLATION_DELETE_FILES, targetPath),
+
+    /**
+     * Create a compressed (.zip) backup of the installation directory.
+     * Returns { success: true, backupPath } on success or { success: false, error } on failure.
+     */
+    backup: (
+      installationPath: string,
+      installationId: string,
+      installationName: string,
+    ): Promise<{ success: boolean; backupPath?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.INSTALLATION_BACKUP, { installationPath, installationId, installationName }),
+
+    /**
+     * Restore an installation from a compressed backup.
+     * Returns { success: true } or { success: false, error }.
+     */
+    restore: (
+      backupPath: string,
+      targetPath: string,
+    ): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.INSTALLATION_RESTORE, { backupPath, targetPath }),
+
+    /**
+     * List available backups for an installation (newest first).
+     * Returns an array of backup descriptors.
+     */
+    listBackups: (
+      installationId: string,
+    ): Promise<Array<{ name: string; path: string; createdAt: string; sizeBytes: number }>> =>
+      ipcRenderer.invoke(IPC.INSTALLATION_LIST_BACKUPS, installationId),
   },
 
   /** Background image APIs */
@@ -287,9 +392,10 @@ const launcherApi = {
 
     /**
      * Manually trigger an update check against GitHub releases.
+     * Pass `includePreReleases: true` to include pre-release versions.
      * Resolves with update info (available, latestVersion, etc.).
      */
-    checkForUpdates: (): Promise<{
+    checkForUpdates: (options?: { includePreReleases?: boolean }): Promise<{
       available: boolean;
       latestVersion: string;
       currentVersion: string;
@@ -297,7 +403,8 @@ const launcherApi = {
       downloadUrl: string;
       assetUrl?: string;
       assetName?: string;
-    }> => ipcRenderer.invoke(IPC.UPDATER_CHECK),
+      isPreRelease?: boolean;
+    }> => ipcRenderer.invoke(IPC.UPDATER_CHECK, options),
 
     /**
      * Download the update asset. Returns the local installer path on success.
@@ -346,6 +453,7 @@ const launcherApi = {
       downloadUrl: string;
       assetUrl?: string;
       assetName?: string;
+      isPreRelease?: boolean;
     }) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, info: {
         available: boolean;
@@ -355,10 +463,35 @@ const launcherApi = {
         downloadUrl: string;
         assetUrl?: string;
         assetName?: string;
+        isPreRelease?: boolean;
       }) => cb(info);
       ipcRenderer.on(IPC.UPDATER_UPDATE_AVAILABLE, listener);
       return () => ipcRenderer.removeListener(IPC.UPDATER_UPDATE_AVAILABLE, listener);
     },
+  },
+
+  /** Launcher data backup / restore APIs */
+  backup: {
+    /**
+     * Create a timestamped backup of the launcher userData directory.
+     * Returns the path to the backup on success.
+     */
+    create: (): Promise<{ success: boolean; backupPath?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.BACKUP_CREATE),
+
+    /**
+     * List available backups, newest first.
+     * Each entry has `name`, `path`, and `date`.
+     */
+    list: (): Promise<Array<{ name: string; path: string; date: string }>> =>
+      ipcRenderer.invoke(IPC.BACKUP_LIST),
+
+    /**
+     * Restore a backup from the given path and restart the launcher.
+     * The app will relaunch automatically on success.
+     */
+    restore: (backupPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.BACKUP_RESTORE, { backupPath }),
   },
 };
 
