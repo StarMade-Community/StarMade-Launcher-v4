@@ -298,9 +298,10 @@ const launcherApi = {
 
     /**
      * Manually trigger an update check against GitHub releases.
+     * Pass `includePreReleases: true` to include pre-release versions.
      * Resolves with update info (available, latestVersion, etc.).
      */
-    checkForUpdates: (): Promise<{
+    checkForUpdates: (options?: { includePreReleases?: boolean }): Promise<{
       available: boolean;
       latestVersion: string;
       currentVersion: string;
@@ -308,7 +309,8 @@ const launcherApi = {
       downloadUrl: string;
       assetUrl?: string;
       assetName?: string;
-    }> => ipcRenderer.invoke(IPC.UPDATER_CHECK),
+      isPreRelease?: boolean;
+    }> => ipcRenderer.invoke(IPC.UPDATER_CHECK, options),
 
     /**
      * Download the update asset. Returns the local installer path on success.
@@ -357,6 +359,7 @@ const launcherApi = {
       downloadUrl: string;
       assetUrl?: string;
       assetName?: string;
+      isPreRelease?: boolean;
     }) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, info: {
         available: boolean;
@@ -366,10 +369,35 @@ const launcherApi = {
         downloadUrl: string;
         assetUrl?: string;
         assetName?: string;
+        isPreRelease?: boolean;
       }) => cb(info);
       ipcRenderer.on(IPC.UPDATER_UPDATE_AVAILABLE, listener);
       return () => ipcRenderer.removeListener(IPC.UPDATER_UPDATE_AVAILABLE, listener);
     },
+  },
+
+  /** Launcher data backup / restore APIs */
+  backup: {
+    /**
+     * Create a timestamped backup of the launcher userData directory.
+     * Returns the path to the backup on success.
+     */
+    create: (): Promise<{ success: boolean; backupPath?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.BACKUP_CREATE),
+
+    /**
+     * List available backups, newest first.
+     * Each entry has `name`, `path`, and `date`.
+     */
+    list: (): Promise<Array<{ name: string; path: string; date: string }>> =>
+      ipcRenderer.invoke(IPC.BACKUP_LIST),
+
+    /**
+     * Restore a backup from the given path and restart the launcher.
+     * The app will relaunch automatically on success.
+     */
+    restore: (backupPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.BACKUP_RESTORE, { backupPath }),
   },
 };
 
