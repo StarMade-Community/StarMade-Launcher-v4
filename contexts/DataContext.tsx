@@ -31,6 +31,7 @@ const DEFAULT_SERVER: Omit<ManagedItem, 'id'> = {
   icon: 'server',
   path: '',
   lastPlayed: 'Never',
+  installed: false,
   port: '4242',
 };
 
@@ -204,6 +205,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             setInstallations(prev =>
                 prev.map(i => i.id === installationId ? { ...i, installed: true } : i)
             );
+            setServers(prev =>
+                prev.map(s => s.id === installationId ? { ...s, installed: true } : s)
+            );
         });
 
         const removeError = window.launcher.download.onError(({ installationId, error }) => {
@@ -294,17 +298,15 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     // ── Download actions ──────────────────────────────────────────────────────
 
-    const downloadVersion = useCallback((installationId: string) => {
+    const downloadVersion = useCallback((itemId: string) => {
         if (!hasDownload()) {
             console.warn('[DataContext] Download API not available (not running in Electron).');
             return;
         }
 
-        setInstallations(prev => prev.map(i => i.id === installationId ? i : i)); // noop – keep ref stable
-
         setDownloadStatuses(prev => ({
             ...prev,
-            [installationId]: {
+            [itemId]: {
                 state: 'checksums', percent: 0,
                 bytesReceived: 0, totalBytes: 0,
                 filesDownloaded: 0, totalFiles: 0,
@@ -312,16 +314,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             },
         }));
 
-        // Resolve installationId → installation → buildPath
-        setInstallations(prev => {
-            const installation = prev.find(i => i.id === installationId);
-            if (!installation) return prev;
-
-            // Use stored buildPath first; fall back to looking it up in the versions list
-            let buildPath = installation.buildPath;
+        // Helper: resolve buildPath and start the download for the given item
+        const beginDownload = (item: ManagedItem) => {
+            let buildPath = item.buildPath;
             if (!buildPath) {
                 setVersions(vPrev => {
-                    const v = vPrev.find(v => v.id === installation.version && v.type === installation.type);
+                    const v = vPrev.find(v => v.id === item.version && v.type === item.type);
                     buildPath = v?.buildPath;
                     return vPrev;
                 });
@@ -330,7 +328,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             if (!buildPath) {
                 setDownloadStatuses(ds => ({
                     ...ds,
-                    [installationId]: {
+                    [itemId]: {
                         state: 'error', percent: 0,
                         bytesReceived: 0, totalBytes: 0,
                         filesDownloaded: 0, totalFiles: 0,
@@ -338,12 +336,25 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                         error: 'Version not available for download — build path unknown.',
                     },
                 }));
-                return prev;
+                return;
             }
 
-            window.launcher.download.start(installationId, buildPath, installation.path)
+            window.launcher.download.start(itemId, buildPath, item.path)
                 .catch((err: unknown) => console.error('[DataContext] download.start failed:', err));
+        };
 
+        // Search installations first, then servers; stop at first match
+        let started = false;
+
+        setInstallations(prev => {
+            const item = prev.find(i => i.id === itemId);
+            if (item && !started) { started = true; beginDownload(item); }
+            return prev;
+        });
+
+        setServers(prev => {
+            const item = prev.find(s => s.id === itemId);
+            if (item && !started) { started = true; beginDownload(item); }
             return prev;
         });
     }, []);

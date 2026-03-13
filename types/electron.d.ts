@@ -202,6 +202,11 @@ declare global {
         scanFolder: (folderPath: string) => Promise<string[]>;
         /** Read and parse the version from a legacy install's version.txt. Returns the version string or null. */
         readVersion: (installPath: string) => Promise<string | null>;
+        /**
+         * Subscribe to first-startup legacy scan results pushed by the main process.
+         * Returns a cleanup function.
+         */
+        onScanResult: (cb: (paths: string[]) => void) => (() => void);
       };
 
       /** Launcher auto-updater APIs */

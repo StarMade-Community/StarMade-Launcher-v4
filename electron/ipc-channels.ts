@@ -114,6 +114,8 @@ export const IPC = {
   LEGACY_SCAN_FOLDER: 'legacy:scan-folder',
   /** Renderer → Main (invoke): read and parse the version from a legacy install's version.txt. Returns the version string or null. */
   LEGACY_READ_VERSION: 'legacy:read-version',
+  /** Main → Renderer: first-startup background legacy scan completed; payload is the array of found paths. */
+  LEGACY_SCAN_RESULT: 'legacy:scan-result',
 
   // ─── Launcher auto-updater ───────────────────────────────────────────────────
 
