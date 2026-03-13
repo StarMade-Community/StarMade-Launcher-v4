@@ -213,6 +213,10 @@ const launcherApi = {
     /** Scan a specific folder (and its sub-directories) for legacy StarMade installations. */
     scanFolder: (folderPath: string): Promise<string[]> =>
       ipcRenderer.invoke(IPC.LEGACY_SCAN_FOLDER, folderPath),
+
+    /** Read and parse the version from a legacy install's version.txt. Returns the version string or null. */
+    readVersion: (installPath: string): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.LEGACY_READ_VERSION, installPath),
   },
 
   /** Account authentication APIs */

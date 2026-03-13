@@ -21,6 +21,7 @@ import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from
 import { loginWithPassword, refreshAccessToken, registerAccount, logoutAccount, getAuthStatus, getAccessTokenForLaunch } from './auth.js';
 import { isRunningAsAppImage } from './appimage-detect.js';
 import { isRunningOnWayland } from './wayland-detect.js';
+import { parseVersionTxt } from './legacy.js';
 
 // ─── ES Module compatibility ─────────────────────────────────────────────────
 
@@ -560,6 +561,16 @@ ipcMain.handle(IPC.LEGACY_SCAN, async () => {
 
 ipcMain.handle(IPC.LEGACY_SCAN_FOLDER, async (_event, folderPath: string) => {
   return findLegacyInstalls(folderPath);
+});
+
+ipcMain.handle(IPC.LEGACY_READ_VERSION, async (_event, installPath: string) => {
+  try {
+    const versionFilePath = path.join(installPath, 'version.txt');
+    const content = await fs.promises.readFile(versionFilePath, 'utf-8');
+    return parseVersionTxt(content);
+  } catch {
+    return null;
+  }
 });
 
 // ─── Auth IPC handlers ────────────────────────────────────────────────────────
