@@ -238,6 +238,11 @@ const LauncherSettings: React.FC = () => {
             } catch (error) {
                 console.error('Failed to load defaults for legacy import:', error);
             }
+        // Try to read the version from version.txt inside the install directory
+        let version = 'unknown';
+        if (window.launcher?.legacy?.readVersion) {
+            const parsed = await window.launcher.legacy.readVersion(installPath);
+            if (parsed) version = parsed;
         }
 
         // Extract the last path segment as a display name (works on both / and \ separators)
@@ -245,7 +250,7 @@ const LauncherSettings: React.FC = () => {
         const newItem = {
             id: Date.now().toString(),
             name: folderName,
-            version: 'unknown',
+            version,
             // 'archive' is the closest built-in type for pre-existing installs not sourced from the CDN
             type: 'archive' as const,
             icon: 'release',
