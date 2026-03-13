@@ -168,7 +168,7 @@ const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
                         Update Available
                     </h2>
                     <p className="mt-2 text-gray-300 leading-relaxed">
-                        A new version of StarMade Launcher is available.
+                        A new version of the StarMade Launcher is available.
                     </p>
                     <div className="mt-4 flex items-center gap-3 text-sm">
                         <span className="px-3 py-1 rounded-full bg-white/10 text-gray-400 font-mono">

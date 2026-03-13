@@ -521,18 +521,23 @@ export function getGraphicsInfo(installationPath: string): string | null {
 
 /**
  * Stop all running processes (called on app quit).
+ *
+ * All console output here is wrapped in try-catch because stdout/stderr may
+ * already be closed when this is invoked from the 'before-quit' handler
+ * (e.g. after app.quit() is called by the self-updater), and a failed write
+ * would otherwise surface as an EPIPE uncaught exception / error dialog.
  */
 export function stopAllGames(): void {
-  console.log(`[Launcher] Stopping all running processes (${runningProcesses.size})`);
+  try { console.log(`[Launcher] Stopping all running processes (${runningProcesses.size})`); } catch { /* ignore EPIPE */ }
   
   for (const [id, running] of runningProcesses.entries()) {
     try {
       running.process.kill('SIGTERM');
       running.logStream.end();
       running.logFileWatcher?.close();
-      console.log(`[Launcher] Stopped ${id}`);
+      try { console.log(`[Launcher] Stopped ${id}`); } catch { /* ignore EPIPE */ }
     } catch (error) {
-      console.error(`[Launcher] Failed to stop ${id}:`, error);
+      try { console.error(`[Launcher] Failed to stop ${id}:`, error); } catch { /* ignore EPIPE */ }
     }
   }
   
