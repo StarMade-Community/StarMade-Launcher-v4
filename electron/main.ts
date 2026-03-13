@@ -9,6 +9,7 @@ import {
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import os from 'os';
 import { IPC } from './ipc-channels.js';
 import { storeGet, storeSet, storeDelete } from './store.js';
 import { fetchAllVersions, invalidateVersionCache } from './versions.js';
@@ -437,6 +438,7 @@ ipcMain.handle(IPC.DIALOG_OPEN_FILE, async (_event, defaultPath?: string, type?:
 // ─── App handlers ────────────────────────────────────────────────────────────
 
 ipcMain.handle(IPC.APP_GET_USER_DATA, () => app.getPath('userData'));
+ipcMain.handle(IPC.APP_GET_SYSTEM_MEMORY, () => Math.floor(os.totalmem() / (1024 * 1024)));
 
 // ─── Shell handlers ──────────────────────────────────────────────────────────
 

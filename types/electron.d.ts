@@ -8,6 +8,8 @@ declare global {
       app: {
         /** Returns the Electron userData directory path. */
         getUserDataPath: () => Promise<string>;
+        /** Returns total system RAM in MB. */
+        getSystemMemory: () => Promise<number>;
       };
 
       window: {

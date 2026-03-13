@@ -86,6 +86,8 @@ export const IPC = {
 
   /** Renderer → Main (invoke): get the app userData directory path. */
   APP_GET_USER_DATA: 'app:get-user-data',
+  /** Renderer → Main (invoke): get total system RAM in MB. */
+  APP_GET_SYSTEM_MEMORY: 'app:get-system-memory',
 
   // ─── Shell ──────────────────────────────────────────────────────────────────
 
