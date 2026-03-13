@@ -36,11 +36,11 @@ A modern, immersive launcher for [StarMade](https://www.star-made.org/) — the 
 
 Download the latest release for your platform:
 
-- **Windows**: [StarMade-Launcher.exe](https://github.com/YOUR_ORG/StarMade-Launcher-v4/releases/latest)
-- **macOS**: [StarMade-Launcher.dmg](https://github.com/YOUR_ORG/StarMade-Launcher-v4/releases/latest)
-- **Linux**: [StarMade-Launcher.AppImage](https://github.com/YOUR_ORG/StarMade-Launcher-v4/releases/latest)
+- **Windows**: [StarMade-Launcher.exe](https://github.com/StarMade-Community/StarMade-Launcher-v4/releases/latest)
+- **macOS**: [StarMade-Launcher.dmg](https://github.com/StarMade-Community/StarMade-Launcher-v4/releases/latest)
+- **Linux**: [StarMade-Launcher.AppImage](https://github.com/StarMade-Community/StarMade-Launcher-v4/releases/latest)
 
-> **Note:** See the [Releases](https://github.com/YOUR_ORG/StarMade-Launcher-v4/releases) page for all versions and SHA-256 checksums.
+> **Note:** See the [Releases](https://github.com/StarMade-Community/StarMade-Launcher-v4/releases) page for all versions and SHA-256 checksums.
 
 ---
 
@@ -163,10 +163,6 @@ tests/
 - **Official Website**: https://www.star-made.org/
 - **Discord**: https://discord.gg/starmade
 - **Steam**: https://store.steampowered.com/app/244770/StarMade/
-
-## Contributing
-
-Before contributing, please read the [Copilot / AI coding instructions](.github/copilot-instructions.md) — they document the project conventions, architecture, and development workflow that all contributors (human or AI) should follow.
 
 ## License
 
