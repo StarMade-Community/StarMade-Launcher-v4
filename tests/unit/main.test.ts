@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { isRunningAsAppImage } from '../../electron/appimage-detect.js';
 import { isRunningOnWayland } from '../../electron/wayland-detect.js';
+import { parseVersionTxt } from '../../electron/legacy.js';
 
 // ─── isRunningAsAppImage ──────────────────────────────────────────────────────
 
@@ -75,6 +76,42 @@ describe('isRunningOnWayland', () => {
   it('returns true when WAYLAND_DISPLAY is set even if XDG_SESSION_TYPE is x11', () => {
     // WAYLAND_DISPLAY being set is the authoritative indicator
     expect(isRunningOnWayland({ WAYLAND_DISPLAY: 'wayland-1', XDG_SESSION_TYPE: 'x11' })).toBe(true);
+  });
+});
+
+// ─── parseVersionTxt ─────────────────────────────────────────────────────────
+
+describe('parseVersionTxt', () => {
+  it('parses a standard version.txt entry', () => {
+    expect(parseVersionTxt('0.205.1#20260311_181557')).toBe('0.205.1');
+  });
+
+  it('handles trailing newline', () => {
+    expect(parseVersionTxt('0.205.1#20260311_181557\n')).toBe('0.205.1');
+  });
+
+  it('handles Windows-style line endings', () => {
+    expect(parseVersionTxt('0.203.175#20231020_123456\r\n')).toBe('0.203.175');
+  });
+
+  it('returns null when there is no # character', () => {
+    expect(parseVersionTxt('0.205.1')).toBeNull();
+  });
+
+  it('returns null for empty string', () => {
+    expect(parseVersionTxt('')).toBeNull();
+  });
+
+  it('returns null for whitespace-only string', () => {
+    expect(parseVersionTxt('   \n')).toBeNull();
+  });
+
+  it('returns null when version part is empty (# at start)', () => {
+    expect(parseVersionTxt('#20260311_181557')).toBeNull();
+  });
+
+  it('returns null when version part is only whitespace', () => {
+    expect(parseVersionTxt('   #20260311_181557')).toBeNull();
   });
 });
 
