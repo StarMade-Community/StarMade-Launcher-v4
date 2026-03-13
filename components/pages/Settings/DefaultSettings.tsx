@@ -35,7 +35,7 @@ const DEFAULT_INSTALLATION_SETTINGS: DefaultSettingsData = {
     gameDir:    getDefaultGameDirectory(false),
     port:       '4242',
     javaMemory: 8192,
-    jvmArgs:    '-Xms4G -Xmx4G',
+    jvmArgs:    '-Xms8G -Xmx8G',
     javaPath8:  '',
     javaPath25: '',
 };
@@ -44,7 +44,7 @@ const DEFAULT_SERVER_SETTINGS: DefaultSettingsData = {
     gameDir:    getDefaultGameDirectory(true),
     port:       '4242',
     javaMemory: 8192,
-    jvmArgs:    '-Xms4G -Xmx4G',
+    jvmArgs:    '-Xms8G -Xmx8G',
     javaPath8:  '',
     javaPath25: '',
 };
