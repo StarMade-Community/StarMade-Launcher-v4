@@ -13,7 +13,7 @@ import fs from 'fs';
 import os from 'os';
 import { Worker } from 'worker_threads';
 import { IPC } from './ipc-channels.js';
-import { storeGet, storeSet, storeDelete } from './store.js';
+import { storeGet, storeSet, storeDelete, storeClearAll } from './store.js';
 import { fetchAllVersions, invalidateVersionCache } from './versions.js';
 import { startDownload, cancelDownload } from './downloader.js';
 import type { DownloadProgress } from './downloader.js';
@@ -203,6 +203,19 @@ ipcMain.on(IPC.WINDOW_CLOSE, () => mainWindow?.close());
 ipcMain.handle(IPC.STORE_GET, (_event, key: string) => storeGet(key));
 ipcMain.handle(IPC.STORE_SET, (_event, key: string, value: unknown) => { storeSet(key, value); });
 ipcMain.handle(IPC.STORE_DELETE, (_event, key: string) => { storeDelete(key); });
+ipcMain.handle(IPC.STORE_CLEAR_ALL, () => {
+  try {
+    storeClearAll();
+    // Relaunch so all in-memory module state (accounts, installations, etc.)
+    // is fully reset from the now-empty store.
+    app.relaunch();
+    app.quit();
+    return { success: true };
+  } catch (err) {
+    console.error('[store] clear-all failed:', err);
+    return { success: false, error: String(err) };
+  }
+});
 
 // ─── Version manifest IPC handlers ───────────────────────────────────────────
 

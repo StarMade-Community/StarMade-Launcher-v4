@@ -32,9 +32,11 @@ const launcherApi = {
   },
 
   store: {
-    get:    (key: string): Promise<unknown>  => ipcRenderer.invoke(IPC.STORE_GET, key),
-    set:    (key: string, value: unknown): Promise<void> => ipcRenderer.invoke(IPC.STORE_SET, key, value),
-    delete: (key: string): Promise<void>     => ipcRenderer.invoke(IPC.STORE_DELETE, key),
+    get:      (key: string): Promise<unknown>  => ipcRenderer.invoke(IPC.STORE_GET, key),
+    set:      (key: string, value: unknown): Promise<void> => ipcRenderer.invoke(IPC.STORE_SET, key, value),
+    delete:   (key: string): Promise<void>     => ipcRenderer.invoke(IPC.STORE_DELETE, key),
+    /** Wipe all persisted data and restart the launcher. */
+    clearAll: (): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke(IPC.STORE_CLEAR_ALL),
   },
 
   // ─── Phase 3: Version manifest ─────────────────────────────────────────────

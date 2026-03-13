@@ -36,6 +36,11 @@ declare global {
         set: (key: string, value: unknown) => Promise<void>;
         /** Remove a key from the store. */
         delete: (key: string) => Promise<void>;
+        /**
+         * Wipe all persisted data (accounts, installations, settings, etc.) and
+         * restart the launcher.  This is a destructive / factory-reset operation.
+         */
+        clearAll: () => Promise<{ success: boolean; error?: string }>;
       };
 
       /** Version manifest API — Phase 3. */

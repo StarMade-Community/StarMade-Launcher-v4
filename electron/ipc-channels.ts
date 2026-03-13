@@ -18,6 +18,12 @@ export const IPC = {
   STORE_SET: 'store:set',
   /** Renderer → Main: delete a key from the persistent JSON store */
   STORE_DELETE: 'store:delete',
+  /**
+   * Renderer → Main (invoke): clear all persisted store data and restart the
+   * launcher.  This is the "factory reset" / "clear all client data" action.
+   * Returns: { success: boolean; error?: string }
+   */
+  STORE_CLEAR_ALL: 'store:clear-all',
 
   // ─── Phase 3: Version manifest ────────────────────────────────────────────
 
