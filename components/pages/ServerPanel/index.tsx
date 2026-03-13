@@ -984,11 +984,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     return (
       <div className={gridClassName}>
-        {options?.enableQuickDrag && isLayoutEditMode && renderQuickActionDropZone(0, 'col-span-full')}
         {actions.map((action) => {
           const isPinned = dashboardLayout.quickActionIds.includes(action.id);
           const quickActionIndex = dashboardLayout.quickActionIds.indexOf(action.id);
           const canDrag = isLayoutEditMode && ((!!options?.enableQuickDrag && isPinned) || !!options?.allowCatalogDrag);
+          const canAcceptDrop = !!options?.enableQuickDrag && isLayoutEditMode && !!draggedQuickAction;
           return (
             <React.Fragment key={action.id}>
               <div
@@ -1002,10 +1002,26 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   setDraggedQuickAction(null);
                   setQuickActionDropTarget(null);
                 }}
+                onDragEnter={() => {
+                  if (!canAcceptDrop || quickActionIndex < 0) return;
+                  setQuickActionDropTarget(quickActionIndex);
+                }}
+                onDragOver={(event) => {
+                  if (!canAcceptDrop || quickActionIndex < 0) return;
+                  event.preventDefault();
+                  setQuickActionDropTarget(quickActionIndex);
+                }}
+                onDrop={(event) => {
+                  if (!canAcceptDrop || quickActionIndex < 0) return;
+                  event.preventDefault();
+                  handleQuickActionDrop(quickActionIndex);
+                }}
                 className={`rounded-lg border p-4 transition-all ${
                   draggedQuickAction?.actionId === action.id
                     ? 'border-starmade-accent/50 bg-starmade-accent/10 opacity-60 shadow-[0_0_0_1px_rgba(34,123,134,0.25)]'
-                    : 'border-white/10 bg-black/20 hover:border-white/20'
+                    : quickActionDropTarget === quickActionIndex
+                      ? 'border-starmade-accent/50 bg-starmade-accent/10 shadow-[0_0_0_1px_rgba(34,123,134,0.25)]'
+                      : 'border-white/10 bg-black/20 hover:border-white/20'
                 } ${canDrag ? 'cursor-move' : ''}`}
               >
               <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
@@ -1043,7 +1059,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 {action.label}
               </button>
               </div>
-              {options?.enableQuickDrag && isLayoutEditMode && renderQuickActionDropZone((isPinned ? quickActionIndex : dashboardLayout.quickActionIds.length) + 1, 'col-span-full')}
             </React.Fragment>
           );
         })}
@@ -1058,38 +1073,33 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setQuickActionDropTarget(null);
   }, [draggedQuickAction, moveQuickActionToIndex]);
 
-  const renderQuickActionDropZone = (targetIndex: number, className = '', label?: string) => (
-    draggedQuickAction ? (
-      <div
-        key={`quick-action-drop-${targetIndex}-${className}`}
-        onDragEnter={() => setQuickActionDropTarget(targetIndex)}
-        onDragOver={(event) => {
-          event.preventDefault();
-          setQuickActionDropTarget(targetIndex);
-        }}
-        onDragLeave={() => {
-          if (quickActionDropTarget === targetIndex) {
-            setQuickActionDropTarget(null);
-          }
-        }}
-        onDrop={(event) => {
-          event.preventDefault();
-          handleQuickActionDrop(targetIndex);
-        }}
-        className={`${label ? 'min-h-14 p-3 text-xs font-semibold uppercase tracking-wider' : 'h-3'} rounded border border-dashed transition-colors ${
-          quickActionDropTarget === targetIndex
-            ? 'border-starmade-accent bg-starmade-accent/20 shadow-[0_0_0_1px_rgba(34,123,134,0.35)]'
-            : 'border-starmade-accent/60 bg-starmade-accent/10'
-        } ${className}`}
-      >
-        {label ? label : null}
-      </div>
-    ) : null
-  );
-
   const renderControlsWidget = () => (
-    <div className="space-y-2">
-      {isLayoutEditMode && draggedQuickAction && renderQuickActionDropZone(0, 'w-full', 'Drop action here to pin/reorder quick actions')}
+    <div
+      className={`space-y-2 rounded-md transition-colors ${
+        isLayoutEditMode && !!draggedQuickAction && quickActionDropTarget === dashboardLayout.quickActionIds.length
+          ? 'border border-starmade-accent/50 bg-starmade-accent/10 p-2'
+          : ''
+      }`}
+      onDragEnter={() => {
+        if (!isLayoutEditMode || !draggedQuickAction) return;
+        setQuickActionDropTarget(dashboardLayout.quickActionIds.length);
+      }}
+      onDragOver={(event) => {
+        if (!isLayoutEditMode || !draggedQuickAction) return;
+        event.preventDefault();
+        setQuickActionDropTarget(dashboardLayout.quickActionIds.length);
+      }}
+      onDrop={(event) => {
+        if (!isLayoutEditMode || !draggedQuickAction) return;
+        event.preventDefault();
+        handleQuickActionDrop(dashboardLayout.quickActionIds.length);
+      }}
+    >
+      {isLayoutEditMode && draggedQuickAction && (
+        <div className="rounded border border-dashed border-starmade-accent/60 bg-starmade-accent/10 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-200">
+          Drop action here to pin/reorder quick actions
+        </div>
+      )}
       {renderActionGrid(quickActions, {
         showQuickToggle: isLayoutEditMode,
         enableQuickDrag: isLayoutEditMode,
