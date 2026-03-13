@@ -89,6 +89,16 @@ export const IPC = {
   /** Renderer → Main (invoke): get total system RAM in MB. */
   APP_GET_SYSTEM_MEMORY: 'app:get-system-memory',
 
+  // ─── Installation file management ───────────────────────────────────────────
+
+  /**
+   * Renderer → Main (invoke): recursively delete the physical files for an
+   * installation or server at the given path.
+   * Payload: targetPath: string
+   * Returns: { success: boolean; error?: string }
+   */
+  INSTALLATION_DELETE_FILES: 'installation:delete-files',
+
   // ─── Shell ──────────────────────────────────────────────────────────────────
 
   /** Renderer → Main (invoke): open a path in the native file manager. */

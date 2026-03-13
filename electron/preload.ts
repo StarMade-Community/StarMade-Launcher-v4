@@ -194,6 +194,17 @@ const launcherApi = {
       ipcRenderer.invoke(IPC.SHELL_OPEN_EXTERNAL, url),
   },
 
+  /** Installation file management APIs */
+  installation: {
+    /**
+     * Recursively delete the physical files at the given path.
+     * Returns { success: true } when the directory was removed (or was already
+     * absent), or { success: false, error } on failure.
+     */
+    deleteFiles: (targetPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.INSTALLATION_DELETE_FILES, targetPath),
+  },
+
   /** Background image APIs */
   backgrounds: {
     /** List available background image paths (file:// URLs). */
