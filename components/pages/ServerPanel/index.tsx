@@ -9,7 +9,7 @@ interface ServerPanelProps {
   serverName?: string;
 }
 
-type ServerPanelTab = 'control' | 'actions' | 'logs' | 'configuration' | 'files' | 'database';
+type ServerPanelTab = 'control' | 'logs' | 'configuration' | 'files' | 'database';
 type LogFilter = 'all' | 'errors' | 'warnings' | 'info' | 'debug';
 type DashboardWidgetId = 'status' | 'serverInfo' | 'connection' | 'players' | 'controls';
 type ServerActionId = 'start' | 'stop' | 'restart' | 'update';
@@ -24,6 +24,7 @@ interface DashboardGroup {
   id: string;
   title: string;
   widgetIds: DashboardWidgetId[];
+  height?: number;
 }
 
 interface DashboardLayout {
@@ -42,7 +43,17 @@ interface DraggedQuickAction {
 }
 
 const LOG_BUFFER_CAP = 1200;
-const DASHBOARD_STORE_KEY = 'serverPanelDashboardLayoutsV1';
+const DASHBOARD_STORE_KEY = 'serverPanelDashboardLayoutsV2';
+const MIN_GROUP_HEIGHT = 260;
+const MAX_GROUP_HEIGHT = 1200;
+
+const WIDGET_HEIGHT_WEIGHT: Record<DashboardWidgetId, number> = {
+  status: 120,
+  serverInfo: 110,
+  connection: 110,
+  players: 110,
+  controls: 160,
+};
 
 const ALL_WIDGETS: Array<{ id: DashboardWidgetId; label: string }> = [
   { id: 'status', label: 'Server Status' },
@@ -53,8 +64,7 @@ const ALL_WIDGETS: Array<{ id: DashboardWidgetId; label: string }> = [
 ];
 
 const tabItems: { id: ServerPanelTab; label: string }[] = [
-  { id: 'control', label: 'Dasbboard' },
-  { id: 'actions', label: 'Actions' },
+  { id: 'control', label: 'Dashboard' },
   { id: 'logs', label: 'Logs' },
   { id: 'configuration', label: 'Configuration' },
   { id: 'files', label: 'Files' },
@@ -63,8 +73,8 @@ const tabItems: { id: ServerPanelTab; label: string }[] = [
 
 const createDefaultDashboardLayout = (): DashboardLayout => ({
   groups: [
-    { id: 'main', title: 'Main', widgetIds: ['status', 'serverInfo', 'connection', 'controls'] },
-    { id: 'players', title: 'Players', widgetIds: ['players'] },
+    { id: 'main', title: 'Main', widgetIds: ['status', 'serverInfo', 'connection', 'controls'], height: 760 },
+    { id: 'players', title: 'Players', widgetIds: ['players'], height: 360 },
   ],
   hiddenWidgetIds: [],
   quickActionIds: ['start', 'stop', 'restart', 'update'],
@@ -86,7 +96,7 @@ const isDashboardWidgetId = (value: unknown): value is DashboardWidgetId => (
 );
 
 const cloneLayout = (layout: DashboardLayout): DashboardLayout => ({
-  groups: layout.groups.map((group) => ({ ...group, widgetIds: [...group.widgetIds] })),
+  groups: layout.groups.map((group) => ({ ...group, widgetIds: [...group.widgetIds], height: group.height })),
   hiddenWidgetIds: [...layout.hiddenWidgetIds],
   quickActionIds: [...layout.quickActionIds],
 });
@@ -102,7 +112,7 @@ const normalizeLayout = (raw: unknown): DashboardLayout => {
   if (Array.isArray(root.groups)) {
     for (const entry of root.groups) {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
-      const candidate = entry as { id?: unknown; title?: unknown; widgetIds?: unknown };
+      const candidate = entry as { id?: unknown; title?: unknown; widgetIds?: unknown; height?: unknown };
       if (typeof candidate.id !== 'string' || !candidate.id.trim()) continue;
 
       const title = typeof candidate.title === 'string' && candidate.title.trim()
@@ -119,7 +129,10 @@ const normalizeLayout = (raw: unknown): DashboardLayout => {
         }
       }
 
-      groups.push({ id: candidate.id, title, widgetIds });
+      const height = typeof candidate.height === 'number' && Number.isFinite(candidate.height)
+        ? Math.max(MIN_GROUP_HEIGHT, Math.min(Math.round(candidate.height), MAX_GROUP_HEIGHT))
+        : undefined;
+      groups.push({ id: candidate.id, title, widgetIds, height });
     }
   }
 
@@ -206,13 +219,18 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [dashboardLayout, setDashboardLayout] = useState<DashboardLayout>(createDefaultDashboardLayout);
   const [dashboardLoaded, setDashboardLoaded] = useState(false);
   const [isLayoutEditMode, setIsLayoutEditMode] = useState(false);
+  const [isActionCatalogOpen, setIsActionCatalogOpen] = useState(false);
   const [selectedGroupId, setSelectedGroupId] = useState<string>('main');
   const [newGroupName, setNewGroupName] = useState('');
   const [draggedWidget, setDraggedWidget] = useState<DraggedWidget | null>(null);
+  const [draggedGroupId, setDraggedGroupId] = useState<string | null>(null);
   const [draggedQuickAction, setDraggedQuickAction] = useState<DraggedQuickAction | null>(null);
   const [widgetDropTarget, setWidgetDropTarget] = useState<string | null>(null);
+  const [groupDropTarget, setGroupDropTarget] = useState<number | null>(null);
   const [quickActionDropTarget, setQuickActionDropTarget] = useState<number | null>(null);
+  const [groupResizeDraft, setGroupResizeDraft] = useState<{ groupId: string; startY: number; startHeight: number } | null>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const groupContainerRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const { navigate } = useApp();
   const {
@@ -410,10 +428,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   useEffect(() => {
     if (isLayoutEditMode) return;
+    setIsActionCatalogOpen(false);
     setDraggedWidget(null);
+    setDraggedGroupId(null);
     setDraggedQuickAction(null);
     setWidgetDropTarget(null);
+    setGroupDropTarget(null);
     setQuickActionDropTarget(null);
+    setGroupResizeDraft(null);
   }, [isLayoutEditMode]);
 
   const resolveBuildPath = useCallback((server: ManagedItem): string | undefined => {
@@ -546,6 +568,23 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     });
   }, []);
 
+  const getGroupMinHeight = useCallback((group: DashboardGroup): number => {
+    const weightedWidgetHeight = group.widgetIds.reduce((sum, widgetId) => sum + WIDGET_HEIGHT_WEIGHT[widgetId], 0);
+    const estimated = 140 + weightedWidgetHeight;
+    return Math.max(MIN_GROUP_HEIGHT, Math.min(estimated, MAX_GROUP_HEIGHT - 120));
+  }, []);
+
+  const updateGroupHeight = useCallback((groupId: string, nextHeight: number) => {
+    setDashboardLayout((prev) => {
+      const next = cloneLayout(prev);
+      const group = next.groups.find((candidate) => candidate.id === groupId);
+      if (!group) return prev;
+      const minHeight = getGroupMinHeight(group);
+      group.height = Math.max(minHeight, Math.min(Math.round(nextHeight), MAX_GROUP_HEIGHT));
+      return next;
+    });
+  }, [getGroupMinHeight]);
+
   const removeWidgetToHidden = useCallback((widgetId: DashboardWidgetId, groupId: string) => {
     setDashboardLayout((prev) => {
       const next = cloneLayout(prev);
@@ -579,7 +618,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       const next = cloneLayout(prev);
       const title = newGroupName.trim() || `Group ${next.groups.length + 1}`;
       const id = createGroupId();
-      next.groups.push({ id, title, widgetIds: [] });
+      next.groups.push({ id, title, widgetIds: [], height: MIN_GROUP_HEIGHT });
       setSelectedGroupId(id);
       setNewGroupName('');
       return next;
@@ -615,17 +654,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     });
   }, []);
 
-  const reorderGroup = useCallback((groupId: string, direction: -1 | 1) => {
+  const moveGroupToIndex = useCallback((groupId: string, targetIndex: number) => {
     setDashboardLayout((prev) => {
       const next = cloneLayout(prev);
       const index = next.groups.findIndex((group) => group.id === groupId);
-      const targetIndex = index + direction;
-      if (index < 0 || targetIndex < 0 || targetIndex >= next.groups.length) {
+      if (index < 0) {
         return prev;
       }
 
       const [group] = next.groups.splice(index, 1);
-      next.groups.splice(targetIndex, 0, group);
+      const clampedTargetIndex = Math.max(0, Math.min(targetIndex, next.groups.length));
+      next.groups.splice(clampedTargetIndex, 0, group);
       return next;
     });
   }, []);
@@ -634,6 +673,37 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setDashboardLayout(createDefaultDashboardLayout());
     setSelectedGroupId('main');
   }, []);
+
+  const beginGroupResize = useCallback((groupId: string, event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    const element = groupContainerRefs.current[groupId];
+    if (!element) return;
+    setGroupResizeDraft({
+      groupId,
+      startY: event.clientY,
+      startHeight: element.getBoundingClientRect().height,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!groupResizeDraft) return;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const deltaY = event.clientY - groupResizeDraft.startY;
+      updateGroupHeight(groupResizeDraft.groupId, groupResizeDraft.startHeight + deltaY);
+    };
+
+    const handleMouseUp = () => {
+      setGroupResizeDraft(null);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [groupResizeDraft, updateGroupHeight]);
 
   const hiddenWidgets = useMemo(
     () => ALL_WIDGETS.filter((widget) => dashboardLayout.hiddenWidgetIds.includes(widget.id)),
@@ -715,27 +785,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     ));
   }, [updateQuickActions]);
 
-  const reorderQuickAction = useCallback((actionId: ServerActionId, direction: -1 | 1) => {
-    updateQuickActions((prev) => {
-      const index = prev.indexOf(actionId);
-      const targetIndex = index + direction;
-      if (index < 0 || targetIndex < 0 || targetIndex >= prev.length) {
-        return prev;
-      }
-
-      const next = [...prev];
-      const [moved] = next.splice(index, 1);
-      next.splice(targetIndex, 0, moved);
-      return next;
-    });
-  }, [updateQuickActions]);
-
   const moveQuickActionToIndex = useCallback((actionId: ServerActionId, targetIndex: number) => {
     updateQuickActions((prev) => {
       const currentIndex = prev.indexOf(actionId);
-      if (currentIndex < 0) return prev;
-
       const clampedTargetIndex = Math.max(0, Math.min(targetIndex, prev.length));
+
+      if (currentIndex < 0) {
+        const next = [...prev];
+        next.splice(clampedTargetIndex, 0, actionId);
+        return next;
+      }
+
       const next = [...prev];
       const [moved] = next.splice(currentIndex, 1);
       const adjustedTargetIndex = currentIndex < clampedTargetIndex
@@ -908,7 +968,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const renderActionGrid = (
     actions: ServerActionDefinition[],
-    options?: { showQuickToggle?: boolean; showQuickOrdering?: boolean; enableQuickDrag?: boolean; emptyMessage?: string },
+    options?: { showQuickToggle?: boolean; enableQuickDrag?: boolean; allowCatalogDrag?: boolean; emptyMessage?: string },
   ) => {
     if (actions.length === 0) {
       return (
@@ -924,18 +984,19 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     return (
       <div className={gridClassName}>
-        {options?.enableQuickDrag && isLayoutEditMode && renderQuickActionDropZone(0, 'md:col-span-2 xl:col-span-4')}
+        {options?.enableQuickDrag && isLayoutEditMode && renderQuickActionDropZone(0, 'col-span-full')}
         {actions.map((action) => {
           const isPinned = dashboardLayout.quickActionIds.includes(action.id);
           const quickActionIndex = dashboardLayout.quickActionIds.indexOf(action.id);
+          const canDrag = isLayoutEditMode && ((!!options?.enableQuickDrag && isPinned) || !!options?.allowCatalogDrag);
           return (
             <React.Fragment key={action.id}>
               <div
-                draggable={!!options?.enableQuickDrag && isLayoutEditMode && isPinned}
+                draggable={canDrag}
                 onDragStart={() => {
-                  if (!options?.enableQuickDrag || !isLayoutEditMode || !isPinned) return;
+                  if (!canDrag) return;
                   setDraggedQuickAction({ actionId: action.id });
-                  setQuickActionDropTarget(quickActionIndex);
+                  setQuickActionDropTarget(isPinned && quickActionIndex >= 0 ? quickActionIndex : dashboardLayout.quickActionIds.length);
                 }}
                 onDragEnd={() => {
                   setDraggedQuickAction(null);
@@ -945,12 +1006,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   draggedQuickAction?.actionId === action.id
                     ? 'border-starmade-accent/50 bg-starmade-accent/10 opacity-60 shadow-[0_0_0_1px_rgba(34,123,134,0.25)]'
                     : 'border-white/10 bg-black/20 hover:border-white/20'
-                } ${options?.enableQuickDrag && isLayoutEditMode && isPinned ? 'cursor-move' : ''}`}
+                } ${canDrag ? 'cursor-move' : ''}`}
               >
               <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="mb-1 flex flex-wrap items-center gap-2">
-                    {options?.enableQuickDrag && isLayoutEditMode && isPinned && renderDragHandle(`Drag ${action.label}`)}
+                    {canDrag && renderDragHandle(`Drag ${action.label}`)}
                     <h4 className="text-base font-semibold text-white">{action.label}</h4>
                   </div>
                   <p className="mt-1 text-sm text-gray-400">{action.description}</p>
@@ -968,24 +1029,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                       {isPinned ? 'On Dashboard' : 'Add to Dashboard'}
                     </button>
 
-                    {options.showQuickOrdering && isPinned && (
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => reorderQuickAction(action.id, -1)}
-                          disabled={quickActionIndex <= 0}
-                          className="rounded border border-white/15 bg-black/25 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-300 transition-colors hover:bg-black/40 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          Up
-                        </button>
-                        <button
-                          onClick={() => reorderQuickAction(action.id, 1)}
-                          disabled={quickActionIndex < 0 || quickActionIndex >= dashboardLayout.quickActionIds.length - 1}
-                          className="rounded border border-white/15 bg-black/25 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-300 transition-colors hover:bg-black/40 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          Down
-                        </button>
-                      </div>
-                    )}
                   </div>
                 )}
               </div>
@@ -1000,7 +1043,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 {action.label}
               </button>
               </div>
-              {options?.enableQuickDrag && isLayoutEditMode && renderQuickActionDropZone(quickActionIndex + 1, 'md:col-span-2 xl:col-span-4')}
+              {options?.enableQuickDrag && isLayoutEditMode && renderQuickActionDropZone((isPinned ? quickActionIndex : dashboardLayout.quickActionIds.length) + 1, 'col-span-full')}
             </React.Fragment>
           );
         })}
@@ -1015,7 +1058,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setQuickActionDropTarget(null);
   }, [draggedQuickAction, moveQuickActionToIndex]);
 
-  const renderQuickActionDropZone = (targetIndex: number, className = '') => (
+  const renderQuickActionDropZone = (targetIndex: number, className = '', label?: string) => (
     draggedQuickAction ? (
       <div
         key={`quick-action-drop-${targetIndex}-${className}`}
@@ -1033,22 +1076,27 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           event.preventDefault();
           handleQuickActionDrop(targetIndex);
         }}
-        className={`h-3 rounded border border-dashed transition-colors ${
+        className={`${label ? 'min-h-14 p-3 text-xs font-semibold uppercase tracking-wider' : 'h-3'} rounded border border-dashed transition-colors ${
           quickActionDropTarget === targetIndex
             ? 'border-starmade-accent bg-starmade-accent/20 shadow-[0_0_0_1px_rgba(34,123,134,0.35)]'
             : 'border-starmade-accent/60 bg-starmade-accent/10'
         } ${className}`}
-      />
+      >
+        {label ? label : null}
+      </div>
     ) : null
   );
 
-  const renderControlsWidget = () => renderActionGrid(quickActions, {
-    showQuickToggle: isLayoutEditMode,
-    showQuickOrdering: isLayoutEditMode,
-    // Widget-level drag is already active in layout edit mode; disabling per-action drag keeps this card readable.
-    enableQuickDrag: false,
-    emptyMessage: 'Add actions from the Actions tab to show quick controls here.',
-  });
+  const renderControlsWidget = () => (
+    <div className="space-y-2">
+      {isLayoutEditMode && draggedQuickAction && renderQuickActionDropZone(0, 'w-full', 'Drop action here to pin/reorder quick actions')}
+      {renderActionGrid(quickActions, {
+        showQuickToggle: isLayoutEditMode,
+        enableQuickDrag: isLayoutEditMode,
+        emptyMessage: 'Open Add Actions in edit mode and drag actions onto this widget.',
+      })}
+    </div>
+  );
 
   const renderWidgetBody = (widgetId: DashboardWidgetId) => {
     if (widgetId === 'status') return renderStatusWidget();
@@ -1066,7 +1114,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   };
 
   const renderDropZone = (targetGroupId: string, targetIndex: number) => (
-    isLayoutEditMode ? (
+    isLayoutEditMode && !!draggedWidget ? (
     <div
       key={`${targetGroupId}-drop-${targetIndex}`}
       onDragEnter={() => {
@@ -1090,38 +1138,84 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       className={`h-3 rounded border border-dashed transition-colors ${
         widgetDropTarget === `${targetGroupId}:${targetIndex}`
           ? 'border-starmade-accent bg-starmade-accent/20 shadow-[0_0_0_1px_rgba(34,123,134,0.35)]'
-          : draggedWidget
-            ? 'border-white/20 bg-white/5 hover:border-starmade-accent/70'
-            : 'border-white/10 hover:border-starmade-accent/40'
+          : 'border-white/20 bg-white/5 hover:border-starmade-accent/70'
       }`}
     />
     ) : null
   );
 
-  const renderDashboardGroup = (group: DashboardGroup, groupIndex: number) => (
-    <div key={group.id} className="rounded-lg border border-white/10 bg-black/10 p-3">
+  const handleGroupDrop = (targetIndex: number) => {
+    if (!draggedGroupId) return;
+    moveGroupToIndex(draggedGroupId, targetIndex);
+    setDraggedGroupId(null);
+    setGroupDropTarget(null);
+  };
+
+  const renderGroupDropZone = (targetIndex: number) => (
+    isLayoutEditMode && !!draggedGroupId ? (
+      <div
+        key={`group-drop-${targetIndex}`}
+        onDragEnter={() => {
+          if (!draggedGroupId) return;
+          setGroupDropTarget(targetIndex);
+        }}
+        onDragOver={(event) => {
+          if (!draggedGroupId) return;
+          event.preventDefault();
+          setGroupDropTarget(targetIndex);
+        }}
+        onDragLeave={() => {
+          if (groupDropTarget === targetIndex) {
+            setGroupDropTarget(null);
+          }
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          handleGroupDrop(targetIndex);
+        }}
+        className={`h-4 rounded border border-dashed transition-colors ${
+          groupDropTarget === targetIndex
+            ? 'border-starmade-accent bg-starmade-accent/20 shadow-[0_0_0_1px_rgba(34,123,134,0.35)]'
+            : 'border-white/20 bg-white/5 hover:border-starmade-accent/70'
+        }`}
+      />
+    ) : null
+  );
+
+  const renderDashboardGroup = (group: DashboardGroup) => {
+    const minHeight = getGroupMinHeight(group);
+    const height = Math.max(group.height ?? minHeight, minHeight);
+    const isResizing = groupResizeDraft?.groupId === group.id;
+    const isDraggedGroup = draggedGroupId === group.id;
+
+    return (
+    <div
+      className={`rounded-lg border bg-black/10 p-3 transition-all ${
+        isDraggedGroup
+          ? 'border-starmade-accent/50 opacity-60 shadow-[0_0_0_1px_rgba(34,123,134,0.25)]'
+          : 'border-white/10'
+      }`}
+    >
       <div className="mb-3 flex flex-wrap items-center gap-2">
         {isLayoutEditMode ? (
           <>
+            <span
+              draggable
+              onDragStart={() => {
+                setDraggedGroupId(group.id);
+              }}
+              onDragEnd={() => {
+                setDraggedGroupId(null);
+                setGroupDropTarget(null);
+              }}
+            >
+              {renderDragHandle(`Drag group ${group.title}`)}
+            </span>
             <input
               value={group.title}
               onChange={(event) => renameGroup(group.id, event.target.value)}
               className="min-w-[160px] flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-1.5 text-sm text-gray-200"
             />
-            <button
-              onClick={() => reorderGroup(group.id, -1)}
-              disabled={groupIndex === 0}
-              className="rounded border border-white/15 bg-black/25 px-2 py-1 text-xs font-semibold text-gray-200 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Up
-            </button>
-            <button
-              onClick={() => reorderGroup(group.id, 1)}
-              disabled={groupIndex === dashboardLayout.groups.length - 1}
-              className="rounded border border-white/15 bg-black/25 px-2 py-1 text-xs font-semibold text-gray-200 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Down
-            </button>
             <button
               onClick={() => deleteGroup(group.id)}
               disabled={dashboardLayout.groups.length <= 1}
@@ -1129,13 +1223,20 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             >
               Delete
             </button>
+            <span className="ml-auto text-xs uppercase tracking-wider text-gray-500">Min {minHeight}px</span>
           </>
         ) : (
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-300">{group.title}</h3>
         )}
       </div>
 
-      <div className="space-y-2">
+      <div
+        ref={(element) => {
+          groupContainerRefs.current[group.id] = element;
+        }}
+        style={{ height: `${height}px`, minHeight: `${minHeight}px` }}
+        className={`space-y-2 overflow-y-auto pr-1 ${isResizing ? 'select-none' : ''}`}
+      >
         {renderDropZone(group.id, 0)}
         {group.widgetIds.map((widgetId, index) => {
           const widgetLabel = ALL_WIDGETS.find((widget) => widget.id === widgetId)?.label ?? widgetId;
@@ -1145,10 +1246,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               {isLayoutEditMode ? (
                 <div
                   draggable
-                  onDragStart={() => {
+                  onDragStart={(event) => {
+                    event.stopPropagation();
                     setDraggedWidget({ widgetId, sourceGroupId: group.id });
                   }}
-                  onDragEnd={() => {
+                  onDragEnd={(event) => {
+                    event.stopPropagation();
                     setDraggedWidget(null);
                     setWidgetDropTarget(null);
                   }}
@@ -1183,8 +1286,21 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           );
         })}
       </div>
+
+      {isLayoutEditMode && (
+        <div className="mt-2 flex items-center justify-end gap-2 text-[11px] uppercase tracking-wider text-gray-500">
+          <span>{Math.round(height)}px</span>
+          <button
+            onMouseDown={(event) => beginGroupResize(group.id, event)}
+            className="rounded border border-white/15 bg-black/30 px-2 py-1 font-semibold text-gray-300 hover:bg-black/45"
+          >
+            Resize Height
+          </button>
+        </div>
+      )}
     </div>
   );
+  };
 
   const renderControlPanel = () => {
     const usesDefaultGrid = dashboardLayout.groups.length === 2
@@ -1199,13 +1315,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           </div>
         )}
 
-        <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+        <div className="relative rounded-lg border border-white/10 bg-black/20 p-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-300">Dashboard Layout</h3>
               <p className="mt-1 text-xs text-gray-500">
                 {isLayoutEditMode
-                  ? 'Drag widgets, rename groups, and pin quick actions while edit mode is enabled.'
+                  ? 'Drag groups/widgets/actions, rename groups, and pin quick actions while edit mode is enabled.'
                   : 'Enable edit mode to customize your monitoring dashboard.'}
               </p>
             </div>
@@ -1253,6 +1369,16 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 >
                   Reset Default
                 </button>
+                <button
+                  onClick={() => setIsActionCatalogOpen((prev) => !prev)}
+                  className={`rounded border px-2 py-1 text-sm font-semibold transition-colors ${
+                    isActionCatalogOpen
+                      ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white hover:bg-starmade-accent/30'
+                      : 'border-white/15 bg-black/30 text-gray-200 hover:bg-black/45'
+                  }`}
+                >
+                  {isActionCatalogOpen ? 'Hide Actions' : 'Add Actions'}
+                </button>
               </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -1271,8 +1397,24 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   ))
                 )}
               </div>
-              <p className="mt-2 text-xs text-gray-500">Tip: drag widgets to reorder or move them between groups.</p>
+              <p className="mt-2 text-xs text-gray-500">Tip: drag groups to reorder columns, and drag widgets to move them between groups.</p>
             </>
+          )}
+
+          {isLayoutEditMode && isActionCatalogOpen && (
+            <div className="pointer-events-auto absolute right-3 top-[calc(100%+0.5rem)] z-30 w-[min(56rem,calc(100vw-7rem))] rounded-lg border border-white/15 bg-black/90 p-3 shadow-2xl backdrop-blur">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h4 className="text-sm font-semibold uppercase tracking-wider text-gray-300">Action Catalog</h4>
+                <p className="text-xs text-gray-500">Drag an action card into Server Controls to pin it on the dashboard.</p>
+              </div>
+              <div className="max-h-[50vh] overflow-y-auto pr-1">
+                {renderActionGrid(serverActions, {
+                  showQuickToggle: true,
+                  allowCatalogDrag: true,
+                  emptyMessage: 'No actions available.',
+                })}
+              </div>
+            </div>
           )}
         </div>
 
@@ -1283,97 +1425,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               : 'grid grid-cols-1 gap-4 xl:grid-cols-2'
           }`}
         >
-          {dashboardLayout.groups.map((group, index) => renderDashboardGroup(group, index))}
+          {dashboardLayout.groups.map((group, index) => (
+            <React.Fragment key={group.id}>
+              {renderGroupDropZone(index)}
+              {renderDashboardGroup(group)}
+            </React.Fragment>
+          ))}
+          {renderGroupDropZone(dashboardLayout.groups.length)}
         </div>
       </div>
     );
   };
-
-  const renderActionsTab = () => (
-    <div className="flex h-full min-h-0 flex-col gap-4">
-      {actionError && (
-        <div className="rounded-md border border-red-500/40 bg-red-950/30 px-4 py-2 text-sm text-red-300">
-          {actionError}
-        </div>
-      )}
-
-      <div className="rounded-lg border border-white/10 bg-black/20 p-4">
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h3 className="text-lg font-semibold text-white">Server Actions</h3>
-            <p className="text-sm text-gray-400">
-              Launch actions, runtime controls, and update operations for {effectiveServerName}. Enable layout edit mode from the Control tab to pin and reorder quick actions.
-            </p>
-          </div>
-          <div className="rounded-md border border-white/10 bg-black/25 px-3 py-2 text-xs uppercase tracking-wider text-gray-400">
-            {dashboardLayout.quickActionIds.length} dashboard action{dashboardLayout.quickActionIds.length === 1 ? '' : 's'}{isLayoutEditMode ? ' · edit mode' : ''}
-          </div>
-        </div>
-
-        {!isLayoutEditMode && (
-          <div className="mb-4 rounded-lg border border-dashed border-white/15 bg-black/15 p-3 text-sm text-gray-400">
-            Layout edit mode is off. You can still run actions here, but pinning and dashboard reordering are hidden until edit mode is enabled from the Control tab.
-          </div>
-        )}
-
-        {isLayoutEditMode && dashboardLayout.quickActionIds.length > 0 && (
-          <div className="mb-4 rounded-lg border border-white/10 bg-black/15 p-3">
-            <div className="mb-2 flex items-center justify-between gap-3">
-              <h4 className="text-sm font-semibold uppercase tracking-wider text-gray-300">Dashboard action order</h4>
-              <p className="text-xs text-gray-500">Drag to reorder pinned actions without changing the full catalog below.</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {renderQuickActionDropZone(0, 'w-full')}
-              {quickActions.map((action, index) => (
-                <React.Fragment key={`quick-order-${action.id}`}>
-                  <div
-                    draggable={isLayoutEditMode}
-                    onDragStart={() => {
-                      if (!isLayoutEditMode) return;
-                      setDraggedQuickAction({ actionId: action.id });
-                      setQuickActionDropTarget(index);
-                    }}
-                    onDragEnd={() => {
-                      setDraggedQuickAction(null);
-                      setQuickActionDropTarget(null);
-                    }}
-                    className={`flex cursor-move items-center gap-1 rounded-md border px-2 py-1.5 text-xs transition-all ${
-                      draggedQuickAction?.actionId === action.id
-                        ? 'border-starmade-accent/50 bg-starmade-accent/10 text-gray-200 opacity-60 shadow-[0_0_0_1px_rgba(34,123,134,0.25)]'
-                        : 'border-white/10 bg-black/25 text-gray-300 hover:border-white/20'
-                    }`}
-                  >
-                    {renderDragHandle(`Drag ${action.label}`)}
-                    <span className="font-semibold text-white">{index + 1}. {action.label}</span>
-                    <button
-                      onClick={() => reorderQuickAction(action.id, -1)}
-                      disabled={index === 0}
-                      className="rounded border border-white/15 bg-black/25 px-2 py-0.5 font-semibold uppercase tracking-wider transition-colors hover:bg-black/40 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Up
-                    </button>
-                    <button
-                      onClick={() => reorderQuickAction(action.id, 1)}
-                      disabled={index === quickActions.length - 1}
-                      className="rounded border border-white/15 bg-black/25 px-2 py-0.5 font-semibold uppercase tracking-wider transition-colors hover:bg-black/40 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Down
-                    </button>
-                  </div>
-                  {renderQuickActionDropZone(index + 1, 'w-full')}
-                </React.Fragment>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {renderActionGrid(serverActions, {
-          showQuickToggle: isLayoutEditMode,
-          showQuickOrdering: isLayoutEditMode,
-        })}
-      </div>
-    </div>
-  );
 
   const renderLogs = () => (
     <div className="flex h-full min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
@@ -1454,9 +1516,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const renderActiveTab = () => {
     if (activeTab === 'control') return renderControlPanel();
     if (activeTab === 'logs') return renderLogs();
-    if (activeTab === 'actions') {
-      return renderActionsTab();
-    }
     if (activeTab === 'configuration') {
       return renderPlaceholderTab(
         'Configuration',
