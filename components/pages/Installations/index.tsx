@@ -23,10 +23,13 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
     const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
     const [deleteError, setDeleteError] = useState<string | null>(null);
 
-    // Backup state: pending save data waiting on user's backup decision
+    // Backup state: pending save data waiting on user's backup decision.
+    // `preChangeItem` is a snapshot of the installation *before* the edit,
+    // providing the path/id/name for backup creation.
     const [backupPending, setBackupPending] = useState<{
         savedData: ManagedItem;
         fromVersion: string;
+        preChangeItem: ManagedItem;
     } | null>(null);
 
     // Restore state
@@ -88,8 +91,11 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
         if (activeTab === 'installations') {
             const versionChanged = !isNew && activeItem !== null && savedData.version !== activeItem.version;
             if (versionChanged && activeItem !== null) {
-                // Prompt the user whether to create a backup first.
-                setBackupPending({ savedData, fromVersion: activeItem.version });
+                // Store a snapshot of the pre-change item so backup uses the
+                // correct path/id even if the user also renamed the installation.
+                // A shallow copy is sufficient: ManagedItem contains only
+                // primitive values and optional arrays (none of which are mutated).
+                setBackupPending({ savedData, fromVersion: activeItem.version, preChangeItem: { ...activeItem } });
                 return;
             }
             const dataToSave = versionChanged ? { ...savedData, installed: false } : savedData;
@@ -114,18 +120,23 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
     };
 
     const handleBackupAndContinue = async () => {
-        if (!backupPending || !activeItem) return;
-        if (typeof window !== 'undefined' && window.launcher?.installation) {
-            const result = await window.launcher.installation.backup(
-                activeItem.path,
-                activeItem.id,
-                activeItem.name,
-            );
-            if (!result.success) {
-                throw new Error(result.error ?? 'Backup failed');
-            }
+        if (!backupPending) return;
+        const { savedData, preChangeItem } = backupPending;
+
+        // Treat a missing launcher API as an error rather than silently skipping.
+        if (typeof window === 'undefined' || !window.launcher?.installation?.backup) {
+            throw new Error('Backup API is not available in this environment.');
         }
-        applyVersionChange(backupPending.savedData);
+
+        const result = await window.launcher.installation.backup(
+            preChangeItem.path,
+            preChangeItem.id,
+            savedData.name,  // use the new name from savedData for the backup filename
+        );
+        if (!result.success) {
+            throw new Error(result.error ?? 'Backup failed');
+        }
+        applyVersionChange(savedData);
     };
 
     const handleSkipBackup = () => {
@@ -307,7 +318,7 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
         />
         <BackupConfirmModal
             isOpen={backupPending !== null}
-            installationName={activeItem?.name ?? ''}
+            installationName={backupPending?.savedData.name ?? ''}
             fromVersion={backupPending?.fromVersion ?? ''}
             toVersion={backupPending?.savedData.version ?? ''}
             onBackupAndContinue={handleBackupAndContinue}

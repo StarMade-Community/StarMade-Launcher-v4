@@ -10,7 +10,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import os from 'os';
-import AdmZip from 'adm-zip';
+import { Worker } from 'worker_threads';
 import { IPC } from './ipc-channels.js';
 import { storeGet, storeSet, storeDelete } from './store.js';
 import { fetchAllVersions, invalidateVersionCache } from './versions.js';
@@ -609,11 +609,55 @@ ipcMain.handle(IPC.INSTALLATION_DELETE_FILES, async (_event, targetPath: string)
 // ─── Installation backup / restore handlers ──────────────────────────────────
 
 /**
+ * Strict allowlist for installation IDs used in backup directory paths.
+ * IDs are generated via Date.now().toString() so only digits are ever expected,
+ * but we also permit hyphens and underscores for forward compatibility.
+ * Path separators and dots are explicitly excluded to prevent directory traversal.
+ */
+const SAFE_ID_RE = /^[a-zA-Z0-9_-]+$/;
+
+/**
  * Returns the directory used to store backups for a given installation.
  * Backups live under `<userData>/backups/<installationId>/`.
+ *
+ * Throws if `installationId` fails the safe-ID check.
  */
 function getBackupDir(installationId: string): string {
-  return path.join(app.getPath('userData'), 'backups', installationId);
+  if (!SAFE_ID_RE.test(installationId)) {
+    throw new Error(`Invalid installation ID: "${installationId}"`);
+  }
+  const backupsRoot = path.join(app.getPath('userData'), 'backups');
+  const backupDir = path.join(backupsRoot, installationId);
+  // Paranoia check: ensure the resolved path stays inside the backups root.
+  const normalizedRoot = path.normalize(backupsRoot) + path.sep;
+  if (!path.normalize(backupDir).startsWith(normalizedRoot)) {
+    throw new Error('Installation ID resolves outside the backups directory.');
+  }
+  return backupDir;
+}
+
+/**
+ * Run `adm-zip` folder compression in a worker thread so the Electron main
+ * thread (and therefore the IPC event-loop) stays responsive during large
+ * backups.
+ */
+function createZipInWorker(sourcePath: string, destPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    // In the packaged app the worker lives at dist-electron/backup-worker.js.
+    // In development it is at the same path relative to __dirname.
+    const workerPath = path.join(__dirname, 'backup-worker.js');
+    const worker = new Worker(workerPath, {
+      workerData: { sourcePath, destPath },
+    });
+    worker.on('message', (msg: { type: string; message?: string }) => {
+      if (msg.type === 'done') resolve();
+      else reject(new Error(msg.message ?? 'Unknown worker error'));
+    });
+    worker.on('error', reject);
+    worker.on('exit', (code) => {
+      if (code !== 0) reject(new Error(`Backup worker exited with code ${code}`));
+    });
+  });
 }
 
 ipcMain.handle(
@@ -635,7 +679,13 @@ ipcMain.handle(
       return { success: false, error: 'Installation directory does not exist.' };
     }
 
-    const backupDir = getBackupDir(installationId);
+    let backupDir: string;
+    try {
+      backupDir = getBackupDir(installationId);
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
+
     try {
       fs.mkdirSync(backupDir, { recursive: true });
     } catch (err) {
@@ -649,14 +699,8 @@ ipcMain.handle(
     const backupPath = path.join(backupDir, backupFileName);
 
     try {
-      const zip = new AdmZip();
-      zip.addLocalFolder(installationPath, '');
-      await new Promise<void>((resolve, reject) => {
-        zip.writeZip(backupPath, (err) => {
-          if (err) reject(err);
-          else resolve();
-        });
-      });
+      // Run compression in a worker thread to keep the main thread responsive.
+      await createZipInWorker(installationPath, backupPath);
       return { success: true, backupPath };
     } catch (err) {
       // Clean up partial zip if it was created.
@@ -679,6 +723,17 @@ ipcMain.handle(
     if (typeof targetPath !== 'string' || targetPath.trim() === '') {
       return { success: false, error: 'Invalid target path.' };
     }
+
+    // Validate backupPath is a .zip file inside the launcher-managed backups directory.
+    const backupsRoot = path.normalize(path.join(app.getPath('userData'), 'backups'));
+    const normalizedBackup = path.normalize(backupPath);
+    if (
+      !normalizedBackup.startsWith(backupsRoot + path.sep) ||
+      !normalizedBackup.endsWith('.zip')
+    ) {
+      return { success: false, error: 'Backup path is not a valid launcher-managed backup.' };
+    }
+
     if (!fs.existsSync(backupPath)) {
       return { success: false, error: 'Backup file does not exist.' };
     }
@@ -686,17 +741,40 @@ ipcMain.handle(
       return { success: false, error: 'Target path is not safe.' };
     }
 
+    // Require the target to look like a StarMade installation (or be absent/empty)
+    // before deleting it, to prevent wiping unrelated directories.
+    if (fs.existsSync(targetPath) && !isStarMadeInstallDir(targetPath)) {
+      return {
+        success: false,
+        error: `The directory does not appear to be a StarMade installation: ${targetPath}`,
+      };
+    }
+
+    // ── Atomic-style restore ─────────────────────────────────────────────────
+    // Extract into a temp directory first.  Only replace the target directory
+    // after a successful extraction so the user is never left without files.
+    const tempDir = `${targetPath}.restore-tmp-${Date.now()}`;
     try {
-      // Clear the target directory before restoring.
+      fs.mkdirSync(tempDir, { recursive: true });
+
+      const AdmZip = (await import('adm-zip')).default;
+      const zip = new AdmZip(backupPath);
+      zip.extractAllTo(tempDir, /* overwrite */ true);
+
+      // Atomically swap: remove old installation, rename temp into place.
       if (fs.existsSync(targetPath)) {
         await fs.promises.rm(targetPath, { recursive: true, force: true });
       }
-      fs.mkdirSync(targetPath, { recursive: true });
+      fs.renameSync(tempDir, targetPath);
 
-      const zip = new AdmZip(backupPath);
-      zip.extractAllTo(targetPath, /* overwrite */ true);
       return { success: true };
     } catch (err) {
+      // Clean up temp dir on failure; log but don't surface cleanup errors.
+      try {
+        await fs.promises.rm(tempDir, { recursive: true, force: true });
+      } catch (cleanupErr) {
+        console.warn('[restore] Failed to clean up temp directory:', cleanupErr);
+      }
       return { success: false, error: String(err) };
     }
   },
@@ -707,7 +785,13 @@ ipcMain.handle(IPC.INSTALLATION_LIST_BACKUPS, async (_event, installationId: str
     return [];
   }
 
-  const backupDir = getBackupDir(installationId);
+  let backupDir: string;
+  try {
+    backupDir = getBackupDir(installationId);
+  } catch {
+    return [];
+  }
+
   if (!fs.existsSync(backupDir)) return [];
 
   try {
