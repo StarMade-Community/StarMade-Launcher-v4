@@ -11,6 +11,7 @@ interface UpdateInfo {
     downloadUrl: string;
     assetUrl?: string;
     assetName?: string;
+    isPreRelease?: boolean;
 }
 
 interface UpdateAvailableModalProps {
@@ -244,6 +245,11 @@ const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
                     >
                         Update Available
                     </h2>
+                    {updateInfo.isPreRelease && (
+                        <span className="mt-2 inline-flex items-center px-3 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-yellow-500/20 border border-yellow-500/40 text-yellow-400">
+                            Pre-Release
+                        </span>
+                    )}
                     <p className="mt-2 text-gray-300 leading-relaxed">
                         A new version of the StarMade Launcher is available.
                     </p>

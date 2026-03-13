@@ -252,9 +252,25 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
     const requiredJavaVersion = getRequiredJavaVersion(starMadeVersion);
     console.log(`[Launcher] StarMade ${starMadeVersion} requires Java ${requiredJavaVersion}`);
 
-    // Resolve Java executable
-    let javaPath: string | null = customJavaPath || null;
-    
+    // Resolve Java executable.
+    // Only use customJavaPath if the file actually exists on disk.  A common
+    // failure mode for newly-created installations is that customJavaPath is
+    // pre-populated with the *expected* bundled JRE path (e.g.
+    // ~/.config/starmade-launcher/jre8/bin/java) before Java has been
+    // downloaded, which causes a spawn ENOENT error.  When the custom path
+    // does not exist we fall back to the standard auto-resolution logic so
+    // that either the bundled JRE (once downloaded) or a system-installed Java
+    // of the correct version is found instead.
+    let javaPath: string | null = null;
+
+    if (customJavaPath) {
+      if (fs.existsSync(customJavaPath)) {
+        javaPath = customJavaPath;
+      } else {
+        console.warn(`[Launcher] Custom Java path not found: ${customJavaPath} — falling back to auto-resolve`);
+      }
+    }
+
     if (!javaPath) {
       javaPath = await resolveJavaPath(requiredJavaVersion, launcherDir);
     }

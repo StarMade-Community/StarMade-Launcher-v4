@@ -189,6 +189,39 @@ declare global {
         openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
       };
 
+      /** Installation file management APIs */
+      installation: {
+        /**
+         * Recursively delete all files at the given path.
+         * Returns `{ success: true }` when done (or when the directory was already absent),
+         * or `{ success: false, error }` on failure.
+         */
+        deleteFiles: (targetPath: string) => Promise<{ success: boolean; error?: string }>;
+        /**
+         * Create a compressed (.zip) backup of the installation directory.
+         * Returns `{ success: true, backupPath }` on success or `{ success: false, error }` on failure.
+         */
+        backup: (
+          installationPath: string,
+          installationId: string,
+          installationName: string,
+        ) => Promise<{ success: boolean; backupPath?: string; error?: string }>;
+        /**
+         * Restore an installation from a compressed backup.
+         * Returns `{ success: true }` or `{ success: false, error }`.
+         */
+        restore: (
+          backupPath: string,
+          targetPath: string,
+        ) => Promise<{ success: boolean; error?: string }>;
+        /**
+         * List available backups for an installation (newest first).
+         */
+        listBackups: (
+          installationId: string,
+        ) => Promise<Array<{ name: string; path: string; createdAt: string; sizeBytes: number }>>;
+      };
+
       /** Background image APIs */
       backgrounds: {
         /** List available background image paths (file:// URLs). */

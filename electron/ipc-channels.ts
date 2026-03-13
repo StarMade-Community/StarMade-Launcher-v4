@@ -109,6 +109,38 @@ export const IPC = {
   /** Renderer → Main (invoke): get total system RAM in MB. */
   APP_GET_SYSTEM_MEMORY: 'app:get-system-memory',
 
+  // ─── Installation file management ───────────────────────────────────────────
+
+  /**
+   * Renderer → Main (invoke): recursively delete the physical files for an
+   * installation or server at the given path.
+   * Payload: targetPath: string
+   * Returns: { success: boolean; error?: string }
+   */
+  INSTALLATION_DELETE_FILES: 'installation:delete-files',
+
+  /**
+   * Renderer → Main (invoke): create a compressed (.zip) backup of an
+   * installation directory.
+   * Payload: { installationPath: string; installationId: string; installationName: string }
+   * Returns: { success: boolean; backupPath?: string; error?: string }
+   */
+  INSTALLATION_BACKUP: 'installation:backup',
+
+  /**
+   * Renderer → Main (invoke): restore an installation from a compressed backup.
+   * Payload: { backupPath: string; targetPath: string }
+   * Returns: { success: boolean; error?: string }
+   */
+  INSTALLATION_RESTORE: 'installation:restore',
+
+  /**
+   * Renderer → Main (invoke): list available backups for an installation.
+   * Payload: installationId: string
+   * Returns: Array<{ name: string; path: string; createdAt: string; sizeBytes: number }>
+   */
+  INSTALLATION_LIST_BACKUPS: 'installation:list-backups',
+
   // ─── Shell ──────────────────────────────────────────────────────────────────
 
   /** Renderer → Main (invoke): open a path in the native file manager. */
@@ -139,12 +171,37 @@ export const IPC = {
 
   // ─── Launcher auto-updater ───────────────────────────────────────────────────
 
-  /** Renderer → Main (invoke): check GitHub releases for a newer launcher version. */
+  /**
+   * Renderer → Main (invoke): check GitHub releases for a newer launcher version.
+   * Payload: { includePreReleases?: boolean }
+   */
   UPDATER_CHECK: 'updater:check',
   /** Renderer → Main (invoke): get the current running launcher version string. */
   UPDATER_GET_VERSION: 'updater:get-version',
   /** Main → Renderer: a newer launcher version was found during the startup check. */
   UPDATER_UPDATE_AVAILABLE: 'updater:update-available',
+
+  // ─── Launcher data backup ────────────────────────────────────────────────────
+
+  /**
+   * Renderer → Main (invoke): create a timestamped backup of the launcher
+   * userData directory.
+   * Returns: { success: boolean; backupPath?: string; error?: string }
+   */
+  BACKUP_CREATE: 'backup:create',
+
+  /**
+   * Renderer → Main (invoke): list available backups (newest first).
+   * Returns: Array<{ name: string; path: string; date: string }>
+   */
+  BACKUP_LIST: 'backup:list',
+
+  /**
+   * Renderer → Main (invoke): restore a backup and restart the launcher.
+   * Payload: { backupPath: string }
+   * Returns: { success: boolean; error?: string }
+   */
+  BACKUP_RESTORE: 'backup:restore',
   /**
    * Renderer → Main (invoke): download the update asset.
    * Payload: { assetUrl: string; assetName: string }
