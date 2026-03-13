@@ -114,6 +114,15 @@ const LauncherSettings: React.FC = () => {
         loadJavaRuntimes();
     }, []);
 
+    // Listen for first-startup legacy scan results pushed from the main process
+    useEffect(() => {
+        if (typeof window === 'undefined' || !window.launcher?.legacy?.onScanResult) return;
+        const cleanup = window.launcher.legacy.onScanResult((paths) => {
+            setLegacyFound(prev => Array.from(new Set([...prev, ...paths])));
+        });
+        return cleanup;
+    }, []);
+
     const loadJavaRuntimes = async () => {
         if (typeof window === 'undefined' || !window.launcher?.java) {
             return;

@@ -221,6 +221,16 @@ const launcherApi = {
     /** Read and parse the version from a legacy install's version.txt. Returns the version string or null. */
     readVersion: (installPath: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.LEGACY_READ_VERSION, installPath),
+
+    /**
+     * Subscribe to first-startup legacy scan results pushed by the main process.
+     * Returns a cleanup function.
+     */
+    onScanResult: (cb: (paths: string[]) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, paths: string[]) => cb(paths);
+      ipcRenderer.on(IPC.LEGACY_SCAN_RESULT, listener);
+      return () => ipcRenderer.removeListener(IPC.LEGACY_SCAN_RESULT, listener);
+    },
   },
 
   /** Account authentication APIs */
