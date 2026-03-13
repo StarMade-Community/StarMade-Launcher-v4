@@ -462,6 +462,15 @@ ipcMain.handle(IPC.SHELL_OPEN_PATH, async (_event, targetPath: string) => {
   return err === '' ? { success: true } : { success: false, error: err };
 });
 
+ipcMain.handle(IPC.SHELL_OPEN_EXTERNAL, async (_event, url: string) => {
+  // Only allow http/https URLs to prevent arbitrary protocol abuse.
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
+    return { success: false, error: 'Only http/https URLs are supported.' };
+  }
+  await shell.openExternal(url);
+  return { success: true };
+});
+
 // ─── Backgrounds handler ─────────────────────────────────────────────────────
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);

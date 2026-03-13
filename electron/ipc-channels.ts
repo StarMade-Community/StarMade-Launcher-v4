@@ -93,6 +93,8 @@ export const IPC = {
 
   /** Renderer → Main (invoke): open a path in the native file manager. */
   SHELL_OPEN_PATH: 'shell:open-path',
+  /** Renderer → Main (invoke): open a URL in the system default browser. */
+  SHELL_OPEN_EXTERNAL: 'shell:open-external',
 
   // ─── Backgrounds ────────────────────────────────────────────────────────────
 

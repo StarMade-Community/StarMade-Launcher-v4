@@ -141,6 +141,8 @@ declare global {
       shell: {
         /** Open a path in the native file manager. */
         openPath: (targetPath: string) => Promise<{ success: boolean; error?: string }>;
+        /** Open a URL in the system default browser (http/https only). */
+        openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
       };
 
       /** Background image APIs */

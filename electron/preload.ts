@@ -189,6 +189,9 @@ const launcherApi = {
     /** Open a path in the native file manager. */
     openPath: (targetPath: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC.SHELL_OPEN_PATH, targetPath),
+    /** Open a URL in the system default browser (http/https only). */
+    openExternal: (url: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.SHELL_OPEN_EXTERNAL, url),
   },
 
   /** Background image APIs */

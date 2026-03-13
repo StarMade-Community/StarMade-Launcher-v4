@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { CloseIcon } from './icons';
 
 interface UpdateInfo {
@@ -37,6 +39,81 @@ const UpdateIcon: React.FC<{ className?: string }> = ({ className }) => (
 );
 
 type Phase = 'idle' | 'downloading' | 'ready' | 'error';
+
+/**
+ * Extract only the "What's Changed" section from GitHub release notes.
+ * Returns the full notes unchanged if no such section is found.
+ */
+function extractWhatsChanged(notes: string): string {
+  // Match any heading level containing "what's changed" (case-insensitive)
+  const match = notes.match(/^#{1,6}\s+what['\u2019]s\s+changed\s*$/im);
+  if (!match || match.index === undefined) return notes;
+
+  const start = match.index;
+  const afterHeading = notes.slice(start);
+
+  // Find the next same-or-higher-level heading that isn't this one
+  const headingLevel = (match[0].match(/^#+/) ?? ['#'])[0].length;
+  const nextHeadingRegex = new RegExp(`^#{1,${headingLevel}}\\s`, 'm');
+  const nextMatch = afterHeading.slice(match[0].length).search(nextHeadingRegex);
+
+  if (nextMatch === -1) return afterHeading;
+  return afterHeading.slice(0, match[0].length + nextMatch);
+}
+
+/** Open a link externally via the Electron bridge, falling back to window.open */
+function openLink(href: string) {
+  if (window.launcher?.shell?.openExternal) {
+    window.launcher.shell.openExternal(href);
+  } else {
+    window.open(href, '_blank', 'noopener,noreferrer');
+  }
+}
+
+/** Renders release-note markdown with styled elements and clickable links */
+const MarkdownReleaseNotes: React.FC<{ content: string }> = ({ content }) => (
+  <ReactMarkdown
+    remarkPlugins={[remarkGfm]}
+    components={{
+      // Headings
+      h1: ({ children }) => <h1 className="text-sm font-bold text-white mt-3 mb-1 first:mt-0">{children}</h1>,
+      h2: ({ children }) => <h2 className="text-sm font-bold text-white mt-3 mb-1 first:mt-0">{children}</h2>,
+      h3: ({ children }) => <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-wider mt-2 mb-1 first:mt-0">{children}</h3>,
+      // Paragraphs
+      p: ({ children }) => <p className="text-sm text-gray-300 leading-relaxed mb-1">{children}</p>,
+      // Unordered list
+      ul: ({ children }) => <ul className="list-disc list-inside space-y-0.5 mb-1">{children}</ul>,
+      // Ordered list
+      ol: ({ children }) => <ol className="list-decimal list-inside space-y-0.5 mb-1">{children}</ol>,
+      li: ({ children }) => <li className="text-sm text-gray-300 leading-relaxed">{children}</li>,
+      // Inline code
+      code: ({ children }) => (
+        <code className="text-xs font-mono bg-white/10 rounded px-1 py-0.5 text-starmade-accent">{children}</code>
+      ),
+      // Code block
+      pre: ({ children }) => (
+        <pre className="text-xs font-mono bg-black/40 rounded p-2 overflow-x-auto my-1 text-gray-300">{children}</pre>
+      ),
+      // Links — open in system browser
+      a: ({ href, children }) => (
+        <button
+          type="button"
+          onClick={() => href && openLink(href)}
+          className="text-starmade-accent underline hover:text-starmade-accent/80 transition-colors cursor-pointer bg-transparent border-0 p-0 font-inherit text-sm"
+        >
+          {children}
+        </button>
+      ),
+      // Horizontal rule
+      hr: () => <hr className="border-white/10 my-2" />,
+      // Strong / emphasis
+      strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+      em: ({ children }) => <em className="italic text-gray-300">{children}</em>,
+    }}
+  >
+    {content}
+  </ReactMarkdown>
+);
 
 const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
     isOpen,
@@ -181,15 +258,10 @@ const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
                     </div>
                 </div>
 
-                {/* Release notes */}
+                {/* Release notes — only the "What's Changed" section, rendered as markdown */}
                 {updateInfo.releaseNotes && phase === 'idle' && (
-                    <div className="mt-6 bg-black/30 rounded-lg p-4 border border-white/10 max-h-40 overflow-y-auto">
-                        <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">
-                            Release Notes
-                        </h3>
-                        <p className="text-sm text-gray-300 whitespace-pre-wrap leading-relaxed">
-                            {updateInfo.releaseNotes}
-                        </p>
+                    <div className="mt-6 bg-black/30 rounded-lg p-4 border border-white/10 max-h-48 overflow-y-auto">
+                        <MarkdownReleaseNotes content={extractWhatsChanged(updateInfo.releaseNotes)} />
                     </div>
                 )}
 
