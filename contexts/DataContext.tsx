@@ -33,6 +33,7 @@ const DEFAULT_SERVER: Omit<ManagedItem, 'id'> = {
   lastPlayed: 'Never',
   installed: false,
   port: '4242',
+    maxPlayers: 32,
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

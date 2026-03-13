@@ -24,6 +24,8 @@ interface UpdateInfo {
 }
 
 const App: React.FC = () => {
+  const [isShortViewport, setIsShortViewport] = useState<boolean>(false);
+
   const { 
     activePage, 
     pageProps, 
@@ -52,6 +54,18 @@ const App: React.FC = () => {
     });
 
     return cleanup;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleViewportResize = () => {
+      setIsShortViewport(window.innerHeight < 720);
+    };
+
+    handleViewportResize();
+    window.addEventListener('resize', handleViewportResize);
+    return () => window.removeEventListener('resize', handleViewportResize);
   }, []);
 
 
@@ -83,7 +97,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="bg-starmade-bg text-gray-200 font-sans h-screen w-screen flex flex-col antialiased">
+    <div className={`bg-starmade-bg text-gray-200 font-sans h-screen w-screen flex flex-col antialiased overflow-x-hidden ${isShortViewport ? 'overflow-y-auto' : 'overflow-y-hidden'}`}>
       <LaunchConfirmModal
         isOpen={isLaunchModalOpen}
         onConfirm={startLaunchingAndTerminate}

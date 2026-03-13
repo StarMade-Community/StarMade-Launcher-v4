@@ -109,10 +109,36 @@ declare global {
         listRunning: () => Promise<Array<{ installationId: string; pid?: number; isServer: boolean; uptime: number }>>;
         /** Get log file path for a running game. */
         getLogPath: (installationId: string) => Promise<string | null>;
+        /** List categorized log files from an installation's logs folder. */
+        listLogFiles: (installationPath: string) => Promise<{
+          categories: Array<{
+            id: string;
+            label: string;
+            files: Array<{
+              fileName: string;
+              relativePath: string;
+              sizeBytes: number;
+              modifiedMs: number;
+              categoryId: string;
+              categoryLabel: string;
+            }>;
+          }>;
+          defaultRelativePath: string | null;
+        }>;
+        /** Read the tail of one log file from an installation's logs folder. */
+        readLogFile: (installationPath: string, relativePath: string, maxBytes?: number) => Promise<{
+          content: string;
+          truncated: boolean;
+          error?: string;
+        }>;
         /** Open log directory in file manager. */
         openLogLocation: (installationPath: string) => Promise<{ success: boolean }>;
         /** Get GraphicsInfo.txt content if it exists. */
         getGraphicsInfo: (installationPath: string) => Promise<string | null>;
+        /** Read a value from server.cfg by key (e.g. MAX_CLIENTS). */
+        readServerConfigValue: (installationPath: string, key: string) => Promise<string | null>;
+        /** Set a value in server.cfg by key (e.g. MAX_CLIENTS). */
+        writeServerConfigValue: (installationPath: string, key: string, value: string) => Promise<{ success: boolean; error?: string }>;
         /** Subscribe to game log events. Returns a cleanup function. */
         onLog: (cb: (data: { installationId: string; level: string; message: string }) => void) => () => void;
         /**

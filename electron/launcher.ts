@@ -25,6 +25,26 @@ interface RunningProcess {
   lastLogPosition: number;
 }
 
+export interface ServerLogFileInfo {
+  fileName: string;
+  relativePath: string;
+  sizeBytes: number;
+  modifiedMs: number;
+  categoryId: string;
+  categoryLabel: string;
+}
+
+export interface ServerLogCategoryInfo {
+  id: string;
+  label: string;
+  files: ServerLogFileInfo[];
+}
+
+export interface ServerLogCatalog {
+  categories: ServerLogCategoryInfo[];
+  defaultRelativePath: string | null;
+}
+
 const runningProcesses = new Map<string, RunningProcess>();
 
 /**
@@ -517,6 +537,196 @@ export function getGraphicsInfo(installationPath: string): string | null {
   }
   
   return null;
+}
+
+function getLogCategory(fileName: string): { id: string; label: string } {
+  const lower = fileName.toLowerCase();
+
+  if (/^logstarmade\.\d+\.log$/i.test(fileName)) {
+    return {
+      id: 'starmade-rotated',
+      label: 'StarMade Rotated Logs (logstarmade.n.log)',
+    };
+  }
+
+  if (/^starmade-.*\.log$/i.test(fileName)) {
+    return {
+      id: 'launcher-session',
+      label: 'Launcher Session Logs (starmade-*.log)',
+    };
+  }
+
+  if (/^serverlog\.\d+\.log$/i.test(fileName)) {
+    return {
+      id: 'server-rotated',
+      label: 'Server Rotated Logs (serverlog.n.log)',
+    };
+  }
+
+  if (/^hs_err_pid\d+\.log$/i.test(fileName)) {
+    return {
+      id: 'jvm-crash',
+      label: 'JVM Crash Dumps (hs_err_pid*.log)',
+    };
+  }
+
+  if (lower === 'graphicsinfo.txt') {
+    return {
+      id: 'graphics-info',
+      label: 'Graphics Info (GraphicsInfo.txt)',
+    };
+  }
+
+  if (lower.endsWith('.log')) {
+    const normalizedPattern = lower.replace(/\d+/g, 'n');
+    return {
+      id: `pattern:${normalizedPattern}`,
+      label: `Pattern: ${normalizedPattern}`,
+    };
+  }
+
+  return {
+    id: 'other',
+    label: 'Other Log Files',
+  };
+}
+
+export function listServerLogFiles(installationPath: string): ServerLogCatalog {
+  const logsDir = path.join(installationPath, 'logs');
+  if (!fs.existsSync(logsDir)) {
+    return { categories: [], defaultRelativePath: null };
+  }
+
+  const files: ServerLogFileInfo[] = [];
+
+  for (const entry of fs.readdirSync(logsDir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+
+    const filePath = path.join(logsDir, entry.name);
+    let stat: fs.Stats;
+
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      continue;
+    }
+
+    const category = getLogCategory(entry.name);
+
+    files.push({
+      fileName: entry.name,
+      relativePath: entry.name,
+      sizeBytes: stat.size,
+      modifiedMs: stat.mtimeMs,
+      categoryId: category.id,
+      categoryLabel: category.label,
+    });
+  }
+
+  const categoryMap = new Map<string, ServerLogCategoryInfo>();
+  for (const file of files) {
+    const existing = categoryMap.get(file.categoryId);
+    if (existing) {
+      existing.files.push(file);
+    } else {
+      categoryMap.set(file.categoryId, {
+        id: file.categoryId,
+        label: file.categoryLabel,
+        files: [file],
+      });
+    }
+  }
+
+  for (const category of categoryMap.values()) {
+    if (category.id === 'starmade-rotated') {
+      category.files.sort((a, b) => {
+        const getIndex = (name: string) => {
+          const match = name.match(/^logstarmade\.(\d+)\.log$/i);
+          return match ? Number.parseInt(match[1], 10) : Number.MAX_SAFE_INTEGER;
+        };
+        return getIndex(a.fileName) - getIndex(b.fileName);
+      });
+    } else {
+      category.files.sort((a, b) => b.modifiedMs - a.modifiedMs || a.fileName.localeCompare(b.fileName));
+    }
+  }
+
+  const categoryPriority: Record<string, number> = {
+    'starmade-rotated': 0,
+    'server-rotated': 1,
+    'launcher-session': 2,
+    'jvm-crash': 3,
+    'graphics-info': 4,
+    other: 999,
+  };
+
+  const categories = Array.from(categoryMap.values()).sort((a, b) => {
+    const aPriority = a.id in categoryPriority ? categoryPriority[a.id] : 100;
+    const bPriority = b.id in categoryPriority ? categoryPriority[b.id] : 100;
+    if (aPriority !== bPriority) return aPriority - bPriority;
+    return a.label.localeCompare(b.label);
+  });
+
+  const newestStarMade = files
+    .filter((file) => /^logstarmade\.\d+\.log$/i.test(file.fileName))
+    .sort((a, b) => {
+      const aMatch = a.fileName.match(/^logstarmade\.(\d+)\.log$/i);
+      const bMatch = b.fileName.match(/^logstarmade\.(\d+)\.log$/i);
+      const aIndex = aMatch ? Number.parseInt(aMatch[1], 10) : Number.MAX_SAFE_INTEGER;
+      const bIndex = bMatch ? Number.parseInt(bMatch[1], 10) : Number.MAX_SAFE_INTEGER;
+      return aIndex - bIndex;
+    });
+
+  const defaultRelativePath = newestStarMade[0]?.relativePath
+    ?? categories[0]?.files[0]?.relativePath
+    ?? null;
+
+  return { categories, defaultRelativePath };
+}
+
+export function readServerLogFile(
+  installationPath: string,
+  relativePath: string,
+  maxBytes = 2 * 1024 * 1024,
+): { content: string; truncated: boolean } {
+  const logsDir = path.resolve(path.join(installationPath, 'logs'));
+  const filePath = path.resolve(path.join(logsDir, relativePath));
+
+  if (!filePath.startsWith(`${logsDir}${path.sep}`) && filePath !== logsDir) {
+    throw new Error('Invalid log file path.');
+  }
+
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) {
+    throw new Error('Log path is not a file.');
+  }
+
+  const size = stat.size;
+  const bytesToRead = Math.max(1, Math.min(Math.floor(maxBytes), size));
+  const start = Math.max(0, size - bytesToRead);
+
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(size === 0 ? 0 : bytesToRead);
+    if (buffer.length > 0) {
+      fs.readSync(fd, buffer, 0, buffer.length, start);
+    }
+
+    let content = buffer.toString('utf8');
+    const truncated = start > 0;
+
+    // Drop the partial first line when reading from the middle of a file.
+    if (truncated) {
+      const firstLineBreak = content.indexOf('\n');
+      if (firstLineBreak >= 0) {
+        content = content.slice(firstLineBreak + 1);
+      }
+    }
+
+    return { content, truncated };
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 /**

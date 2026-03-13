@@ -83,10 +83,16 @@
       scrollbar-width: thin;
       scrollbar-color: #227b86 rgba(0, 0, 0, 0.2); /* thumb track */
     }
+
+    @media (max-height: 719px) {
+      body {
+        overflow-y: auto !important;
+      }
+    }
   </style>
 <link rel="stylesheet" href="/index.css">
 </head>
-<body class="overflow-hidden">
+<body class="overflow-x-hidden overflow-y-hidden">
   <div id="root"></div>
 <script type="module" src="/index.tsx"></script>
 </body>

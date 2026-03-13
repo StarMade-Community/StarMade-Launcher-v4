@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  screen,
   ipcMain,
   Menu,
   shell,
@@ -16,7 +17,7 @@ import { fetchAllVersions, invalidateVersionCache } from './versions.js';
 import { startDownload, cancelDownload } from './downloader.js';
 import type { DownloadProgress } from './downloader.js';
 import { downloadJava, detectSystemJava, resolveJavaPath, getDefaultJavaPaths, findJavaExecutableInDir } from './java.js';
-import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, getGraphicsInfo } from './launcher.js';
+import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, getGraphicsInfo, listServerLogFiles, readServerLogFile } from './launcher.js';
 import type { UpdateInfo } from './updater.js';
 import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from './updater.js';
 import { loginWithPassword, refreshAccessToken, registerAccount, logoutAccount, getAuthStatus, getAccessTokenForLaunch } from './auth.js';
@@ -114,6 +115,11 @@ function getLauncherDir(): string {
 let mainWindow: BrowserWindow | null = null;
 
 function createWindow(): void {
+  const { height: workAreaHeight } = screen.getPrimaryDisplay().workAreaSize;
+  const useShortScreenSizing = workAreaHeight < 720;
+  const initialHeight = useShortScreenSizing ? workAreaHeight : 900;
+  const minHeight = useShortScreenSizing ? Math.min(600, workAreaHeight) : 600;
+
   // Resolve the icon path: in packaged builds the icon is copied to
   // resources/icon.png via extraResources so it lives outside the asar and
   // can be used as a real file path.  In dev we reference it directly from
@@ -124,9 +130,11 @@ function createWindow(): void {
 
   mainWindow = new BrowserWindow({
     width: 1280,
-    height: 900,
+    height: initialHeight,
     minWidth: 960,
-    minHeight: 600,
+    minHeight,
+    resizable: true,
+    thickFrame: true,
     frame: false,
     titleBarStyle: 'hidden',
     backgroundColor: '#0D0D1B',
@@ -349,6 +357,34 @@ ipcMain.handle(IPC.GAME_GET_LOG_PATH, (_event, installationId: string) => {
   return getLogPath(installationId);
 });
 
+ipcMain.handle(IPC.GAME_LIST_LOG_FILES, (_event, installationPath: string) => {
+  if (!installationPath) {
+    return { categories: [], defaultRelativePath: null };
+  }
+
+  try {
+    return listServerLogFiles(installationPath);
+  } catch (error) {
+    console.warn('[logs] Failed to list log files:', { installationPath, error });
+    return { categories: [], defaultRelativePath: null };
+  }
+});
+
+ipcMain.handle(IPC.GAME_READ_LOG_FILE, (_event, installationPath: string, relativePath: string, maxBytes?: number) => {
+  if (!installationPath || !relativePath) {
+    return { content: '', truncated: false, error: 'Missing installation path or log file path.' };
+  }
+
+  try {
+    const payload = readServerLogFile(installationPath, relativePath, maxBytes);
+    return { ...payload, error: undefined as string | undefined };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn('[logs] Failed to read log file:', { installationPath, relativePath, error: message });
+    return { content: '', truncated: false, error: message };
+  }
+});
+
 ipcMain.handle(IPC.GAME_OPEN_LOG_LOCATION, (_event, installationPath: string) => {
   openLogLocation(installationPath);
   return { success: true };
@@ -356,6 +392,77 @@ ipcMain.handle(IPC.GAME_OPEN_LOG_LOCATION, (_event, installationPath: string) =>
 
 ipcMain.handle(IPC.GAME_GET_GRAPHICS_INFO, (_event, installationPath: string) => {
   return getGraphicsInfo(installationPath);
+});
+
+function readServerCfgKey(installationPath: string, key: string): string | null {
+  const cfgPath = path.join(installationPath, 'server.cfg');
+  if (!fs.existsSync(cfgPath)) return null;
+
+  const content = fs.readFileSync(cfgPath, 'utf8');
+  const lines = content.split(/\r?\n/);
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const lineRegex = new RegExp(`^\\s*${escapedKey}\\s*=\\s*(.*?)\\s*(?:\\/\\/.*)?$`);
+
+  for (const line of lines) {
+    const match = line.match(lineRegex);
+    if (match) {
+      return match[1].trim();
+    }
+  }
+
+  return null;
+}
+
+function writeServerCfgKey(installationPath: string, key: string, value: string): { success: boolean; error?: string } {
+  const cfgPath = path.join(installationPath, 'server.cfg');
+  if (!fs.existsSync(cfgPath)) {
+    return { success: false, error: `server.cfg not found at ${cfgPath}` };
+  }
+
+  const content = fs.readFileSync(cfgPath, 'utf8');
+  const lines = content.split(/\r?\n/);
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const lineRegex = new RegExp(`^(\\s*${escapedKey}\\s*=\\s*)(.*?)(\\s*(?:\\/\\/.*)?)$`);
+
+  let updated = false;
+  const nextLines = lines.map((line) => {
+    if (updated) return line;
+    const match = line.match(lineRegex);
+    if (!match) return line;
+
+    updated = true;
+    const prefix = match[1] ?? `${key} = `;
+    const suffix = match[3] ?? '';
+    return `${prefix}${value}${suffix}`;
+  });
+
+  if (!updated) {
+    nextLines.push(`${key} = ${value}`);
+  }
+
+  fs.writeFileSync(cfgPath, nextLines.join('\n'), 'utf8');
+  return { success: true };
+}
+
+ipcMain.handle(IPC.GAME_SERVER_CFG_GET, (_event, installationPath: string, key: string) => {
+  if (!installationPath || !key) return null;
+  try {
+    return readServerCfgKey(installationPath, key);
+  } catch (error) {
+    console.warn('[server-cfg] Failed to read key:', { installationPath, key, error });
+    return null;
+  }
+});
+
+ipcMain.handle(IPC.GAME_SERVER_CFG_SET, (_event, installationPath: string, key: string, value: string) => {
+  if (!installationPath || !key) {
+    return { success: false, error: 'installationPath and key are required.' };
+  }
+  try {
+    return writeServerCfgKey(installationPath, key, value);
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
 });
 
 // ─── Session file reader ─────────────────────────────────────────────────────

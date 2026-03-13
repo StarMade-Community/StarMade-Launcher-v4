@@ -309,9 +309,13 @@ const Footer: React.FC = () => {
                         serverName: targetServer?.name,
                     });
                 }}
-                className="flex items-center gap-2 text-gray-300 hover:text-white transition-colors text-sm font-semibold uppercase tracking-wider">
-                <span>Start Server</span>
-                <ChevronRightIcon className="w-4 h-4" />
+                className="flex items-center gap-3 px-4 py-2 bg-black/20 rounded-md hover:bg-black/40 transition-colors border border-white/10 group"
+            >
+                <div className="text-left">
+                    <p className="text-sm font-medium text-white">Start Server</p>
+                    <p className="text-xs text-gray-400 group-hover:text-gray-300 transition-colors">Open Server Panel</p>
+                </div>
+                <ChevronRightIcon className="w-4 h-4 text-gray-400 group-hover:text-white transition-colors" />
             </button>
         </div>
 

@@ -10,7 +10,7 @@ interface ServerPanelProps {
 }
 
 type ServerPanelTab = 'control' | 'logs' | 'configuration' | 'files' | 'database';
-type LogFilter = 'all' | 'errors' | 'warnings' | 'info' | 'debug';
+type LogFilter = 'errors' | 'warnings' | 'info' | 'debug';
 type DashboardWidgetId = 'status' | 'serverInfo' | 'connection' | 'players' | 'controls';
 type ServerActionId = 'start' | 'stop' | 'restart' | 'update';
 
@@ -20,11 +20,27 @@ interface LogEntry {
   message: string;
 }
 
+interface LogFileItem {
+  fileName: string;
+  relativePath: string;
+  sizeBytes: number;
+  modifiedMs: number;
+  categoryId: string;
+  categoryLabel: string;
+}
+
+interface LogCategory {
+  id: string;
+  label: string;
+  files: LogFileItem[];
+}
+
 interface DashboardGroup {
   id: string;
   title: string;
   widgetIds: DashboardWidgetId[];
   height?: number;
+  collapsed?: boolean;
 }
 
 interface DashboardLayout {
@@ -71,6 +87,8 @@ const tabItems: { id: ServerPanelTab; label: string }[] = [
   { id: 'database', label: 'Database' },
 ];
 
+const LOG_FILTER_OPTIONS: LogFilter[] = ['info', 'warnings', 'errors', 'debug'];
+
 const createDefaultDashboardLayout = (): DashboardLayout => ({
   groups: [
     { id: 'main', title: 'Main', widgetIds: ['status', 'serverInfo', 'connection', 'controls'], height: 760 },
@@ -96,7 +114,12 @@ const isDashboardWidgetId = (value: unknown): value is DashboardWidgetId => (
 );
 
 const cloneLayout = (layout: DashboardLayout): DashboardLayout => ({
-  groups: layout.groups.map((group) => ({ ...group, widgetIds: [...group.widgetIds], height: group.height })),
+  groups: layout.groups.map((group) => ({
+    ...group,
+    widgetIds: [...group.widgetIds],
+    height: group.height,
+    collapsed: group.collapsed,
+  })),
   hiddenWidgetIds: [...layout.hiddenWidgetIds],
   quickActionIds: [...layout.quickActionIds],
 });
@@ -112,7 +135,7 @@ const normalizeLayout = (raw: unknown): DashboardLayout => {
   if (Array.isArray(root.groups)) {
     for (const entry of root.groups) {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
-      const candidate = entry as { id?: unknown; title?: unknown; widgetIds?: unknown; height?: unknown };
+      const candidate = entry as { id?: unknown; title?: unknown; widgetIds?: unknown; height?: unknown; collapsed?: unknown };
       if (typeof candidate.id !== 'string' || !candidate.id.trim()) continue;
 
       const title = typeof candidate.title === 'string' && candidate.title.trim()
@@ -132,7 +155,8 @@ const normalizeLayout = (raw: unknown): DashboardLayout => {
       const height = typeof candidate.height === 'number' && Number.isFinite(candidate.height)
         ? Math.max(MIN_GROUP_HEIGHT, Math.min(Math.round(candidate.height), MAX_GROUP_HEIGHT))
         : undefined;
-      groups.push({ id: candidate.id, title, widgetIds, height });
+      const collapsed = typeof candidate.collapsed === 'boolean' ? candidate.collapsed : undefined;
+      groups.push({ id: candidate.id, title, widgetIds, height, collapsed });
     }
   }
 
@@ -185,6 +209,45 @@ const normalizeLogLevel = (level: string): ServerLogLevel => {
   return 'INFO';
 };
 
+const parseLogLine = (rawLine: string): LogEntry => {
+  const trimmed = rawLine.trimEnd();
+  const timestamped = trimmed.match(/^\[([^\]]+)\]\s+\[([^\]]+)\]\s*(.*)$/);
+  if (timestamped) {
+    return {
+      timestamp: timestamped[1],
+      level: normalizeLogLevel(timestamped[2]),
+      message: timestamped[3] || '',
+    };
+  }
+
+  const streamTagged = trimmed.match(/^\[(STDOUT|STDERR|INFO|WARNING|ERROR|FATAL|DEBUG)\]\s*(.*)$/i);
+  if (streamTagged) {
+    return {
+      timestamp: '--:--:--',
+      level: normalizeLogLevel(streamTagged[1]),
+      message: streamTagged[2] || '',
+    };
+  }
+
+  return {
+    timestamp: '--:--:--',
+    level: 'INFO',
+    message: trimmed,
+  };
+};
+
+const formatLogFileSize = (bytes: number): string => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const formatLogModifiedTime = (modifiedMs: number): string => {
+  if (!Number.isFinite(modifiedMs) || modifiedMs <= 0) return 'Unknown';
+  return new Date(modifiedMs).toLocaleString();
+};
+
 const formatUptime = (uptimeMs?: number): string => {
   if (!uptimeMs || uptimeMs <= 0) return '00:00:00';
   const totalSeconds = Math.floor(uptimeMs / 1000);
@@ -195,6 +258,259 @@ const formatUptime = (uptimeMs?: number): string => {
 };
 
 const createGroupId = (): string => `group-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+
+const parseCfgBoolean = (raw: string | null, fallback: boolean): boolean => {
+  if (raw === null) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  return fallback;
+};
+
+type ServerConfigFieldType = 'string' | 'number' | 'boolean';
+type ServerConfigCategory = 'networking' | 'security' | 'performance';
+
+interface ServerConfigField {
+  key: string;
+  label: string;
+  description: string;
+  category: ServerConfigCategory;
+  type: ServerConfigFieldType;
+  defaultValue: string;
+  min?: number;
+  max?: number;
+  guidance?: string;
+}
+
+interface ConfigFieldValidation {
+  error: string | null;
+  warning: string | null;
+}
+
+const CONFIG_CATEGORY_LABELS: Record<ServerConfigCategory, string> = {
+  networking: 'Networking',
+  security: 'Security',
+  performance: 'Performance',
+};
+
+const CONFIG_CATEGORY_ORDER: ServerConfigCategory[] = ['networking', 'security', 'performance'];
+
+const SERVER_CONFIG_FIELDS: ServerConfigField[] = [
+  {
+    key: 'MAX_CLIENTS',
+    label: 'Max Players',
+    description: 'Maximum number of clients allowed on this server.',
+    category: 'networking',
+    type: 'number',
+    defaultValue: '32',
+    min: 0,
+  },
+  {
+    key: 'SERVER_LISTEN_IP',
+    label: 'Bind Address',
+    description: 'IP/interface to bind the server to. Use all to listen on every interface.',
+    category: 'networking',
+    type: 'string',
+    defaultValue: 'all',
+  },
+  {
+    key: 'ANNOUNCE_SERVER_TO_SERVERLIST',
+    label: 'Public Server',
+    description: 'Announce this server to the public StarMade server list.',
+    category: 'networking',
+    type: 'boolean',
+    defaultValue: 'false',
+  },
+  {
+    key: 'USE_STARMADE_AUTHENTICATION',
+    label: 'Use Authentication',
+    description: 'Allow StarMade account authentication for connections.',
+    category: 'security',
+    type: 'boolean',
+    defaultValue: 'false',
+  },
+  {
+    key: 'REQUIRE_STARMADE_AUTHENTICATION',
+    label: 'Require Authentication',
+    description: 'Require authenticated StarMade accounts to join.',
+    category: 'security',
+    type: 'boolean',
+    defaultValue: 'false',
+  },
+  {
+    key: 'USE_WHITELIST',
+    label: 'Use Whitelist',
+    description: 'Only allow players listed in whitelist.txt.',
+    category: 'security',
+    type: 'boolean',
+    defaultValue: 'false',
+  },
+  {
+    key: 'SECTOR_AUTOSAVE_SEC',
+    label: 'Autosave Interval (sec)',
+    description: 'How often sectors are autosaved. Use -1 to disable.',
+    category: 'performance',
+    type: 'number',
+    defaultValue: '300',
+    min: -1,
+    guidance: 'Very low intervals can increase disk activity; -1 disables autosave and is risky without manual backups.',
+  },
+  {
+    key: 'THRUST_SPEED_LIMIT',
+    label: 'Thrust Speed Limit',
+    description: 'Maximum ship speed in m/s.',
+    category: 'performance',
+    type: 'number',
+    defaultValue: '75',
+    min: 0,
+  },
+  {
+    key: 'SOCKET_BUFFER_SIZE',
+    label: 'Socket Buffer Size',
+    description: 'Incoming/outgoing socket buffer size in bytes.',
+    category: 'networking',
+    type: 'number',
+    defaultValue: '65536',
+    min: 1024,
+  },
+  {
+    key: 'USE_UDP',
+    label: 'Use UDP',
+    description: 'Use UDP for networking instead of TCP.',
+    category: 'networking',
+    type: 'boolean',
+    defaultValue: 'false',
+  },
+  {
+    key: 'TCP_NODELAY',
+    label: 'TCP No Delay',
+    description: 'Disable Nagle buffering for lower latency.',
+    category: 'networking',
+    type: 'boolean',
+    defaultValue: 'true',
+  },
+  {
+    key: 'NT_SPAM_PROTECT_ACTIVE',
+    label: 'Spam Protection Enabled',
+    description: 'Enable connection spam protection logic.',
+    category: 'security',
+    type: 'boolean',
+    defaultValue: 'true',
+  },
+  {
+    key: 'NT_SPAM_PROTECT_TIME_MS',
+    label: 'Spam Protect Window (ms)',
+    description: 'Time window used by spam protection.',
+    category: 'security',
+    type: 'number',
+    defaultValue: '30000',
+    min: 0,
+  },
+  {
+    key: 'NT_SPAM_PROTECT_MAX_ATTEMPTS',
+    label: 'Spam Protect Max Attempts',
+    description: 'Maximum connection attempts allowed per window.',
+    category: 'security',
+    type: 'number',
+    defaultValue: '30',
+    min: 0,
+  },
+  {
+    key: 'SECTOR_INACTIVE_TIMEOUT',
+    label: 'Sector Inactive Timeout (sec)',
+    description: 'Time before sectors go inactive (-1 disables).',
+    category: 'performance',
+    type: 'number',
+    defaultValue: '20',
+    min: -1,
+  },
+  {
+    key: 'SECTOR_INACTIVE_CLEANUP_TIMEOUT',
+    label: 'Sector Cleanup Timeout (sec)',
+    description: 'Time before inactive sectors are removed from memory (-1 disables).',
+    category: 'performance',
+    type: 'number',
+    defaultValue: '10',
+    min: -1,
+  },
+  {
+    key: 'MAX_SIMULTANEOUS_EXPLOSIONS',
+    label: 'Max Simultaneous Explosions',
+    description: 'Threaded explosion concurrency cap.',
+    category: 'performance',
+    type: 'number',
+    defaultValue: '10',
+    min: 1,
+  },
+  {
+    key: 'CHUNK_REQUEST_THREAD_POOL_SIZE_TOTAL',
+    label: 'Chunk Thread Pool (Total)',
+    description: 'Total thread count for chunk requests.',
+    category: 'performance',
+    type: 'number',
+    defaultValue: '10',
+    min: 1,
+    guidance: 'Setting this too high can increase CPU contention and frame-time spikes.',
+  },
+  {
+    key: 'CHUNK_REQUEST_THREAD_POOL_SIZE_CPU',
+    label: 'Chunk Thread Pool (CPU)',
+    description: 'CPU generation threads used for chunk work.',
+    category: 'performance',
+    type: 'number',
+    defaultValue: '2',
+    min: 1,
+    guidance: 'Keep near available core count minus one to avoid heavy CPU spikes.',
+  },
+];
+
+const SERVER_CONFIG_DEFAULTS: Record<string, string> = Object.fromEntries(
+  SERVER_CONFIG_FIELDS.map((field) => [field.key, field.defaultValue]),
+);
+
+const getConfigFieldValidation = (field: ServerConfigField, rawValue: string): ConfigFieldValidation => {
+  const trimmed = rawValue.trim();
+
+  if (field.type === 'number') {
+    if (!trimmed) {
+      return { error: 'A numeric value is required.', warning: null };
+    }
+
+    const parsed = Number.parseInt(trimmed, 10);
+    if (!Number.isFinite(parsed)) {
+      return { error: 'Enter a whole number.', warning: null };
+    }
+
+    if (field.min !== undefined && parsed < field.min) {
+      return { error: null, warning: `Value is below minimum and will be clamped to ${field.min}.` };
+    }
+
+    if (field.max !== undefined && parsed > field.max) {
+      return { error: null, warning: `Value is above maximum and will be clamped to ${field.max}.` };
+    }
+
+    if (field.key === 'SECTOR_AUTOSAVE_SEC' && parsed > 0 && parsed < 30) {
+      return { error: null, warning: 'Frequent autosaves can cause stutter on slower disks.' };
+    }
+
+    if (field.key === 'SECTOR_AUTOSAVE_SEC' && parsed === -1) {
+      return { error: null, warning: 'Autosave disabled. Ensure you have another backup strategy.' };
+    }
+
+    if (
+      (field.key === 'CHUNK_REQUEST_THREAD_POOL_SIZE_TOTAL' || field.key === 'CHUNK_REQUEST_THREAD_POOL_SIZE_CPU')
+      && parsed > 32
+    ) {
+      return { error: null, warning: 'Very high thread counts can cause severe CPU spikes.' };
+    }
+  }
+
+  if (field.type === 'string' && !trimmed) {
+    return { error: null, warning: `Empty value will fall back to default (${field.defaultValue}).` };
+  }
+
+  return { error: null, warning: null };
+};
 
 interface ServerActionDefinition {
   id: ServerActionId;
@@ -208,14 +524,32 @@ interface ServerActionDefinition {
 
 const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [activeTab, setActiveTab] = useState<ServerPanelTab>('control');
-  const [filter, setFilter] = useState<LogFilter>('all');
+  const [activeLogFilters, setActiveLogFilters] = useState<LogFilter[]>([...LOG_FILTER_OPTIONS]);
   const [autoScroll, setAutoScroll] = useState(true);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [lifecycleState, setLifecycleState] = useState<ServerLifecycleState>('stopped');
   const [runtimePid, setRuntimePid] = useState<number | undefined>(undefined);
   const [runtimeUptimeMs, setRuntimeUptimeMs] = useState<number | undefined>(undefined);
+  const [maxPlayersInput, setMaxPlayersInput] = useState<number>(32);
+  const [bindAddressInput, setBindAddressInput] = useState<string>('all');
+  const [isPublicServerInput, setIsPublicServerInput] = useState<boolean>(false);
+  const [useAuthInput, setUseAuthInput] = useState<boolean>(false);
+  const [requireAuthInput, setRequireAuthInput] = useState<boolean>(false);
+  const [serverConfigValues, setServerConfigValues] = useState<Record<string, string>>(SERVER_CONFIG_DEFAULTS);
+  const [configSearchTerm, setConfigSearchTerm] = useState('');
+  const [configCategoryFilter, setConfigCategoryFilter] = useState<'all' | ServerConfigCategory>('all');
+  const [isConfigLoading, setIsConfigLoading] = useState(false);
+  const [savingConfigKey, setSavingConfigKey] = useState<string | null>(null);
+  const [isSavingMaxPlayers, setIsSavingMaxPlayers] = useState(false);
+  const [isSavingConnectionSettings, setIsSavingConnectionSettings] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [logPath, setLogPath] = useState<string | null>(null);
+  const [logCategories, setLogCategories] = useState<LogCategory[]>([]);
+  const [selectedLogRelativePath, setSelectedLogRelativePath] = useState<string | null>(null);
+  const [isLogListLoading, setIsLogListLoading] = useState(false);
+  const [isLogFileLoading, setIsLogFileLoading] = useState(false);
+  const [isLogFileTruncated, setIsLogFileTruncated] = useState(false);
+  const [logLoadError, setLogLoadError] = useState<string | null>(null);
   const [dashboardLayout, setDashboardLayout] = useState<DashboardLayout>(createDefaultDashboardLayout);
   const [dashboardLoaded, setDashboardLoaded] = useState(false);
   const [isLayoutEditMode, setIsLayoutEditMode] = useState(false);
@@ -240,6 +574,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     selectedServer,
     selectedServerId,
     setSelectedServerId,
+    updateServer: updateServerItem,
     downloadStatuses,
   } = useData();
 
@@ -258,12 +593,62 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const effectiveServerName = serverName || effectiveServer?.name || 'Server';
   const effectiveServerIp = effectiveServer?.serverIp?.trim() || '127.0.0.1';
+  const fallbackMaxPlayers = Math.max(0, effectiveServer?.maxPlayers ?? 32);
   const hasGameApi = typeof window !== 'undefined' && !!window.launcher?.game;
   const hasDownloadApi = typeof window !== 'undefined' && !!window.launcher?.download;
   const hasStoreApi = typeof window !== 'undefined' && !!window.launcher?.store;
 
   const serverDownloadStatus = effectiveServer ? downloadStatuses[effectiveServer.id] : undefined;
   const isUpdating = serverDownloadStatus?.state === 'checksums' || serverDownloadStatus?.state === 'downloading';
+
+  const selectedLogCategoryId = useMemo(() => {
+    if (!selectedLogRelativePath) return null;
+    const category = logCategories.find((item) => item.files.some((file) => file.relativePath === selectedLogRelativePath));
+    return category?.id ?? null;
+  }, [logCategories, selectedLogRelativePath]);
+
+  const selectedLogCategoryFiles = useMemo(() => {
+    if (!selectedLogCategoryId) return [] as LogFileItem[];
+    return logCategories.find((category) => category.id === selectedLogCategoryId)?.files ?? [];
+  }, [logCategories, selectedLogCategoryId]);
+
+  const selectedLogRelativePathRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    selectedLogRelativePathRef.current = selectedLogRelativePath;
+  }, [selectedLogRelativePath]);
+
+  const reloadLogCatalog = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi) {
+      setLogCategories([]);
+      setSelectedLogRelativePath(null);
+      setLogPath(null);
+      return;
+    }
+
+    setIsLogListLoading(true);
+    setLogLoadError(null);
+    try {
+      const catalog = await window.launcher.game.listLogFiles(effectiveServer.path);
+      setLogCategories(catalog.categories);
+
+      const knownPaths = new Set(catalog.categories.flatMap((category) => category.files.map((file) => file.relativePath)));
+      const fallback = catalog.defaultRelativePath;
+      const currentSelection = selectedLogRelativePathRef.current;
+      const nextSelected = currentSelection && knownPaths.has(currentSelection)
+        ? currentSelection
+        : fallback;
+      setSelectedLogRelativePath(nextSelected ?? null);
+      setLogPath(nextSelected ? `logs/${nextSelected}` : null);
+    } catch (error) {
+      setLogCategories([]);
+      setSelectedLogRelativePath(null);
+      setLogPath(null);
+      setLogLoadError(`Failed to list logs folder contents: ${String(error)}`);
+    } finally {
+      setIsLogListLoading(false);
+    }
+  }, [effectiveServer, hasGameApi]);
 
   const refreshRuntimeStatus = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) {
@@ -301,31 +686,183 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setLogs([]);
     setActionError(null);
     setLogPath(null);
+    setLogCategories([]);
+    setSelectedLogRelativePath(null);
+    setIsLogFileTruncated(false);
+    setLogLoadError(null);
   }, [effectiveServer?.id]);
 
   useEffect(() => {
-    if (!effectiveServer || !hasGameApi) return;
+    void reloadLogCatalog();
+  }, [reloadLogCatalog]);
 
-    window.launcher.game.getLogPath(effectiveServer.id).then(setLogPath).catch(() => {
-      setLogPath(null);
-    });
+  useEffect(() => {
+    let cancelled = false;
 
-    return window.launcher.game.onLog((data) => {
-      if (data.installationId !== effectiveServer.id) return;
+    if (!effectiveServer || !hasGameApi) {
+      setMaxPlayersInput(fallbackMaxPlayers);
+      return;
+    }
 
-      const entry: LogEntry = {
-        timestamp: new Date().toLocaleTimeString(),
-        level: normalizeLogLevel(data.level),
-        message: data.message,
-      };
+    const loadMaxPlayersFromCfg = async () => {
+      try {
+        const raw = await window.launcher.game.readServerConfigValue(effectiveServer.path, 'MAX_CLIENTS');
+        if (cancelled) return;
+        const parsed = raw !== null ? Number.parseInt(raw, 10) : Number.NaN;
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          setMaxPlayersInput(parsed);
+          return;
+        }
+      } catch (error) {
+        console.warn('[ServerPanel] Failed to read MAX_CLIENTS from server.cfg:', error);
+      }
 
-      setLogs((prev) => {
-        const next = [...prev, entry];
-        if (next.length <= LOG_BUFFER_CAP) return next;
-        return next.slice(next.length - LOG_BUFFER_CAP);
-      });
-    });
+      if (!cancelled) {
+        setMaxPlayersInput(fallbackMaxPlayers);
+      }
+    };
+
+    void loadMaxPlayersFromCfg();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveServer, hasGameApi, fallbackMaxPlayers]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!effectiveServer || !hasGameApi) {
+      setBindAddressInput(effectiveServerIp || 'all');
+      setIsPublicServerInput(false);
+      setUseAuthInput(false);
+      setRequireAuthInput(false);
+      return;
+    }
+
+    const loadConnectionConfig = async () => {
+      try {
+        const [listenIpRaw, publicRaw, useAuthRaw, requireAuthRaw] = await Promise.all([
+          window.launcher.game.readServerConfigValue(effectiveServer.path, 'SERVER_LISTEN_IP'),
+          window.launcher.game.readServerConfigValue(effectiveServer.path, 'ANNOUNCE_SERVER_TO_SERVERLIST'),
+          window.launcher.game.readServerConfigValue(effectiveServer.path, 'USE_STARMADE_AUTHENTICATION'),
+          window.launcher.game.readServerConfigValue(effectiveServer.path, 'REQUIRE_STARMADE_AUTHENTICATION'),
+        ]);
+
+        if (cancelled) return;
+
+        setBindAddressInput(listenIpRaw?.trim() || 'all');
+        setIsPublicServerInput(parseCfgBoolean(publicRaw, false));
+        const useAuth = parseCfgBoolean(useAuthRaw, false);
+        setUseAuthInput(useAuth);
+        setRequireAuthInput(useAuth ? parseCfgBoolean(requireAuthRaw, false) : false);
+      } catch (error) {
+        console.warn('[ServerPanel] Failed to read server.cfg connection settings:', error);
+        if (!cancelled) {
+          setBindAddressInput(effectiveServerIp || 'all');
+          setIsPublicServerInput(false);
+          setUseAuthInput(false);
+          setRequireAuthInput(false);
+        }
+      }
+    };
+
+    void loadConnectionConfig();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveServer, effectiveServerIp, hasGameApi]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!effectiveServer || !hasGameApi) {
+      setServerConfigValues(SERVER_CONFIG_DEFAULTS);
+      return;
+    }
+
+    const loadConfigValues = async () => {
+      setIsConfigLoading(true);
+      try {
+        const entries = await Promise.all(
+          SERVER_CONFIG_FIELDS.map(async (field) => {
+            const raw = await window.launcher.game.readServerConfigValue(effectiveServer.path, field.key);
+            return [field.key, raw ?? field.defaultValue] as const;
+          }),
+        );
+
+        if (cancelled) return;
+        setServerConfigValues(Object.fromEntries(entries));
+      } catch (error) {
+        console.warn('[ServerPanel] Failed to load configuration values from server.cfg:', error);
+        if (!cancelled) {
+          setServerConfigValues(SERVER_CONFIG_DEFAULTS);
+        }
+      } finally {
+        if (!cancelled) setIsConfigLoading(false);
+      }
+    };
+
+    void loadConfigValues();
+
+    return () => {
+      cancelled = true;
+    };
   }, [effectiveServer, hasGameApi]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!effectiveServer || !hasGameApi || !selectedLogRelativePath) {
+      setLogs([]);
+      setIsLogFileTruncated(false);
+      setIsLogFileLoading(false);
+      return;
+    }
+
+    setIsLogFileLoading(true);
+    setLogLoadError(null);
+    setLogPath(`logs/${selectedLogRelativePath}`);
+
+    const loadLogFile = async () => {
+      try {
+        const payload = await window.launcher.game.readLogFile(effectiveServer.path, selectedLogRelativePath);
+        if (cancelled) return;
+
+        if (payload.error) {
+          setLogs([]);
+          setIsLogFileTruncated(false);
+          setLogLoadError(`Failed to read ${selectedLogRelativePath}: ${payload.error}`);
+          return;
+        }
+
+        const lines = payload.content.split(/\r?\n/).filter((line) => line.trim().length > 0);
+        const parsed = lines.map(parseLogLine);
+        const bounded = parsed.length <= LOG_BUFFER_CAP
+          ? parsed
+          : parsed.slice(parsed.length - LOG_BUFFER_CAP);
+
+        setLogs(bounded);
+        setIsLogFileTruncated(payload.truncated);
+      } catch (error) {
+        if (cancelled) return;
+        setLogs([]);
+        setIsLogFileTruncated(false);
+        setLogLoadError(`Failed to load ${selectedLogRelativePath}: ${String(error)}`);
+      } finally {
+        if (!cancelled) {
+          setIsLogFileLoading(false);
+        }
+      }
+    };
+
+    void loadLogFile();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveServer, hasGameApi, selectedLogRelativePath]);
 
   useEffect(() => {
     if (autoScroll && logContainerRef.current) {
@@ -512,13 +1049,41 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [effectiveServer, hasDownloadApi, resolveBuildPath]);
 
   const filteredLogs = logs.filter((log) => {
-    if (filter === 'all') return true;
-    if (filter === 'errors') return log.level === 'ERROR' || log.level === 'FATAL';
-    if (filter === 'warnings') return log.level === 'WARNING';
-    if (filter === 'info') return log.level === 'INFO' || log.level === 'stdout';
-    if (filter === 'debug') return log.level === 'DEBUG';
-    return true;
+    if (activeLogFilters.length === 0) return false;
+
+    if (activeLogFilters.includes('errors') && (log.level === 'ERROR' || log.level === 'FATAL')) {
+      return true;
+    }
+    if (activeLogFilters.includes('warnings') && log.level === 'WARNING') {
+      return true;
+    }
+    if (activeLogFilters.includes('info') && (log.level === 'INFO' || log.level === 'stdout')) {
+      return true;
+    }
+    if (activeLogFilters.includes('debug') && log.level === 'DEBUG') {
+      return true;
+    }
+
+    return false;
   });
+
+  const areAllLogFiltersEnabled = activeLogFilters.length === LOG_FILTER_OPTIONS.length;
+
+  const toggleLogFilter = useCallback((filter: LogFilter) => {
+    setActiveLogFilters((prev) => {
+      if (prev.includes(filter)) {
+        // Keep at least one type active to avoid an unintentionally empty pane.
+        if (prev.length <= 1) return prev;
+        return prev.filter((item) => item !== filter);
+      }
+
+      return [...prev, filter];
+    });
+  }, []);
+
+  const selectAllLogFilters = useCallback(() => {
+    setActiveLogFilters([...LOG_FILTER_OPTIONS]);
+  }, []);
 
   const canStart = !!effectiveServer && !isUpdating && lifecycleState !== 'running' && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
   const canStop = !!effectiveServer && !isUpdating && (lifecycleState === 'running' || lifecycleState === 'starting');
@@ -672,6 +1237,24 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const resetDashboardLayout = useCallback(() => {
     setDashboardLayout(createDefaultDashboardLayout());
     setSelectedGroupId('main');
+  }, []);
+
+  const toggleGroupCollapsed = useCallback((groupId: string) => {
+    setDashboardLayout((prev) => {
+      const next = cloneLayout(prev);
+      const group = next.groups.find((candidate) => candidate.id === groupId);
+      if (!group) return prev;
+      group.collapsed = !group.collapsed;
+      return next;
+    });
+  }, []);
+
+  const setAllGroupsCollapsed = useCallback((collapsed: boolean) => {
+    setDashboardLayout((prev) => {
+      const next = cloneLayout(prev);
+      next.groups = next.groups.map((group) => ({ ...group, collapsed }));
+      return next;
+    });
   }, []);
 
   const beginGroupResize = useCallback((groupId: string, event: React.MouseEvent<HTMLButtonElement>) => {
@@ -831,6 +1414,199 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     URL.revokeObjectURL(url);
   };
 
+  const persistMaxPlayers = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || isSavingMaxPlayers) return;
+
+    const sanitized = Math.max(0, Math.round(maxPlayersInput || 0));
+    setMaxPlayersInput(sanitized);
+    setIsSavingMaxPlayers(true);
+    setActionError(null);
+
+    try {
+      const result = await window.launcher.game.writeServerConfigValue(
+        effectiveServer.path,
+        'MAX_CLIENTS',
+        String(sanitized),
+      );
+
+      if (!result.success) {
+        setActionError(result.error ?? 'Failed to save MAX_CLIENTS in server.cfg.');
+        return;
+      }
+
+      if (effectiveServer.maxPlayers !== sanitized) {
+        updateServerItem({ ...effectiveServer, maxPlayers: sanitized });
+      }
+    } catch (error) {
+      setActionError(`Failed to save MAX_CLIENTS: ${String(error)}`);
+    } finally {
+      setIsSavingMaxPlayers(false);
+    }
+  }, [effectiveServer, hasGameApi, isSavingMaxPlayers, maxPlayersInput, updateServerItem]);
+
+  const persistServerCfgValue = useCallback(async (key: string, value: string): Promise<boolean> => {
+    if (!effectiveServer || !hasGameApi) return false;
+    const result = await window.launcher.game.writeServerConfigValue(effectiveServer.path, key, value);
+    if (!result.success) {
+      setActionError(result.error ?? `Failed to save ${key} in server.cfg.`);
+      return false;
+    }
+    return true;
+  }, [effectiveServer, hasGameApi]);
+
+  const saveConfigField = useCallback(async (field: ServerConfigField, explicitValue?: string) => {
+    if (savingConfigKey) return;
+
+    const currentRaw = explicitValue ?? serverConfigValues[field.key] ?? field.defaultValue;
+    const validation = getConfigFieldValidation(field, currentRaw);
+    if (validation.error) return;
+    let nextValue = currentRaw;
+
+    if (field.type === 'boolean') {
+      nextValue = String(parseCfgBoolean(currentRaw, field.defaultValue === 'true'));
+    } else if (field.type === 'number') {
+      const parsed = Number.parseInt(currentRaw, 10);
+      if (Number.isFinite(parsed)) {
+        const min = field.min ?? Number.NEGATIVE_INFINITY;
+        const max = field.max ?? Number.POSITIVE_INFINITY;
+        nextValue = String(Math.max(min, Math.min(max, parsed)));
+      } else {
+        nextValue = field.defaultValue;
+      }
+    } else {
+      nextValue = currentRaw.trim();
+      if (!nextValue) nextValue = field.defaultValue;
+    }
+
+    setServerConfigValues((prev) => ({ ...prev, [field.key]: nextValue }));
+    setSavingConfigKey(field.key);
+    setActionError(null);
+
+    try {
+      const ok = await persistServerCfgValue(field.key, nextValue);
+      if (!ok) return;
+
+      if (field.key === 'MAX_CLIENTS') {
+        const parsed = Number.parseInt(nextValue, 10);
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          setMaxPlayersInput(parsed);
+          if (effectiveServer && effectiveServer.maxPlayers !== parsed) {
+            updateServerItem({ ...effectiveServer, maxPlayers: parsed });
+          }
+        }
+      }
+
+      if (field.key === 'SERVER_LISTEN_IP') {
+        setBindAddressInput(nextValue);
+        if (effectiveServer && effectiveServer.serverIp !== nextValue) {
+          updateServerItem({ ...effectiveServer, serverIp: nextValue });
+        }
+      }
+
+      if (field.key === 'ANNOUNCE_SERVER_TO_SERVERLIST') {
+        setIsPublicServerInput(parseCfgBoolean(nextValue, false));
+      }
+      if (field.key === 'USE_STARMADE_AUTHENTICATION') {
+        const enabled = parseCfgBoolean(nextValue, false);
+        setUseAuthInput(enabled);
+        if (!enabled) {
+          setRequireAuthInput(false);
+          setServerConfigValues((prev) => ({ ...prev, REQUIRE_STARMADE_AUTHENTICATION: 'false' }));
+        }
+      }
+      if (field.key === 'REQUIRE_STARMADE_AUTHENTICATION') {
+        setRequireAuthInput(parseCfgBoolean(nextValue, false));
+      }
+    } catch (error) {
+      setActionError(`Failed to save ${field.key}: ${String(error)}`);
+    } finally {
+      setSavingConfigKey(null);
+    }
+  }, [effectiveServer, persistServerCfgValue, savingConfigKey, serverConfigValues, updateServerItem]);
+
+  const persistBindAddress = useCallback(async () => {
+    if (isSavingConnectionSettings) return;
+    const sanitized = bindAddressInput.trim() || 'all';
+    setBindAddressInput(sanitized);
+    setIsSavingConnectionSettings(true);
+    setActionError(null);
+    try {
+      const ok = await persistServerCfgValue('SERVER_LISTEN_IP', sanitized);
+      if (ok && effectiveServer && effectiveServer.serverIp !== sanitized) {
+        updateServerItem({ ...effectiveServer, serverIp: sanitized });
+      }
+    } catch (error) {
+      setActionError(`Failed to save SERVER_LISTEN_IP: ${String(error)}`);
+    } finally {
+      setIsSavingConnectionSettings(false);
+    }
+  }, [bindAddressInput, effectiveServer, isSavingConnectionSettings, persistServerCfgValue, updateServerItem]);
+
+  const togglePublicServer = useCallback(async (nextChecked: boolean) => {
+    if (isSavingConnectionSettings) return;
+    setIsPublicServerInput(nextChecked);
+    setIsSavingConnectionSettings(true);
+    setActionError(null);
+    try {
+      const ok = await persistServerCfgValue('ANNOUNCE_SERVER_TO_SERVERLIST', String(nextChecked));
+      if (!ok) setIsPublicServerInput(!nextChecked);
+    } catch (error) {
+      setIsPublicServerInput(!nextChecked);
+      setActionError(`Failed to save ANNOUNCE_SERVER_TO_SERVERLIST: ${String(error)}`);
+    } finally {
+      setIsSavingConnectionSettings(false);
+    }
+  }, [isSavingConnectionSettings, persistServerCfgValue]);
+
+  const toggleUseAuthentication = useCallback(async (nextChecked: boolean) => {
+    if (isSavingConnectionSettings) return;
+    const previousUseAuth = useAuthInput;
+    const previousRequireAuth = requireAuthInput;
+    setUseAuthInput(nextChecked);
+    if (!nextChecked) setRequireAuthInput(false);
+    setIsSavingConnectionSettings(true);
+    setActionError(null);
+    try {
+      const useAuthSaved = await persistServerCfgValue('USE_STARMADE_AUTHENTICATION', String(nextChecked));
+      if (!useAuthSaved) {
+        setUseAuthInput(previousUseAuth);
+        setRequireAuthInput(previousRequireAuth);
+        return;
+      }
+
+      if (!nextChecked) {
+        const requireSaved = await persistServerCfgValue('REQUIRE_STARMADE_AUTHENTICATION', 'false');
+        if (!requireSaved) {
+          setUseAuthInput(previousUseAuth);
+          setRequireAuthInput(previousRequireAuth);
+        }
+      }
+    } catch (error) {
+      setUseAuthInput(previousUseAuth);
+      setRequireAuthInput(previousRequireAuth);
+      setActionError(`Failed to save authentication settings: ${String(error)}`);
+    } finally {
+      setIsSavingConnectionSettings(false);
+    }
+  }, [isSavingConnectionSettings, persistServerCfgValue, requireAuthInput, useAuthInput]);
+
+  const toggleRequireAuthentication = useCallback(async (nextChecked: boolean) => {
+    if (isSavingConnectionSettings || !useAuthInput) return;
+    const previous = requireAuthInput;
+    setRequireAuthInput(nextChecked);
+    setIsSavingConnectionSettings(true);
+    setActionError(null);
+    try {
+      const ok = await persistServerCfgValue('REQUIRE_STARMADE_AUTHENTICATION', String(nextChecked));
+      if (!ok) setRequireAuthInput(previous);
+    } catch (error) {
+      setRequireAuthInput(previous);
+      setActionError(`Failed to save REQUIRE_STARMADE_AUTHENTICATION: ${String(error)}`);
+    } finally {
+      setIsSavingConnectionSettings(false);
+    }
+  }, [isSavingConnectionSettings, persistServerCfgValue, requireAuthInput, useAuthInput]);
+
   const renderDragHandle = (label: string) => (
     <span
       className="inline-flex items-center gap-1 rounded border border-white/10 bg-black/25 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-400"
@@ -911,8 +1687,16 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         <label className="flex items-center gap-3 text-sm">
           <span className="w-28 text-gray-300">Bind Address:</span>
           <input
-            value={effectiveServerIp}
-            readOnly
+            value={bindAddressInput}
+            onChange={(event) => setBindAddressInput(event.target.value)}
+            onBlur={() => { void persistBindAddress(); }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                void persistBindAddress();
+              }
+            }}
+            disabled={isSavingConnectionSettings}
             className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
           />
         </label>
@@ -926,21 +1710,53 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         </label>
         <label className="flex items-center gap-3 text-sm">
           <span className="w-28 text-gray-300">Max Players:</span>
-          <input type="range" min={0} max={200} value={0} disabled className="w-full cursor-not-allowed accent-starmade-accent opacity-60" />
+          <input
+            type="number"
+            min={0}
+            value={maxPlayersInput}
+            onChange={(event) => setMaxPlayersInput(Math.max(0, Number(event.target.value) || 0))}
+            onBlur={() => { void persistMaxPlayers(); }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                void persistMaxPlayers();
+              }
+            }}
+            disabled={isSavingMaxPlayers}
+            className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+          />
         </label>
       </div>
 
       <div className="space-y-3 rounded-md border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
         <label className="flex items-center gap-2">
-          <input type="checkbox" checked={false} disabled className="h-4 w-4 rounded" />
+          <input
+            type="checkbox"
+            checked={isPublicServerInput}
+            onChange={(event) => { void togglePublicServer(event.target.checked); }}
+            disabled={isSavingConnectionSettings}
+            className="h-4 w-4 rounded"
+          />
           <span>Public Server</span>
         </label>
         <label className="flex items-center gap-2">
-          <input type="checkbox" checked={false} disabled className="h-4 w-4 rounded" />
+          <input
+            type="checkbox"
+            checked={useAuthInput}
+            onChange={(event) => { void toggleUseAuthentication(event.target.checked); }}
+            disabled={isSavingConnectionSettings}
+            className="h-4 w-4 rounded"
+          />
           <span>Use Authentication</span>
         </label>
         <label className="flex items-center gap-2">
-          <input type="checkbox" checked={false} disabled className="h-4 w-4 rounded" />
+          <input
+            type="checkbox"
+            checked={requireAuthInput}
+            onChange={(event) => { void toggleRequireAuthentication(event.target.checked); }}
+            disabled={isSavingConnectionSettings || !useAuthInput}
+            className="h-4 w-4 rounded"
+          />
           <span>Require Authentication</span>
         </label>
       </div>
@@ -1185,6 +2001,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const renderDashboardGroup = (group: DashboardGroup) => {
     const minHeight = getGroupMinHeight(group);
     const height = Math.max(group.height ?? minHeight, minHeight);
+    const isCollapsed = !!group.collapsed;
     const isResizing = groupResizeDraft?.groupId === group.id;
     const isDraggedGroup = draggedGroupId === group.id;
 
@@ -1217,6 +2034,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               className="min-w-[160px] flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-1.5 text-sm text-gray-200"
             />
             <button
+              onClick={() => toggleGroupCollapsed(group.id)}
+              className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold text-gray-300 hover:bg-black/45"
+            >
+              {isCollapsed ? 'Expand' : 'Collapse'}
+            </button>
+            <button
               onClick={() => deleteGroup(group.id)}
               disabled={dashboardLayout.groups.length <= 1}
               className="rounded border border-red-500/40 bg-red-950/30 px-2 py-1 text-xs font-semibold text-red-300 disabled:cursor-not-allowed disabled:opacity-40"
@@ -1226,68 +2049,84 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             <span className="ml-auto text-xs uppercase tracking-wider text-gray-500">Min {minHeight}px</span>
           </>
         ) : (
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-300">{group.title}</h3>
+          <>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-300">{group.title}</h3>
+            <button
+              onClick={() => toggleGroupCollapsed(group.id)}
+              className="ml-auto rounded border border-white/15 bg-black/30 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-300 hover:bg-black/45"
+            >
+              {isCollapsed ? 'Expand' : 'Collapse'}
+            </button>
+          </>
         )}
       </div>
 
-      <div
-        ref={(element) => {
-          groupContainerRefs.current[group.id] = element;
-        }}
-        style={{ height: `${height}px`, minHeight: `${minHeight}px` }}
-        className={`space-y-2 overflow-y-auto pr-1 ${isResizing ? 'select-none' : ''}`}
-      >
-        {renderDropZone(group.id, 0)}
-        {group.widgetIds.map((widgetId, index) => {
-          const widgetLabel = ALL_WIDGETS.find((widget) => widget.id === widgetId)?.label ?? widgetId;
-          const isDragged = draggedWidget?.widgetId === widgetId && draggedWidget.sourceGroupId === group.id;
-          return (
-            <React.Fragment key={`${group.id}-${widgetId}`}>
-              {isLayoutEditMode ? (
-                <div
-                  draggable
-                  onDragStart={(event) => {
-                    event.stopPropagation();
-                    setDraggedWidget({ widgetId, sourceGroupId: group.id });
-                  }}
-                  onDragEnd={(event) => {
-                    event.stopPropagation();
-                    setDraggedWidget(null);
-                    setWidgetDropTarget(null);
-                  }}
-                  className={`rounded-lg border p-2 transition-all ${
-                    isDragged
-                      ? 'border-starmade-accent/50 bg-starmade-accent/10 opacity-60 shadow-[0_0_0_1px_rgba(34,123,134,0.25)]'
-                      : 'border-white/10 bg-black/15 hover:border-white/20'
-                  }`}
-                >
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      {renderDragHandle(`Drag ${widgetLabel}`)}
-                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">{widgetLabel}</p>
+      {!isCollapsed && (
+        <div
+          ref={(element) => {
+            groupContainerRefs.current[group.id] = element;
+          }}
+          style={{ height: `${height}px`, minHeight: `${minHeight}px` }}
+          className={`space-y-2 overflow-y-auto pr-1 ${isResizing ? 'select-none' : ''}`}
+        >
+          {renderDropZone(group.id, 0)}
+          {group.widgetIds.map((widgetId, index) => {
+            const widgetLabel = ALL_WIDGETS.find((widget) => widget.id === widgetId)?.label ?? widgetId;
+            const isDragged = draggedWidget?.widgetId === widgetId && draggedWidget.sourceGroupId === group.id;
+            return (
+              <React.Fragment key={`${group.id}-${widgetId}`}>
+                {isLayoutEditMode ? (
+                  <div
+                    draggable
+                    onDragStart={(event) => {
+                      event.stopPropagation();
+                      setDraggedWidget({ widgetId, sourceGroupId: group.id });
+                    }}
+                    onDragEnd={(event) => {
+                      event.stopPropagation();
+                      setDraggedWidget(null);
+                      setWidgetDropTarget(null);
+                    }}
+                    className={`rounded-lg border p-2 transition-all ${
+                      isDragged
+                        ? 'border-starmade-accent/50 bg-starmade-accent/10 opacity-60 shadow-[0_0_0_1px_rgba(34,123,134,0.25)]'
+                        : 'border-white/10 bg-black/15 hover:border-white/20'
+                    }`}
+                  >
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        {renderDragHandle(`Drag ${widgetLabel}`)}
+                        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">{widgetLabel}</p>
+                      </div>
+                      <button
+                        onClick={() => removeWidgetToHidden(widgetId, group.id)}
+                        className="rounded border border-white/15 bg-black/30 px-2 py-0.5 text-xs text-gray-300 hover:bg-black/45"
+                      >
+                        Remove
+                      </button>
                     </div>
-                    <button
-                      onClick={() => removeWidgetToHidden(widgetId, group.id)}
-                      className="rounded border border-white/15 bg-black/30 px-2 py-0.5 text-xs text-gray-300 hover:bg-black/45"
-                    >
-                      Remove
-                    </button>
+                    {renderWidgetBody(widgetId)}
                   </div>
-                  {renderWidgetBody(widgetId)}
-                </div>
-              ) : (
-                <div>
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">{widgetLabel}</p>
-                  {renderWidgetBody(widgetId)}
-                </div>
-              )}
-              {renderDropZone(group.id, index + 1)}
-            </React.Fragment>
-          );
-        })}
-      </div>
+                ) : (
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">{widgetLabel}</p>
+                    {renderWidgetBody(widgetId)}
+                  </div>
+                )}
+                {renderDropZone(group.id, index + 1)}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      )}
 
-      {isLayoutEditMode && (
+      {isCollapsed && (
+        <div className="rounded-md border border-white/10 bg-black/15 px-3 py-2 text-xs text-gray-500">
+          Group collapsed. Expand to view widgets.
+        </div>
+      )}
+
+      {isLayoutEditMode && !isCollapsed && (
         <div className="mt-2 flex items-center justify-end gap-2 text-[11px] uppercase tracking-wider text-gray-500">
           <span>{Math.round(height)}px</span>
           <button
@@ -1335,6 +2174,18 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               }`}
             >
               {isLayoutEditMode ? 'Done Editing' : 'Edit Layout'}
+            </button>
+            <button
+              onClick={() => setAllGroupsCollapsed(true)}
+              className="rounded border border-white/15 bg-black/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-gray-200 transition-colors hover:bg-black/45"
+            >
+              Collapse All
+            </button>
+            <button
+              onClick={() => setAllGroupsCollapsed(false)}
+              className="rounded border border-white/15 bg-black/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-gray-200 transition-colors hover:bg-black/45"
+            >
+              Expand All
             </button>
           </div>
 
@@ -1439,56 +2290,146 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const renderLogs = () => (
     <div className="flex h-full min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 px-4 py-3">
-        <div>
-          <h3 className="font-display text-lg font-bold uppercase tracking-wider text-white">Server Logs</h3>
-          <p className="text-sm text-gray-400">{effectiveServerName}{logPath ? ` - ${logPath}` : ''}</p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-1 text-sm">
-            {(['all', 'info', 'warnings', 'errors', 'debug'] as LogFilter[]).map((option) => (
-              <button
-                key={option}
-                onClick={() => setFilter(option)}
-                className={`rounded px-3 py-1 capitalize transition-colors ${
-                  filter === option ? 'bg-starmade-accent text-white' : 'bg-slate-700 text-gray-300 hover:bg-slate-600'
-                }`}
-              >
-                {option}
-              </button>
-            ))}
+      <div className="border-b border-white/10 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h3 className="font-display text-lg font-bold uppercase tracking-wider text-white">Server Logs</h3>
+            <p className="text-sm text-gray-400">{effectiveServerName}{logPath ? ` - ${logPath}` : ''}</p>
           </div>
 
-          <label className="flex items-center gap-2 text-sm text-gray-300">
-            <input
-              type="checkbox"
-              checked={autoScroll}
-              onChange={(event) => setAutoScroll(event.target.checked)}
-              className="h-4 w-4 rounded border-gray-600 bg-slate-700"
-            />
-            Auto-scroll
-          </label>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-1 text-sm">
+              <button
+                onClick={selectAllLogFilters}
+                className={`rounded px-3 py-1 capitalize transition-colors ${
+                  areAllLogFiltersEnabled ? 'bg-starmade-accent text-white' : 'bg-slate-700 text-gray-300 hover:bg-slate-600'
+                }`}
+              >
+                all
+              </button>
+              {LOG_FILTER_OPTIONS.map((option) => (
+                <button
+                  key={option}
+                  onClick={() => toggleLogFilter(option)}
+                  className={`rounded px-3 py-1 capitalize transition-colors ${
+                    activeLogFilters.includes(option) ? 'bg-starmade-accent text-white' : 'bg-slate-700 text-gray-300 hover:bg-slate-600'
+                  }`}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+
+            <label className="flex items-center gap-2 text-sm text-gray-300">
+              <input
+                type="checkbox"
+                checked={autoScroll}
+                onChange={(event) => setAutoScroll(event.target.checked)}
+                className="h-4 w-4 rounded border-gray-600 bg-slate-700"
+              />
+              Auto-scroll
+            </label>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-md border border-white/10 bg-black/25 p-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-300">Log Categories</p>
+            <button
+              onClick={() => { void reloadLogCatalog(); }}
+              disabled={isLogListLoading}
+              className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isLogListLoading ? 'Refreshing...' : 'Refresh List'}
+            </button>
+          </div>
+
+          {logCategories.length === 0 ? (
+            <p className="text-sm text-gray-400">{isLogListLoading ? 'Scanning logs folder...' : 'No log files found in logs/.'}</p>
+          ) : (
+            <>
+              <div className="mb-3 flex flex-wrap gap-2">
+                {logCategories.map((category) => {
+                  const isSelectedCategory = selectedLogCategoryId === category.id;
+                  return (
+                    <button
+                      key={category.id}
+                      onClick={() => {
+                        const firstFile = category.files[0];
+                        if (firstFile) setSelectedLogRelativePath(firstFile.relativePath);
+                      }}
+                      className={`rounded border px-2 py-1 text-xs font-semibold uppercase tracking-wider transition-colors ${
+                        isSelectedCategory
+                          ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white'
+                          : 'border-white/15 bg-black/30 text-gray-300 hover:bg-black/45'
+                      }`}
+                    >
+                      {category.label} ({category.files.length})
+                    </button>
+                  );
+                })}
+              </div>
+
+              <label className="flex flex-col gap-1 text-sm text-gray-300 md:flex-row md:items-center">
+                <span className="w-24 text-xs font-semibold uppercase tracking-wider text-gray-400">File</span>
+                <select
+                  value={selectedLogRelativePath ?? ''}
+                  onChange={(event) => setSelectedLogRelativePath(event.target.value || null)}
+                  className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-gray-100"
+                >
+                  {selectedLogCategoryFiles.map((file) => (
+                    <option key={file.relativePath} value={file.relativePath}>
+                      {file.fileName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {selectedLogRelativePath && (() => {
+                const selectedFile = selectedLogCategoryFiles.find((file) => file.relativePath === selectedLogRelativePath)
+                  ?? logCategories.flatMap((category) => category.files).find((file) => file.relativePath === selectedLogRelativePath);
+
+                if (!selectedFile) return null;
+
+                return (
+                  <p className="mt-2 text-xs text-gray-400">
+                    {selectedFile.fileName} - {formatLogFileSize(selectedFile.sizeBytes)} - modified {formatLogModifiedTime(selectedFile.modifiedMs)}
+                  </p>
+                );
+              })()}
+            </>
+          )}
+
+          {logLoadError && (
+            <p className="mt-2 text-sm text-red-300">{logLoadError}</p>
+          )}
         </div>
       </div>
 
       <div ref={logContainerRef} className="flex-1 overflow-y-auto p-4 font-mono text-sm">
-        <div className="space-y-1">
-          {filteredLogs.length === 0 && (
-            <p className="text-gray-500">No log lines yet for this server.</p>
-          )}
-          {filteredLogs.map((log, index) => (
-            <div key={`${log.timestamp}-${index}`} className="flex gap-3 rounded px-2 py-1 hover:bg-white/5">
-              <span className="flex-shrink-0 text-gray-500">{log.timestamp}</span>
-              <span className={`flex-shrink-0 font-semibold ${getLogLevelColor(log.level)}`}>[{log.level}]</span>
-              <span className="break-all text-gray-300">{log.message}</span>
-            </div>
-          ))}
-        </div>
+        {isLogFileLoading ? (
+          <p className="text-gray-400">Loading log file...</p>
+        ) : (
+          <div className="space-y-1">
+            {filteredLogs.length === 0 && (
+              <p className="text-gray-500">No log lines yet for this server.</p>
+            )}
+            {filteredLogs.map((log, index) => (
+              <div key={`${log.timestamp}-${index}`} className="flex gap-3 rounded px-2 py-1 hover:bg-white/5">
+                <span className="flex-shrink-0 text-gray-500">{log.timestamp}</span>
+                <span className={`flex-shrink-0 font-semibold ${getLogLevelColor(log.level)}`}>[{log.level}]</span>
+                <span className="break-all text-gray-300">{log.message}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="flex items-center justify-between gap-3 border-t border-white/10 bg-black/20 px-4 py-3">
-        <p className="text-sm text-gray-400">{filteredLogs.length} / {LOG_BUFFER_CAP} buffered log entries</p>
+        <p className="text-sm text-gray-400">
+          {filteredLogs.length} / {LOG_BUFFER_CAP} buffered log entries
+          {isLogFileTruncated ? ' (tail view)' : ''}
+        </p>
         <div className="flex gap-2">
           <button onClick={handleClearLogs} className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600">
             Clear
@@ -1500,6 +2441,173 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             Export
           </button>
         </div>
+      </div>
+    </div>
+  );
+
+  const renderConfiguration = () => (
+    <div className="flex h-full min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
+      <div className="border-b border-white/10 px-4 py-3">
+        <h3 className="font-display text-lg font-bold uppercase tracking-wider text-white">Server Configuration</h3>
+        <p className="mt-1 text-sm text-gray-400">Values are read from and written to server.cfg in this installation.</p>
+        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-[2fr_3fr]">
+          <input
+            type="text"
+            placeholder="Search key, label, or description"
+            value={configSearchTerm}
+            onChange={(event) => setConfigSearchTerm(event.target.value)}
+            className="rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-gray-200"
+          />
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => setConfigCategoryFilter('all')}
+              className={`rounded border px-3 py-2 text-xs font-semibold uppercase tracking-wider transition-colors ${
+                configCategoryFilter === 'all'
+                  ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white'
+                  : 'border-white/15 bg-black/30 text-gray-200 hover:bg-black/45'
+              }`}
+            >
+              All
+            </button>
+            {CONFIG_CATEGORY_ORDER.map((category) => (
+              <button
+                key={category}
+                onClick={() => setConfigCategoryFilter(category)}
+                className={`rounded border px-3 py-2 text-xs font-semibold uppercase tracking-wider transition-colors ${
+                  configCategoryFilter === category
+                    ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white'
+                    : 'border-white/15 bg-black/30 text-gray-200 hover:bg-black/45'
+                }`}
+              >
+                {CONFIG_CATEGORY_LABELS[category]}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        {isConfigLoading ? (
+          <p className="text-sm text-gray-400">Loading configuration from server.cfg...</p>
+        ) : (
+          <div className="space-y-4">
+            {CONFIG_CATEGORY_ORDER.map((category) => {
+              const categoryFields = SERVER_CONFIG_FIELDS.filter((field) => {
+                if (field.category !== category) return false;
+                if (configCategoryFilter !== 'all' && configCategoryFilter !== category) return false;
+
+                const needle = configSearchTerm.trim().toLowerCase();
+                if (!needle) return true;
+
+                return (
+                  field.key.toLowerCase().includes(needle) ||
+                  field.label.toLowerCase().includes(needle) ||
+                  field.description.toLowerCase().includes(needle)
+                );
+              });
+
+              if (categoryFields.length === 0) return null;
+
+              return (
+                <section key={category} className="space-y-3">
+                  <h4 className="text-sm font-semibold uppercase tracking-wider text-gray-300">{CONFIG_CATEGORY_LABELS[category]}</h4>
+                  {categoryFields.map((field) => {
+              const rawValue = serverConfigValues[field.key] ?? field.defaultValue;
+              const isSavingThisField = savingConfigKey === field.key;
+              const validation = getConfigFieldValidation(field, rawValue);
+              const fieldIsInvalid = !!validation.error;
+
+              return (
+                <div key={field.key} className="rounded-md border border-white/10 bg-black/20 p-3">
+                  <div className="mb-2">
+                    <p className="text-sm font-semibold text-white">{field.label}</p>
+                    <p className="text-xs text-gray-400">{field.description}</p>
+                    <p className="mt-1 text-[11px] font-mono uppercase tracking-wide text-gray-500">{field.key}</p>
+                  </div>
+
+                  {field.type === 'boolean' ? (
+                    <label className="inline-flex items-center gap-2 text-sm text-gray-300">
+                      <input
+                        type="checkbox"
+                        checked={parseCfgBoolean(rawValue, field.defaultValue === 'true')}
+                        onChange={(event) => {
+                          const next = String(event.target.checked);
+                          setServerConfigValues((prev) => ({ ...prev, [field.key]: next }));
+                          void saveConfigField(field, next);
+                        }}
+                        disabled={!!savingConfigKey || fieldIsInvalid}
+                        className="h-4 w-4 rounded"
+                      />
+                      Enabled
+                    </label>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type={field.type === 'number' ? 'number' : 'text'}
+                        min={field.type === 'number' ? field.min : undefined}
+                        max={field.type === 'number' ? field.max : undefined}
+                        value={rawValue}
+                        onChange={(event) => {
+                          const next = event.target.value;
+                          setServerConfigValues((prev) => ({ ...prev, [field.key]: next }));
+                        }}
+                        onBlur={() => { void saveConfigField(field); }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            void saveConfigField(field);
+                          }
+                        }}
+                        disabled={!!savingConfigKey}
+                        className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-gray-200"
+                      />
+                      <button
+                        onClick={() => { void saveConfigField(field); }}
+                        disabled={!!savingConfigKey || fieldIsInvalid}
+                        className="rounded-md border border-white/15 bg-black/30 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {isSavingThisField ? 'Saving...' : 'Save'}
+                      </button>
+                    </div>
+                  )}
+
+                  {(validation.error || validation.warning || field.guidance) && (
+                    <p className={`mt-2 text-xs ${
+                      validation.error
+                        ? 'text-red-300'
+                        : validation.warning
+                          ? 'text-amber-300'
+                          : 'text-gray-500'
+                    }`}>
+                      {validation.error ?? validation.warning ?? field.guidance}
+                    </p>
+                  )}
+                </div>
+              );
+                  })}
+                </section>
+              );
+            })}
+            {CONFIG_CATEGORY_ORDER.every((category) => {
+              const categoryFields = SERVER_CONFIG_FIELDS.filter((field) => {
+                if (field.category !== category) return false;
+                if (configCategoryFilter !== 'all' && configCategoryFilter !== category) return false;
+                const needle = configSearchTerm.trim().toLowerCase();
+                if (!needle) return true;
+                return (
+                  field.key.toLowerCase().includes(needle) ||
+                  field.label.toLowerCase().includes(needle) ||
+                  field.description.toLowerCase().includes(needle)
+                );
+              });
+              return categoryFields.length === 0;
+            }) && (
+              <p className="rounded-md border border-dashed border-white/15 bg-black/20 px-3 py-4 text-sm text-gray-400">
+                No configuration keys match the current search/filter.
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1516,12 +2624,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const renderActiveTab = () => {
     if (activeTab === 'control') return renderControlPanel();
     if (activeTab === 'logs') return renderLogs();
-    if (activeTab === 'configuration') {
-      return renderPlaceholderTab(
-        'Configuration',
-        'Configuration file editing will be connected after we map exact game config paths.'
-      );
-    }
+    if (activeTab === 'configuration') return renderConfiguration();
     if (activeTab === 'files') {
       return renderPlaceholderTab(
         'Files',

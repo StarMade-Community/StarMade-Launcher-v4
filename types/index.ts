@@ -48,6 +48,8 @@ export interface ManagedItem {
   port?: string;
   /** Optional server address/hostname used for direct connections and server panel display. */
   serverIp?: string;
+  /** Optional default/max player cap for server installs. */
+  maxPlayers?: number;
   /** CDN build path (e.g. `./build/starmade-build_20231020_123456`). Set when a version is chosen from the live manifest. */
   buildPath?: string;
   /** True once the game files have been downloaded and verified. Undefined for legacy/mock items (treated as installed). */

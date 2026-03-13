@@ -145,6 +145,30 @@ const launcherApi = {
     getLogPath: (installationId: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.GAME_GET_LOG_PATH, installationId),
 
+    /** List categorized log files from an installation's logs folder. */
+    listLogFiles: (installationPath: string): Promise<{
+      categories: Array<{
+        id: string;
+        label: string;
+        files: Array<{
+          fileName: string;
+          relativePath: string;
+          sizeBytes: number;
+          modifiedMs: number;
+          categoryId: string;
+          categoryLabel: string;
+        }>;
+      }>;
+      defaultRelativePath: string | null;
+    }> => ipcRenderer.invoke(IPC.GAME_LIST_LOG_FILES, installationPath),
+
+    /** Read the tail of one log file from an installation's logs folder. */
+    readLogFile: (installationPath: string, relativePath: string, maxBytes?: number): Promise<{
+      content: string;
+      truncated: boolean;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.GAME_READ_LOG_FILE, installationPath, relativePath, maxBytes),
+
     /** Open log directory in file manager. */
     openLogLocation: (installationPath: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke(IPC.GAME_OPEN_LOG_LOCATION, installationPath),
@@ -152,6 +176,14 @@ const launcherApi = {
     /** Get GraphicsInfo.txt content if it exists. */
     getGraphicsInfo: (installationPath: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.GAME_GET_GRAPHICS_INFO, installationPath),
+
+    /** Read a value from server.cfg by key (e.g. MAX_CLIENTS). */
+    readServerConfigValue: (installationPath: string, key: string): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.GAME_SERVER_CFG_GET, installationPath, key),
+
+    /** Set a value in server.cfg by key (e.g. MAX_CLIENTS). */
+    writeServerConfigValue: (installationPath: string, key: string, value: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_SERVER_CFG_SET, installationPath, key, value),
 
     /**
      * Read the `launcher-session.json` file written by the game into the

@@ -195,6 +195,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
   const [name, setName] = useState(item.name);
   const [port, setPort] = useState(item.port ?? '4242');
   const [serverIp, setServerIp] = useState(item.serverIp ?? '127.0.0.1');
+  const [maxPlayers, setMaxPlayers] = useState(item.maxPlayers ?? 32);
   const [icon, setIcon] = useState(item.icon);
   const [type, setType] = useState<ItemType>(item.type === 'latest' ? 'release' : item.type);
   const [version, setVersion] = useState(item.version);
@@ -230,6 +231,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         gameDir?: string;
         port?: string;
         serverIp?: string;
+        maxPlayers?: number;
         javaMemory?: number;
         jvmArgs?: string;
         javaPath8?: string;
@@ -239,6 +241,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
       if (defaults.gameDir) setGameDir(defaults.gameDir);
       if (defaults.port && itemTypeName === 'Server') setPort(defaults.port);
       if (defaults.serverIp && itemTypeName === 'Server') setServerIp(defaults.serverIp);
+      if (typeof defaults.maxPlayers === 'number' && itemTypeName === 'Server') setMaxPlayers(Math.max(0, Math.round(defaults.maxPlayers)));
       if (defaults.javaMemory) setJavaMemory(defaults.javaMemory);
       if (defaults.jvmArgs) setJvmArgs(defaults.jvmArgs);
 
@@ -363,6 +366,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         ...(itemTypeName === 'Server' && {
           port,
           serverIp: serverIp.trim() || '127.0.0.1',
+          maxPlayers: Math.max(0, Math.round(maxPlayers || 0)),
         }),
     });
   };
@@ -415,6 +419,16 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
                 </FormField>
                 <FormField label="Server IP" htmlFor="itemServerIp">
                   <input id="itemServerIp" type="text" value={serverIp} onChange={e => setServerIp(e.target.value)} className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
+                </FormField>
+                <FormField label="Max Players" htmlFor="itemMaxPlayers">
+                  <input
+                    id="itemMaxPlayers"
+                    type="number"
+                    min={0}
+                    value={maxPlayers}
+                    onChange={e => setMaxPlayers(Math.max(0, Number(e.target.value) || 0))}
+                    className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+                  />
                 </FormField>
               </>
             ) : (

@@ -10,6 +10,7 @@ const STORE_KEY_SERVER       = 'defaultServerSettings';
 interface DefaultSettingsData {
     gameDir: string;
     port: string;
+    maxPlayers: number;
     javaMemory: number;
     jvmArgs: string;
     javaPath8: string;
@@ -34,6 +35,7 @@ const getDefaultGameDirectory = (isServer: boolean): string => {
 const DEFAULT_INSTALLATION_SETTINGS: DefaultSettingsData = {
     gameDir:    getDefaultGameDirectory(false),
     port:       '4242',
+    maxPlayers: 32,
     javaMemory: 8192,
     jvmArgs:    '-Xms8G -Xmx8G',
     javaPath8:  '',
@@ -43,6 +45,7 @@ const DEFAULT_INSTALLATION_SETTINGS: DefaultSettingsData = {
 const DEFAULT_SERVER_SETTINGS: DefaultSettingsData = {
     gameDir:    getDefaultGameDirectory(true),
     port:       '4242',
+    maxPlayers: 32,
     javaMemory: 8192,
     jvmArgs:    '-Xms8G -Xmx8G',
     javaPath8:  '',
@@ -203,9 +206,20 @@ const DefaultSettingsForm: React.FC<{ isServer: boolean }> = ({ isServer }) => {
             </SettingRow>
 
             {isServer && (
-                 <SettingRow title="Port" description="The default network port for new servers.">
-                    <input type="text" value={settings.port} onChange={e => update('port', e.target.value)} className="w-full bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
-                </SettingRow>
+                <>
+                    <SettingRow title="Port" description="The default network port for new servers.">
+                        <input type="text" value={settings.port} onChange={e => update('port', e.target.value)} className="w-full bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
+                    </SettingRow>
+                    <SettingRow title="Max Players" description="The default player cap for newly created servers.">
+                        <input
+                            type="number"
+                            min={0}
+                            value={settings.maxPlayers}
+                            onChange={e => update('maxPlayers', Math.max(0, Number(e.target.value) || 0))}
+                            className="w-full bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+                        />
+                    </SettingRow>
+                </>
             )}
 
             <SettingRow title="Java Memory Allocation" description="Set the default RAM allocated to new instances.">

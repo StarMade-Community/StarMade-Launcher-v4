@@ -64,10 +64,20 @@ export const IPC = {
   GAME_LOG: 'game:log',
   /** Renderer → Main (invoke): get log file path for a running game. */
   GAME_GET_LOG_PATH: 'game:get-log-path',
+  /** Renderer → Main (invoke): list categorized log files in an installation logs directory. */
+  GAME_LIST_LOG_FILES: 'game:list-log-files',
+  /** Renderer → Main (invoke): read the tail of a specific log file from an installation logs directory. */
+  GAME_READ_LOG_FILE: 'game:read-log-file',
   /** Renderer → Main (invoke): open log directory in file manager. */
   GAME_OPEN_LOG_LOCATION: 'game:open-log-location',
   /** Renderer → Main (invoke): get GraphicsInfo.txt content if it exists. */
   GAME_GET_GRAPHICS_INFO: 'game:get-graphics-info',
+  /** Renderer → Main (invoke): read a key from installation server.cfg. */
+  GAME_SERVER_CFG_GET: 'game:server-cfg-get',
+  /** Renderer → Main (invoke): list parsed key/value entries from installation server.cfg. */
+  GAME_SERVER_CFG_LIST: 'game:server-cfg-list',
+  /** Renderer → Main (invoke): set a key in installation server.cfg. */
+  GAME_SERVER_CFG_SET: 'game:server-cfg-set',
   /**
    * Renderer → Main (invoke): read the `launcher-session.json` file written by
    * the game into an installation directory.  Returns the parsed object or
