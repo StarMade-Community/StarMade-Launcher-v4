@@ -1,12 +1,17 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { ChevronRightIcon } from '../../common/icons';
 
 const AboutSection: React.FC = () => {
+    const [version, setVersion] = useState<string>('...');
+
+    useEffect(() => {
+        window.launcher.updater.getVersion().then(setVersion).catch(() => setVersion('unknown'));
+    }, []);
 
     const links = [
         { name: "Official Website", url: "https://www.star-made.org/" },
         { name: "Community Discord", url: "https://discord.gg/SXbkYpU" },
-        // { name: "Report an Issue", url: "https://github.com/dukedot" },
+        { name: "Report an Issue", url: "https://github.com/StarMade-Community/StarMade-Launcher-v4/issues" },
         { name: "Third-Party Licenses", url: "#" },
     ]
 
@@ -14,7 +19,7 @@ const AboutSection: React.FC = () => {
         <div>
             <div className="text-center mb-8">
                 <h1 className="font-display text-4xl font-bold text-white">StarMade Launcher</h1>
-                <p className="text-lg text-gray-400 mt-1">Version 4.0.0</p>
+                <p className="text-lg text-gray-400 mt-1">Version {version}</p>
             </div>
             
             <div className="bg-black/20 p-6 rounded-lg border border-white/10 max-w-lg mx-auto">
