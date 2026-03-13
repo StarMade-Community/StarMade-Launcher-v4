@@ -213,9 +213,32 @@ const LauncherSettings: React.FC = () => {
         }
     };
 
-    const handleImport = (installPath: string) => {
+    const handleImport = async (installPath: string) => {
         // Guard against duplicate imports (e.g. rapid double-click before re-render)
         if (existingPaths.has(installPath) || importedPaths.has(installPath)) return;
+
+        // Read user-configured default memory settings so they are applied to the imported item
+        let maxMemory: number | undefined;
+        let extraJvmArgs: string | undefined;
+
+        if (typeof window !== 'undefined' && window.launcher?.store) {
+            try {
+                const stored = await window.launcher.store.get('defaultInstallationSettings');
+                if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
+                    const raw = stored as Record<string, unknown>;
+                    if (typeof raw.javaMemory === 'number' && raw.javaMemory > 0) {
+                        maxMemory = raw.javaMemory;
+                    }
+                    if (typeof raw.jvmArgs === 'string' && raw.jvmArgs) {
+                        // Strip -Xms/-Xmx: those are applied via minMemory/maxMemory
+                        const extra = raw.jvmArgs.split(/\s+/).filter(a => !/^-Xm[sx]\d+[kKmMgGtT]?$/i.test(a)).join(' ').trim();
+                        if (extra) extraJvmArgs = extra;
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to load defaults for legacy import:', error);
+            }
+        }
 
         // Extract the last path segment as a display name (works on both / and \ separators)
         const folderName = installPath.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? 'legacy-install';
@@ -229,6 +252,8 @@ const LauncherSettings: React.FC = () => {
             path: installPath,
             lastPlayed: 'Never',
             installed: true,
+            ...(maxMemory !== undefined && { minMemory: maxMemory, maxMemory }),
+            ...(extraJvmArgs && { jvmArgs: extraJvmArgs }),
         };
         setImportedPaths(prev => {
             if (prev.has(installPath)) return prev;
