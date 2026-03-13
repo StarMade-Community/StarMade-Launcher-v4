@@ -3,6 +3,8 @@ import { PlusIcon } from '../../common/icons';
 import InstallationForm from '../../common/InstallationForm';
 import ItemCard from '../../common/ItemCard';
 import DeleteConfirmModal from '../../common/DeleteConfirmModal';
+import BackupConfirmModal from '../../common/BackupConfirmModal';
+import RestoreBackupModal from '../../common/RestoreBackupModal';
 import type { ManagedItem, InstallationsTab } from '../../../types';
 import PageContainer from '../../common/PageContainer';
 import { useData } from '../../../contexts/DataContext';
@@ -20,6 +22,18 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
     const [isNew, setIsNew] = useState(false);
     const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
     const [deleteError, setDeleteError] = useState<string | null>(null);
+
+    // Backup state: pending save data waiting on user's backup decision.
+    // `preChangeItem` is a snapshot of the installation *before* the edit,
+    // providing the path/id/name for backup creation.
+    const [backupPending, setBackupPending] = useState<{
+        savedData: ManagedItem;
+        fromVersion: string;
+        preChangeItem: ManagedItem;
+    } | null>(null);
+
+    // Restore state
+    const [restoreTarget, setRestoreTarget] = useState<ManagedItem | null>(null);
 
     const { openLaunchModal } = useApp();
     const { 
@@ -76,6 +90,14 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
     const handleSave = (savedData: ManagedItem) => {
         if (activeTab === 'installations') {
             const versionChanged = !isNew && activeItem !== null && savedData.version !== activeItem.version;
+            if (versionChanged && activeItem !== null) {
+                // Store a snapshot of the pre-change item so backup uses the
+                // correct path/id even if the user also renamed the installation.
+                // A shallow copy is sufficient: ManagedItem contains only
+                // primitive values and optional arrays (none of which are mutated).
+                setBackupPending({ savedData, fromVersion: activeItem.version, preChangeItem: { ...activeItem } });
+                return;
+            }
             const dataToSave = versionChanged ? { ...savedData, installed: false } : savedData;
             isNew ? addInstallation(dataToSave) : updateInstallation(dataToSave);
             if (versionChanged) {
@@ -86,6 +108,44 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
         }
         setView('list');
         setActiveItem(null);
+    };
+
+    /** Apply the pending version-change save after the user decided about backup. */
+    const applyVersionChange = (savedData: ManagedItem) => {
+        updateInstallation({ ...savedData, installed: false });
+        downloadVersion(savedData.id);
+        setView('list');
+        setActiveItem(null);
+        setBackupPending(null);
+    };
+
+    const handleBackupAndContinue = async () => {
+        if (!backupPending) return;
+        const { savedData, preChangeItem } = backupPending;
+
+        // Treat a missing launcher API as an error rather than silently skipping.
+        if (typeof window === 'undefined' || !window.launcher?.installation?.backup) {
+            throw new Error('Backup API is not available in this environment.');
+        }
+
+        const result = await window.launcher.installation.backup(
+            preChangeItem.path,
+            preChangeItem.id,
+            savedData.name,  // use the new name from savedData for the backup filename
+        );
+        if (!result.success) {
+            throw new Error(result.error ?? 'Backup failed');
+        }
+        applyVersionChange(savedData);
+    };
+
+    const handleSkipBackup = () => {
+        if (!backupPending) return;
+        applyVersionChange(backupPending.savedData);
+    };
+
+    const handleCancelBackup = () => {
+        setBackupPending(null);
     };
 
     const handleCancel = () => {
@@ -142,6 +202,18 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
     const handleDeleteCancel = () => {
         setDeleteTarget(null);
         setDeleteError(null);
+    };
+
+    const handleRestore = (item: ManagedItem) => {
+        setRestoreTarget(item);
+    };
+
+    const handleRestored = () => {
+        if (restoreTarget) {
+            // Mark the installation as installed after a successful restore.
+            updateInstallation({ ...restoreTarget, installed: true });
+        }
+        setRestoreTarget(null);
     };
     
     const handleTabChange = (tab: InstallationsTab) => {
@@ -225,6 +297,7 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
                                     ? (path) => window.launcher.shell!.openPath(path)
                                     : undefined
                             }
+                            onRestore={activeTab === 'installations' ? handleRestore : undefined}
                         />
                     ))}
                 </div>
@@ -242,6 +315,23 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
             error={deleteError}
             onConfirm={handleDeleteConfirm}
             onCancel={handleDeleteCancel}
+        />
+        <BackupConfirmModal
+            isOpen={backupPending !== null}
+            installationName={backupPending?.savedData.name ?? ''}
+            fromVersion={backupPending?.fromVersion ?? ''}
+            toVersion={backupPending?.savedData.version ?? ''}
+            onBackupAndContinue={handleBackupAndContinue}
+            onSkipBackup={handleSkipBackup}
+            onCancel={handleCancelBackup}
+        />
+        <RestoreBackupModal
+            isOpen={restoreTarget !== null}
+            installation={restoreTarget
+                ? { id: restoreTarget.id, name: restoreTarget.name, path: restoreTarget.path }
+                : null}
+            onClose={() => setRestoreTarget(null)}
+            onRestored={handleRestored}
         />
       </PageContainer>
     );
