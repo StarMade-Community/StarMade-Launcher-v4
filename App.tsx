@@ -30,6 +30,7 @@ const App: React.FC = () => {
     isLaunchModalOpen, 
     closeLaunchModal, 
     startLaunching,
+    startLaunchingAndTerminate,
     logViewerOpen,
     logViewerInstallation,
     closeLogViewer,
@@ -85,7 +86,7 @@ const App: React.FC = () => {
     <div className="bg-starmade-bg text-gray-200 font-sans h-screen w-screen flex flex-col antialiased">
       <LaunchConfirmModal
         isOpen={isLaunchModalOpen}
-        onConfirm={startLaunching}
+        onConfirm={startLaunchingAndTerminate}
         onLaunchAnyway={startLaunching}
         onCancel={closeLaunchModal}
       />

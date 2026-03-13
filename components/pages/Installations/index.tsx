@@ -72,7 +72,12 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
 
     const handleSave = (savedData: ManagedItem) => {
         if (activeTab === 'installations') {
-            isNew ? addInstallation(savedData) : updateInstallation(savedData);
+            const versionChanged = !isNew && activeItem !== null && savedData.version !== activeItem.version;
+            const dataToSave = versionChanged ? { ...savedData, installed: false } : savedData;
+            isNew ? addInstallation(dataToSave) : updateInstallation(dataToSave);
+            if (versionChanged) {
+                downloadVersion(savedData.id);
+            }
         } else {
             isNew ? addServer(savedData) : updateServer(savedData);
         }

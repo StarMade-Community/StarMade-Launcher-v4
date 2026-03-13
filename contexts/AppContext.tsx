@@ -22,14 +22,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setPageProps(props);
     };
 
-    const openLaunchModal = useCallback((installation?: ManagedItem, sessionArgs?: SessionLaunchArgs) => {
-        if (!isLaunching) {
-            setPendingLaunchInstallation(installation || null);
-            setPendingSessionArgs(sessionArgs || null);
-            setIsLaunchModalOpen(true);
-        }
-    }, [isLaunching]);
-
     const closeLaunchModal = useCallback(() => {
         setIsLaunchModalOpen(false);
         setLaunchError(null);
@@ -37,9 +29,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setPendingSessionArgs(null);
     }, []);
 
-    const startLaunching = async () => {
-        const installation = pendingLaunchInstallation;
-        
+    /**
+     * Core launch logic. Accepts installation and sessionArgs directly so it
+     * can be called both from the modal buttons (which read pending state) and
+     * from the direct-launch path (no modal).
+     *
+     * When `terminateRunning` is true, any currently-running game processes are
+     * stopped before the new instance is started.
+     */
+    const performLaunch = useCallback(async (
+        installation: ManagedItem | null,
+        sessionArgs: SessionLaunchArgs | null,
+        terminateRunning: boolean,
+    ) => {
         console.log("Launch sequence started.");
         setIsLaunchModalOpen(false);
         setIsLaunching(true);
@@ -59,6 +61,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             setLaunchError("Game launch API not available. Running in browser mode?");
             setIsLaunching(false);
             return;
+        }
+
+        // ── Terminate existing instances if requested ────────────────────────
+        if (terminateRunning && window.launcher?.game?.listRunning) {
+            try {
+                const running = await window.launcher.game.listRunning();
+                await Promise.all(running.map(p => window.launcher.game.stop(p.installationId)));
+            } catch (err) {
+                // Non-fatal — proceed with launch even if termination fails
+                console.warn('[AppContext] Failed to terminate running instances:', err);
+            }
         }
 
         // ── Pre-launch: ensure the required Java version is available ────────
@@ -104,9 +117,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 // registry auth token as a -auth <token> argument to the game.
                 activeAccountId: activeAccount?.id,
                 // Session-specific direct-connect args (from a pinned / last-played session).
-                uplink: pendingSessionArgs?.uplink,
-                uplinkPort: pendingSessionArgs?.uplinkPort,
-                modIds: pendingSessionArgs?.modIds,
+                uplink: sessionArgs?.uplink,
+                uplinkPort: sessionArgs?.uplinkPort,
+                modIds: sessionArgs?.modIds,
             });
 
             if (result.success) {
@@ -117,9 +130,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 // (installationId + serverAddress + serverPort + modIds) so that
                 // repeated launches of the same target update the existing record
                 // rather than creating a new one, preserving pin/unpin identity.
-                const serverAddress = pendingSessionArgs?.uplink ?? 'localhost';
-                const serverPort    = pendingSessionArgs?.uplinkPort ?? 4242;
-                const modIds        = pendingSessionArgs?.modIds;
+                const serverAddress = sessionArgs?.uplink ?? 'localhost';
+                const serverPort    = sessionArgs?.uplinkPort ?? 4242;
+                const modIds        = sessionArgs?.modIds;
                 const stableId = [
                     installation.id,
                     serverAddress,
@@ -132,7 +145,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                     installationName: installation.name,
                     installationPath: installation.path,
                     installationVersion: installation.version,
-                    sessionType: pendingSessionArgs?.uplink && pendingSessionArgs.uplink !== 'localhost'
+                    sessionType: sessionArgs?.uplink && sessionArgs.uplink !== 'localhost'
                         ? 'multiplayer'
                         : 'singleplayer',
                     serverAddress,
@@ -166,7 +179,55 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             setLaunchError(String(error));
             setIsLaunching(false);
         }
+    }, [activeAccount, recordSession]);
+
+    /** Called by the "Launch Anyway" modal button — launches without terminating. */
+    const startLaunching = async () => {
+        await performLaunch(pendingLaunchInstallation, pendingSessionArgs, false);
     };
+
+    /** Called by the "Terminate & Launch" modal button — stops running games first. */
+    const startLaunchingAndTerminate = async () => {
+        await performLaunch(pendingLaunchInstallation, pendingSessionArgs, true);
+    };
+
+    /**
+     * Open the launch flow for a given installation.
+     *
+     * If a StarMade game instance is already running the "Existing Instance
+     * Detected" confirmation modal is shown so the user can decide whether to
+     * terminate the old process or launch alongside it.
+     *
+     * If no game is currently running the launch proceeds immediately without
+     * showing the modal.
+     */
+    const openLaunchModal = useCallback(async (installation?: ManagedItem, sessionArgs?: SessionLaunchArgs) => {
+        if (isLaunching) return;
+
+        // Check whether any game instances are already running before deciding
+        // whether to show the confirmation modal.
+        let hasRunningInstances = false;
+        if (typeof window !== 'undefined' && window.launcher?.game?.listRunning) {
+            try {
+                const running = await window.launcher.game.listRunning();
+                hasRunningInstances = running.length > 0;
+            } catch {
+                // If detection fails, assume no instances are running to avoid
+                // false-positive warnings.
+                hasRunningInstances = false;
+            }
+        }
+
+        if (hasRunningInstances) {
+            // Existing instance detected — show the confirmation modal.
+            setPendingLaunchInstallation(installation || null);
+            setPendingSessionArgs(sessionArgs || null);
+            setIsLaunchModalOpen(true);
+        } else {
+            // No running instances — launch directly without the modal.
+            await performLaunch(installation || null, sessionArgs || null, false);
+        }
+    }, [isLaunching, performLaunch]);
     
     const completeLaunching = () => {
         console.log("Launch sequence complete.");
@@ -214,6 +275,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         openLaunchModal,
         closeLaunchModal,
         startLaunching,
+        startLaunchingAndTerminate,
         completeLaunching,
         openLogViewer,
         closeLogViewer,
