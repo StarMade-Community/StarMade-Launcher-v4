@@ -108,6 +108,8 @@ export const IPC = {
   APP_GET_USER_DATA: 'app:get-user-data',
   /** Renderer → Main (invoke): get total system RAM in MB. */
   APP_GET_SYSTEM_MEMORY: 'app:get-system-memory',
+  /** Renderer → Main (invoke): get server panel schema JSON used by config editors. */
+  APP_GET_SERVER_PANEL_SCHEMA: 'app:get-server-panel-schema',
 
   // ─── Installation file management ───────────────────────────────────────────
 

@@ -10,16 +10,29 @@ interface ServerPanelProps {
   serverName?: string;
 }
 
-type ServerPanelTab = 'control' | 'logs' | 'configuration' | 'files' | 'database';
+type ServerPanelTab = 'control' | 'actions' | 'logs' | 'configuration' | 'files' | 'database';
 const CONFIG_EDITOR_TABS = [
   { id: 'server-cfg', label: 'server.cfg' },
   { id: 'game-config-xml', label: 'GameConfig.xml' },
+  { id: 'faction-config-xml', label: 'FactionConfig.xml' },
 ] as const;
 
 type ConfigEditorTab = (typeof CONFIG_EDITOR_TABS)[number]['id'];
 type LogFilter = 'errors' | 'warnings' | 'info' | 'debug';
 type DashboardWidgetId = 'status' | 'serverInfo' | 'connection' | 'players' | 'controls';
 type ServerActionId = 'start' | 'stop' | 'restart' | 'update';
+const DASHBOARD_CONFIG_CONTROL_KEYS = [
+  'MAX_CLIENTS',
+  'SERVER_LISTEN_IP',
+  'ANNOUNCE_SERVER_TO_SERVERLIST',
+  'USE_STARMADE_AUTHENTICATION',
+  'REQUIRE_STARMADE_AUTHENTICATION',
+  'USE_WHITELIST',
+  'SERVER_LIST_NAME',
+  'SERVER_LIST_DESCRIPTION',
+  'HOST_NAME_TO_ANNOUNCE_TO_SERVER_LIST',
+] as const;
+type DashboardConfigControlKey = (typeof DASHBOARD_CONFIG_CONTROL_KEYS)[number];
 
 interface LogEntry {
   timestamp: string;
@@ -62,6 +75,7 @@ interface DashboardLayout {
   groups: DashboardGroup[];
   hiddenWidgetIds: DashboardWidgetId[];
   quickActionIds: ServerActionId[];
+  quickConfigKeys: DashboardConfigControlKey[];
 }
 
 interface DraggedWidget {
@@ -96,6 +110,7 @@ const ALL_WIDGETS: Array<{ id: DashboardWidgetId; label: string }> = [
 
 const tabItems: { id: ServerPanelTab; label: string }[] = [
   { id: 'control', label: 'Dashboard' },
+  { id: 'actions', label: 'Actions' },
   { id: 'logs', label: 'Logs' },
   { id: 'configuration', label: 'Configuration' },
   { id: 'files', label: 'Files' },
@@ -111,6 +126,7 @@ const createDefaultDashboardLayout = (): DashboardLayout => ({
   ],
   hiddenWidgetIds: [],
   quickActionIds: ['start', 'stop', 'restart', 'update'],
+  quickConfigKeys: ['MAX_CLIENTS', 'SERVER_LISTEN_IP', 'ANNOUNCE_SERVER_TO_SERVERLIST'],
 });
 
 const isServerActionId = (value: unknown): value is ServerActionId => (
@@ -118,6 +134,10 @@ const isServerActionId = (value: unknown): value is ServerActionId => (
   value === 'stop' ||
   value === 'restart' ||
   value === 'update'
+);
+
+const isDashboardConfigControlKey = (value: unknown): value is DashboardConfigControlKey => (
+  typeof value === 'string' && DASHBOARD_CONFIG_CONTROL_KEYS.includes(value as DashboardConfigControlKey)
 );
 
 const isDashboardWidgetId = (value: unknown): value is DashboardWidgetId => (
@@ -137,13 +157,14 @@ const cloneLayout = (layout: DashboardLayout): DashboardLayout => ({
   })),
   hiddenWidgetIds: [...layout.hiddenWidgetIds],
   quickActionIds: [...layout.quickActionIds],
+  quickConfigKeys: [...layout.quickConfigKeys],
 });
 
 const normalizeLayout = (raw: unknown): DashboardLayout => {
   const fallback = createDefaultDashboardLayout();
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return fallback;
 
-  const root = raw as { groups?: unknown; hiddenWidgetIds?: unknown; quickActionIds?: unknown };
+  const root = raw as { groups?: unknown; hiddenWidgetIds?: unknown; quickActionIds?: unknown; quickConfigKeys?: unknown };
   const seen = new Set<DashboardWidgetId>();
   const groups: DashboardGroup[] = [];
 
@@ -205,10 +226,20 @@ const normalizeLayout = (raw: unknown): DashboardLayout => {
     }
   }
 
+  const quickConfigKeys: DashboardConfigControlKey[] = [];
+  if (Array.isArray(root.quickConfigKeys)) {
+    for (const configKey of root.quickConfigKeys) {
+      if (isDashboardConfigControlKey(configKey) && !quickConfigKeys.includes(configKey)) {
+        quickConfigKeys.push(configKey);
+      }
+    }
+  }
+
   return {
     groups,
     hiddenWidgetIds,
     quickActionIds: quickActionIds.length > 0 ? quickActionIds : fallback.quickActionIds,
+    quickConfigKeys,
   };
 };
 
@@ -285,6 +316,15 @@ const parseCfgBoolean = (raw: string | null, fallback: boolean): boolean => {
 type ServerConfigFieldType = 'string' | 'number' | 'boolean';
 type ServerConfigCategory = 'networking' | 'security' | 'performance' | 'advanced';
 
+interface ConfigSchemaValidation {
+  integer?: boolean;
+  regex?: string;
+  message?: string;
+  allowedValues?: string[];
+  minLength?: number;
+  maxLength?: number;
+}
+
 interface ServerConfigField {
   key: string;
   label: string;
@@ -295,6 +335,7 @@ interface ServerConfigField {
   min?: number;
   max?: number;
   guidance?: string;
+  validation?: ConfigSchemaValidation;
 }
 
 interface ServerConfigEntry {
@@ -307,6 +348,7 @@ type ConfigFieldValidation = import('../../common/ConfigPanel').ConfigFieldValid
 
 type GameConfigFieldType = 'string' | 'number' | 'boolean';
 type GameConfigCategory = 'economy' | 'environment' | 'limits' | 'other';
+type FactionConfigCategory = 'activity' | 'system-bonus' | 'points' | 'other';
 
 interface GameConfigFieldMeta {
   label: string;
@@ -316,6 +358,7 @@ interface GameConfigFieldMeta {
   min?: number;
   max?: number;
   guidance?: string;
+  validation?: ConfigSchemaValidation;
 }
 
 interface GameConfigField {
@@ -328,6 +371,31 @@ interface GameConfigField {
   min?: number;
   max?: number;
   guidance?: string;
+  validation?: ConfigSchemaValidation;
+}
+
+interface FactionConfigFieldMeta {
+  label: string;
+  description: string;
+  category: FactionConfigCategory;
+  type?: GameConfigFieldType;
+  min?: number;
+  max?: number;
+  guidance?: string;
+  validation?: ConfigSchemaValidation;
+}
+
+interface FactionConfigField {
+  path: string;
+  label: string;
+  description: string;
+  category: FactionConfigCategory;
+  type: GameConfigFieldType;
+  defaultValue: string;
+  min?: number;
+  max?: number;
+  guidance?: string;
+  validation?: ConfigSchemaValidation;
 }
 
 interface GameConfigListColumn {
@@ -350,6 +418,51 @@ interface GameConfigListSection {
   rows: GameConfigListRow[];
 }
 
+interface GameConfigCommentToggleEntry {
+  id: string;
+  label: string;
+  description: string;
+  path: string;
+  category: GameConfigCategory;
+  snippet: string;
+}
+
+interface GameConfigCategoryRule {
+  category: GameConfigCategory;
+  startsWith?: string;
+  includes?: string;
+}
+
+interface FactionConfigCategoryRule {
+  category: FactionConfigCategory;
+  startsWith?: string;
+  includes?: string;
+}
+
+interface ServerPanelSchema {
+  version: number;
+  serverConfig?: {
+    categoryLabels?: Record<string, string>;
+    categoryOrder?: string[];
+    fields?: ServerConfigField[];
+  };
+  gameConfig?: {
+    categoryLabels?: Record<string, string>;
+    categoryOrder?: string[];
+    fieldMeta?: Record<string, GameConfigFieldMeta>;
+    commentToggleEntries?: GameConfigCommentToggleEntry[];
+    hiddenPathPrefixes?: string[];
+    categoryRules?: GameConfigCategoryRule[];
+  };
+  factionConfig?: {
+    categoryLabels?: Record<string, string>;
+    categoryOrder?: string[];
+    fieldMeta?: Record<string, FactionConfigFieldMeta>;
+    hiddenPathPrefixes?: string[];
+    categoryRules?: FactionConfigCategoryRule[];
+  };
+}
+
 const GAME_CONFIG_CATEGORY_LABELS: Record<GameConfigCategory, string> = {
   economy: 'Economy',
   environment: 'Environment',
@@ -359,18 +472,40 @@ const GAME_CONFIG_CATEGORY_LABELS: Record<GameConfigCategory, string> = {
 
 const GAME_CONFIG_CATEGORY_ORDER: GameConfigCategory[] = ['economy', 'environment', 'limits', 'other'];
 
-const DASHBOARD_SERVER_CFG_QUICK_KEYS = [
-  'MAX_CLIENTS',
-  'SERVER_LISTEN_IP',
-  'ANNOUNCE_SERVER_TO_SERVERLIST',
-  'USE_WHITELIST',
-];
+const FACTION_CONFIG_CATEGORY_LABELS: Record<FactionConfigCategory, string> = {
+  activity: 'Activity',
+  'system-bonus': 'System Bonus',
+  points: 'Faction Points',
+  other: 'Other',
+};
 
-const DASHBOARD_GAME_CONFIG_QUICK_PATHS = [
-  'GameConfig/StartingGear/Credits',
-  'GameConfig/SunHeatDamage/SunDamageMin',
-  'GameConfig/SunHeatDamage/SunDamageMax',
-  'GameConfig/SunHeatDamage/SunDamageDelayInSecs',
+const FACTION_CONFIG_CATEGORY_ORDER: FactionConfigCategory[] = ['activity', 'system-bonus', 'points', 'other'];
+
+const FACTION_CONFIG_FIELD_META: Record<string, FactionConfigFieldMeta> = {
+  'Faction/FactionActivity/BasicValues/SetInactiveAfterHours': {
+    label: 'Inactive Timeout (Hours)',
+    description: 'Time after which factions become inactive when offline.',
+    category: 'activity',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Inactive timeout must be a whole number.' },
+  },
+  'Faction/FactionActivity/BasicValues/SetActiveAfterOnlineForMin': {
+    label: 'Reactivate After Minutes Online',
+    description: 'Minutes online needed to set a faction active again.',
+    category: 'activity',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Reactivate time must be a whole number.' },
+  },
+};
+
+const FACTION_CONFIG_HIDDEN_PATH_PREFIXES: string[] = [];
+
+const FACTION_CONFIG_CATEGORY_RULES: FactionConfigCategoryRule[] = [
+  { category: 'activity', includes: 'activity' },
+  { category: 'system-bonus', includes: 'ownerbonus' },
+  { category: 'points', includes: 'factionpoint' },
 ];
 
 const GAME_CONFIG_FIELD_META: Record<string, GameConfigFieldMeta> = {
@@ -380,6 +515,7 @@ const GAME_CONFIG_FIELD_META: Record<string, GameConfigFieldMeta> = {
     category: 'economy',
     type: 'number',
     min: 0,
+    validation: { integer: true, message: 'Starting credits must be a whole number.' },
   },
   'GameConfig/SunHeatDamage/DamagePerBlock': {
     label: 'Sun Heat Damage Per Block',
@@ -423,7 +559,191 @@ const GAME_CONFIG_FIELD_META: Record<string, GameConfigFieldMeta> = {
     type: 'number',
     min: 0,
   },
+  'GameConfig/MaxDimensionShip/X': {
+    label: 'Max Ship X',
+    description: 'Maximum ship dimension on the X axis.',
+    category: 'limits',
+    type: 'number',
+    validation: { integer: true, message: 'Ship dimensions must be whole numbers.' },
+  },
+  'GameConfig/MaxDimensionShip/Y': {
+    label: 'Max Ship Y',
+    description: 'Maximum ship dimension on the Y axis.',
+    category: 'limits',
+    type: 'number',
+    validation: { integer: true, message: 'Ship dimensions must be whole numbers.' },
+  },
+  'GameConfig/MaxDimensionShip/Z': {
+    label: 'Max Ship Z',
+    description: 'Maximum ship dimension on the Z axis.',
+    category: 'limits',
+    type: 'number',
+    validation: { integer: true, message: 'Ship dimensions must be whole numbers.' },
+  },
+  'GameConfig/MaxDimensionStation/X': {
+    label: 'Max Station X',
+    description: 'Maximum station dimension on the X axis.',
+    category: 'limits',
+    type: 'number',
+    validation: { integer: true, message: 'Station dimensions must be whole numbers.' },
+  },
+  'GameConfig/MaxDimensionStation/Y': {
+    label: 'Max Station Y',
+    description: 'Maximum station dimension on the Y axis.',
+    category: 'limits',
+    type: 'number',
+    validation: { integer: true, message: 'Station dimensions must be whole numbers.' },
+  },
+  'GameConfig/MaxDimensionStation/Z': {
+    label: 'Max Station Z',
+    description: 'Maximum station dimension on the Z axis.',
+    category: 'limits',
+    type: 'number',
+    validation: { integer: true, message: 'Station dimensions must be whole numbers.' },
+  },
+  'GameConfig/GroupLimits/Controller[]/ID': {
+    label: 'Controller ID',
+    description: 'Controller block ID used for group/computer limits.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Controller IDs must be whole numbers.' },
+  },
+  'GameConfig/GroupLimits/Controller[]/GroupMax': {
+    label: 'Group Max',
+    description: 'Maximum simultaneous groups for this controller.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Group max must be a whole number.' },
+  },
+  'GameConfig/GroupLimits/Controller[]/ComputerMax': {
+    label: 'Computer Max',
+    description: 'Maximum number of computers allowed for this controller.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Computer max must be a whole number.' },
+  },
+  'GameConfig/ShipLimits/Mass': {
+    label: 'Ship Mass Limit',
+    description: 'Maximum ship mass allowed.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/ShipLimits/Blocks': {
+    label: 'Ship Block Limit',
+    description: 'Maximum ship block count allowed.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Block limits must be whole numbers.' },
+  },
+  'GameConfig/PlanetLimits/Mass': {
+    label: 'Planet Mass Limit',
+    description: 'Maximum planet mass allowed.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/PlanetLimits/Blocks': {
+    label: 'Planet Block Limit',
+    description: 'Maximum planet block count allowed.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Block limits must be whole numbers.' },
+  },
+  'GameConfig/StationLimits/Mass': {
+    label: 'Station Mass Limit',
+    description: 'Maximum station mass allowed.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+  },
+  'GameConfig/StationLimits/Blocks': {
+    label: 'Station Block Limit',
+    description: 'Maximum station block count allowed.',
+    category: 'limits',
+    type: 'number',
+    min: 0,
+    validation: { integer: true, message: 'Block limits must be whole numbers.' },
+  },
 };
+
+const GAME_CONFIG_COMMENT_TOGGLE_DEFAULTS: GameConfigCommentToggleEntry[] = [
+  {
+    id: 'group-limits',
+    label: 'Enable Group Limits',
+    description: 'Adds GroupLimits controller caps to GameConfig.xml.',
+    path: 'GameConfig/GroupLimits',
+    category: 'limits',
+    snippet: '<GroupLimits>\n    <Controller>\n      <ID>4</ID>\n      <GroupMax>30</GroupMax>\n    </Controller>\n    <Controller>\n      <ID>544</ID>\n      <ComputerMax>2</ComputerMax>\n    </Controller>\n  </GroupLimits>',
+  },
+  {
+    id: 'max-dimension-ship',
+    label: 'Enable MaxDimensionShip',
+    description: 'Adds MaxDimensionShip size limits.',
+    path: 'GameConfig/MaxDimensionShip',
+    category: 'limits',
+    snippet: '<MaxDimensionShip>\n    <X>100</X>\n    <Y>400</Y>\n    <Z>-1</Z>\n  </MaxDimensionShip>',
+  },
+  {
+    id: 'max-dimension-station',
+    label: 'Enable MaxDimensionStation',
+    description: 'Adds MaxDimensionStation size limits.',
+    path: 'GameConfig/MaxDimensionStation',
+    category: 'limits',
+    snippet: '<MaxDimensionStation>\n    <X>600</X>\n    <Y>800</Y>\n    <Z>1000</Z>\n  </MaxDimensionStation>',
+  },
+  {
+    id: 'ship-limits',
+    label: 'Enable ShipLimits',
+    description: 'Adds ship mass/block limits.',
+    path: 'GameConfig/ShipLimits',
+    category: 'limits',
+    snippet: '<ShipLimits>\n    <Mass>1000.0</Mass>\n    <Blocks>100</Blocks>\n  </ShipLimits>',
+  },
+  {
+    id: 'planet-limits',
+    label: 'Enable PlanetLimits',
+    description: 'Adds planet mass/block limits.',
+    path: 'GameConfig/PlanetLimits',
+    category: 'limits',
+    snippet: '<PlanetLimits>\n    <Mass>50000.0</Mass>\n    <Blocks>2000000</Blocks>\n  </PlanetLimits>',
+  },
+  {
+    id: 'station-limits',
+    label: 'Enable StationLimits',
+    description: 'Adds station mass/block limits.',
+    path: 'GameConfig/StationLimits',
+    category: 'limits',
+    snippet: '<StationLimits>\n    <Mass>5000.0</Mass>\n    <Blocks>500</Blocks>\n  </StationLimits>',
+  },
+];
+
+const GAME_CONFIG_HIDDEN_PATH_PREFIXES = [
+  'GameConfig/StartingGear/Block',
+  'GameConfig/StartingGear/Tool',
+  'GameConfig/StartingGear/Helmet',
+  'GameConfig/StartingGear/Flashlight',
+  'GameConfig/StartingGear/Logbook',
+  'GameConfig/StartingGear/Blueprint',
+  'GameConfig/StartingGear/BuildInhibiter',
+];
+
+const GAME_CONFIG_CATEGORY_RULES: GameConfigCategoryRule[] = [
+  { category: 'economy', startsWith: 'GameConfig/StartingGear' },
+  { category: 'environment', includes: 'sun' },
+  { category: 'environment', includes: 'heat' },
+  { category: 'limits', includes: 'limit' },
+  { category: 'limits', includes: 'maxdimension' },
+];
+
+const isServerPanelSchema = (value: unknown): value is ServerPanelSchema => (
+  !!value && typeof value === 'object' && !Array.isArray(value)
+);
 
 const parseGameConfigFieldType = (rawValue: string): GameConfigFieldType => {
   const normalized = rawValue.trim().toLowerCase();
@@ -441,22 +761,84 @@ const humanizeGameConfigSegment = (segment: string): string => segment
   .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
   .join(' ');
 
-const shouldHideGameConfigPath = (path: string): boolean => (
-  path.includes('[')
-  || path.startsWith('GameConfig/StartingGear/Block')
-  || path.startsWith('GameConfig/StartingGear/Tool')
-  || path.startsWith('GameConfig/StartingGear/Helmet')
-  || path.startsWith('GameConfig/StartingGear/Flashlight')
-  || path.startsWith('GameConfig/StartingGear/Logbook')
-  || path.startsWith('GameConfig/StartingGear/Blueprint')
-  || path.startsWith('GameConfig/StartingGear/BuildInhibiter')
+const shouldHideGameConfigPath = (path: string, hiddenPrefixes: string[]): boolean => (
+  hiddenPrefixes.some((prefix) => path.startsWith(prefix))
 );
 
-const inferGameConfigCategory = (path: string): GameConfigCategory => {
-  const secondSegment = path.split('/')[1]?.toLowerCase() ?? '';
-  if (secondSegment === 'startinggear') return 'economy';
-  if (secondSegment.includes('sun') || secondSegment.includes('heat')) return 'environment';
-  if (secondSegment.includes('limit') || secondSegment.includes('maxdimension')) return 'limits';
+const getGameConfigMetaForPath = (
+  fieldMetaByPath: Record<string, GameConfigFieldMeta>,
+  path: string,
+): GameConfigFieldMeta | undefined => {
+  const direct = fieldMetaByPath[path];
+  if (direct) return direct;
+  const wildcardPath = path.replace(/\[\d+\]/g, '[]');
+  return fieldMetaByPath[wildcardPath];
+};
+
+const getFactionConfigMetaForPath = (
+  fieldMetaByPath: Record<string, FactionConfigFieldMeta>,
+  path: string,
+): FactionConfigFieldMeta | undefined => {
+  const direct = fieldMetaByPath[path];
+  if (direct) return direct;
+  const wildcardPath = path.replace(/\[\d+\]/g, '[]');
+  return fieldMetaByPath[wildcardPath];
+};
+
+const runSchemaValidation = (
+  validation: ConfigSchemaValidation | undefined,
+  rawValue: string,
+  fieldType: ServerConfigFieldType | GameConfigFieldType,
+): ConfigFieldValidation | null => {
+  if (!validation) return null;
+
+  const trimmed = rawValue.trim();
+
+  if (fieldType === 'number' && validation.integer && !/^-?\d+$/.test(trimmed)) {
+    return { error: validation.message ?? 'Enter a whole number.', warning: null };
+  }
+
+  if (validation.minLength !== undefined && trimmed.length < validation.minLength) {
+    return { error: validation.message ?? `Value must be at least ${validation.minLength} characters.`, warning: null };
+  }
+
+  if (validation.maxLength !== undefined && trimmed.length > validation.maxLength) {
+    return { error: validation.message ?? `Value must be at most ${validation.maxLength} characters.`, warning: null };
+  }
+
+  if (validation.allowedValues && validation.allowedValues.length > 0 && !validation.allowedValues.includes(trimmed)) {
+    return { error: validation.message ?? `Value must be one of: ${validation.allowedValues.join(', ')}.`, warning: null };
+  }
+
+  if (validation.regex) {
+    try {
+      const regex = new RegExp(validation.regex);
+      if (!regex.test(trimmed)) {
+        return { error: validation.message ?? 'Value does not match the expected format.', warning: null };
+      }
+    } catch {
+      // Ignore malformed schema regex values to keep editing functional.
+    }
+  }
+
+  return null;
+};
+
+const inferGameConfigCategory = (path: string, rules: GameConfigCategoryRule[]): GameConfigCategory => {
+  const lowerPath = path.toLowerCase();
+  for (const rule of rules) {
+    if (rule.startsWith && path.startsWith(rule.startsWith)) return rule.category;
+    if (rule.includes && lowerPath.includes(rule.includes.toLowerCase())) return rule.category;
+  }
+  return 'other';
+};
+
+const inferFactionConfigCategory = (path: string, rules: FactionConfigCategoryRule[]): FactionConfigCategory => {
+  const lowerPath = path.toLowerCase();
+  for (const rule of rules) {
+    if (rule.startsWith && path.startsWith(rule.startsWith)) return rule.category;
+    if (rule.includes && lowerPath.includes(rule.includes.toLowerCase())) return rule.category;
+  }
   return 'other';
 };
 
@@ -492,13 +874,74 @@ const findElementByGameConfigPath = (doc: Document, path: string): Element | nul
   return current;
 };
 
+const getGameConfigCommentToggleStates = (
+  xmlContent: string,
+  entries: GameConfigCommentToggleEntry[],
+): Record<string, boolean> => {
+  const states: Record<string, boolean> = {};
+  try {
+    const doc = parseGameConfigXmlDocument(xmlContent);
+    for (const entry of entries) {
+      states[entry.id] = !!findElementByGameConfigPath(doc, entry.path);
+    }
+  } catch {
+    for (const entry of entries) {
+      states[entry.id] = false;
+    }
+  }
+  return states;
+};
+
+const createElementFromSnippet = (doc: Document, snippet: string, expectedTag: string): Element | null => {
+  const parser = new DOMParser();
+  const wrapped = `<root>${snippet}</root>`;
+  const parsed = parser.parseFromString(wrapped, 'application/xml');
+  const parseError = parsed.querySelector('parsererror');
+  if (parseError) return null;
+
+  const element = Array.from(parsed.documentElement.children).find((child) => child.tagName === expectedTag);
+  if (!element) return null;
+  return doc.importNode(element, true);
+};
+
+const uncommentGameConfigEntryFromComments = (
+  doc: Document,
+  root: Element,
+  tagName: string,
+): boolean => {
+  for (const node of Array.from(root.childNodes)) {
+    if (node.nodeType !== Node.COMMENT_NODE) continue;
+    const commentText = node.nodeValue ?? '';
+    if (!commentText.includes(`<${tagName}`) || !commentText.includes(`</${tagName}>`)) continue;
+
+    const parser = new DOMParser();
+    const wrapped = `<root>${commentText}</root>`;
+    const parsed = parser.parseFromString(wrapped, 'application/xml');
+    const parseError = parsed.querySelector('parsererror');
+    if (parseError) continue;
+
+    const candidate = Array.from(parsed.documentElement.children).find((child) => child.tagName === tagName);
+    if (!candidate) continue;
+
+    const imported = doc.importNode(candidate, true);
+    root.replaceChild(imported, node);
+    return true;
+  }
+
+  return false;
+};
+
 const hasOnlyLeafChildren = (element: Element): boolean => {
   const children = Array.from(element.children);
   if (children.length === 0) return false;
   return children.every((child) => child.children.length === 0);
 };
 
-const extractGameConfigListSections = (xmlContent: string): GameConfigListSection[] => {
+const extractGameConfigListSections = (
+  xmlContent: string,
+  categoryOrder: GameConfigCategory[],
+  categoryRules: GameConfigCategoryRule[],
+): GameConfigListSection[] => {
   const doc = parseGameConfigXmlDocument(xmlContent);
   const root = doc.documentElement;
   if (!root) return [];
@@ -563,7 +1006,7 @@ const extractGameConfigListSections = (xmlContent: string): GameConfigListSectio
           key: sectionKey,
           label: humanizeGameConfigSegment(tagName),
           description: `Repeated ${humanizeGameConfigSegment(tagName)} entries at ${parentPath}.`,
-          category: inferGameConfigCategory(sectionKey),
+          category: inferGameConfigCategory(sectionKey, categoryRules),
           columns,
           rows,
         });
@@ -588,13 +1031,19 @@ const extractGameConfigListSections = (xmlContent: string): GameConfigListSectio
   walk(root, root.tagName);
 
   return Array.from(sections.values()).sort((a, b) => {
-    const categoryDiff = GAME_CONFIG_CATEGORY_ORDER.indexOf(a.category) - GAME_CONFIG_CATEGORY_ORDER.indexOf(b.category);
+    const categoryDiff = categoryOrder.indexOf(a.category) - categoryOrder.indexOf(b.category);
     if (categoryDiff !== 0) return categoryDiff;
     return a.label.localeCompare(b.label);
   });
 };
 
-const extractGameConfigFields = (xmlContent: string): { fields: GameConfigField[]; values: Record<string, string> } => {
+const extractGameConfigFields = (
+  xmlContent: string,
+  fieldMetaByPath: Record<string, GameConfigFieldMeta>,
+  categoryOrder: GameConfigCategory[],
+  hiddenPrefixes: string[],
+  categoryRules: GameConfigCategoryRule[],
+): { fields: GameConfigField[]; values: Record<string, string> } => {
   const doc = parseGameConfigXmlDocument(xmlContent);
   const root = doc.documentElement;
   if (!root) return { fields: [], values: {} };
@@ -609,9 +1058,9 @@ const extractGameConfigFields = (xmlContent: string): { fields: GameConfigField[
       const rawValue = (element.textContent ?? '').trim();
       values[path] = rawValue;
 
-      if (shouldHideGameConfigPath(path)) return;
+      if (shouldHideGameConfigPath(path, hiddenPrefixes)) return;
 
-      const explicitMeta = GAME_CONFIG_FIELD_META[path];
+      const explicitMeta = getGameConfigMetaForPath(fieldMetaByPath, path);
       const inferredType = parseGameConfigFieldType(rawValue);
       const type = explicitMeta?.type ?? inferredType;
 
@@ -619,12 +1068,13 @@ const extractGameConfigFields = (xmlContent: string): { fields: GameConfigField[
         path,
         label: explicitMeta?.label ?? humanizeGameConfigSegment(path.split('/').pop() ?? path),
         description: explicitMeta?.description ?? `GameConfig path: ${path}`,
-        category: explicitMeta?.category ?? inferGameConfigCategory(path),
+        category: explicitMeta?.category ?? inferGameConfigCategory(path, categoryRules),
         type,
         defaultValue: rawValue,
         min: explicitMeta?.min,
         max: explicitMeta?.max,
         guidance: explicitMeta?.guidance,
+        validation: explicitMeta?.validation,
       });
       return;
     }
@@ -647,7 +1097,75 @@ const extractGameConfigFields = (xmlContent: string): { fields: GameConfigField[
   walk(root, root.tagName);
 
   fields.sort((a, b) => {
-    const categoryDiff = GAME_CONFIG_CATEGORY_ORDER.indexOf(a.category) - GAME_CONFIG_CATEGORY_ORDER.indexOf(b.category);
+    const categoryDiff = categoryOrder.indexOf(a.category) - categoryOrder.indexOf(b.category);
+    if (categoryDiff !== 0) return categoryDiff;
+    return a.label.localeCompare(b.label);
+  });
+
+  return { fields, values };
+};
+
+const extractFactionConfigFields = (
+  xmlContent: string,
+  fieldMetaByPath: Record<string, FactionConfigFieldMeta>,
+  categoryOrder: FactionConfigCategory[],
+  hiddenPrefixes: string[],
+  categoryRules: FactionConfigCategoryRule[],
+): { fields: FactionConfigField[]; values: Record<string, string> } => {
+  const doc = parseGameConfigXmlDocument(xmlContent);
+  const root = doc.documentElement;
+  if (!root) return { fields: [], values: {} };
+
+  const values: Record<string, string> = {};
+  const fields: FactionConfigField[] = [];
+
+  const walk = (element: Element, parentPath: string) => {
+    const childElements = Array.from(element.children);
+    if (childElements.length === 0) {
+      const path = parentPath;
+      const rawValue = (element.textContent ?? '').trim();
+      values[path] = rawValue;
+
+      if (shouldHideGameConfigPath(path, hiddenPrefixes)) return;
+
+      const explicitMeta = getFactionConfigMetaForPath(fieldMetaByPath, path);
+      const inferredType = parseGameConfigFieldType(rawValue);
+      const type = explicitMeta?.type ?? inferredType;
+
+      fields.push({
+        path,
+        label: explicitMeta?.label ?? humanizeGameConfigSegment(path.split('/').pop() ?? path),
+        description: explicitMeta?.description ?? `FactionConfig path: ${path}`,
+        category: explicitMeta?.category ?? inferFactionConfigCategory(path, categoryRules),
+        type,
+        defaultValue: rawValue,
+        min: explicitMeta?.min,
+        max: explicitMeta?.max,
+        guidance: explicitMeta?.guidance,
+        validation: explicitMeta?.validation,
+      });
+      return;
+    }
+
+    const siblingCounts = childElements.reduce<Record<string, number>>((acc, child) => {
+      acc[child.tagName] = (acc[child.tagName] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    const siblingSeen: Record<string, number> = {};
+    for (const child of childElements) {
+      siblingSeen[child.tagName] = (siblingSeen[child.tagName] ?? 0) + 1;
+      const index = siblingSeen[child.tagName];
+      const includeIndex = (siblingCounts[child.tagName] ?? 0) > 1;
+      const segment = includeIndex ? `${child.tagName}[${index}]` : child.tagName;
+      walk(child, `${parentPath}/${segment}`);
+    }
+  };
+
+  walk(root, root.tagName);
+
+  fields.sort((a, b) => {
+    const categoryDiff = categoryOrder.indexOf(a.category) - categoryOrder.indexOf(b.category);
     if (categoryDiff !== 0) return categoryDiff;
     return a.label.localeCompare(b.label);
   });
@@ -684,6 +1202,43 @@ const getGameConfigFieldValidation = (field: GameConfigField, rawValue: string):
     }
   }
 
+  const schemaValidation = runSchemaValidation(field.validation, trimmed, field.type);
+  if (schemaValidation) {
+    return schemaValidation;
+  }
+
+  if (field.type === 'string' && !trimmed) {
+    return { error: null, warning: 'Empty value may be rejected by the game parser.' };
+  }
+
+  return { error: null, warning: null };
+};
+
+const getFactionConfigFieldValidation = (field: FactionConfigField, rawValue: string): ConfigFieldValidation => {
+  const trimmed = rawValue.trim();
+
+  if (field.type === 'number') {
+    if (!trimmed) {
+      return { error: 'A numeric value is required.', warning: null };
+    }
+
+    const parsed = Number.parseFloat(trimmed);
+    if (!Number.isFinite(parsed)) {
+      return { error: 'Enter a valid number.', warning: null };
+    }
+
+    if (field.min !== undefined && parsed < field.min) {
+      return { error: null, warning: `Value is below minimum and will be clamped to ${field.min}.` };
+    }
+
+    if (field.max !== undefined && parsed > field.max) {
+      return { error: null, warning: `Value is above maximum and will be clamped to ${field.max}.` };
+    }
+  }
+
+  const schemaValidation = runSchemaValidation(field.validation, trimmed, field.type);
+  if (schemaValidation) return schemaValidation;
+
   if (field.type === 'string' && !trimmed) {
     return { error: null, warning: 'Empty value may be rejected by the game parser.' };
   }
@@ -709,6 +1264,7 @@ const SERVER_CONFIG_FIELDS: ServerConfigField[] = [
     type: 'number',
     defaultValue: '32',
     min: 0,
+    validation: { integer: true, message: 'Max players must be a whole number.' },
   },
   {
     key: 'SERVER_LISTEN_IP',
@@ -759,6 +1315,7 @@ const SERVER_CONFIG_FIELDS: ServerConfigField[] = [
     defaultValue: '300',
     min: -1,
     guidance: 'Very low intervals can increase disk activity; -1 disables autosave and is risky without manual backups.',
+    validation: { integer: true, message: 'Autosave interval must be a whole number.' },
   },
   {
     key: 'THRUST_SPEED_LIMIT',
@@ -768,6 +1325,7 @@ const SERVER_CONFIG_FIELDS: ServerConfigField[] = [
     type: 'number',
     defaultValue: '75',
     min: 0,
+    validation: { integer: true, message: 'Thrust speed limit must be a whole number.' },
   },
   {
     key: 'SOCKET_BUFFER_SIZE',
@@ -777,6 +1335,7 @@ const SERVER_CONFIG_FIELDS: ServerConfigField[] = [
     type: 'number',
     defaultValue: '65536',
     min: 1024,
+    validation: { integer: true, message: 'Socket buffer size must be a whole number.' },
   },
   {
     key: 'USE_UDP',
@@ -810,6 +1369,7 @@ const SERVER_CONFIG_FIELDS: ServerConfigField[] = [
     type: 'number',
     defaultValue: '30000',
     min: 0,
+    validation: { integer: true, message: 'Spam protection window must be a whole number.' },
   },
   {
     key: 'NT_SPAM_PROTECT_MAX_ATTEMPTS',
@@ -819,6 +1379,7 @@ const SERVER_CONFIG_FIELDS: ServerConfigField[] = [
     type: 'number',
     defaultValue: '30',
     min: 0,
+    validation: { integer: true, message: 'Spam protection attempts must be a whole number.' },
   },
   {
     key: 'SECTOR_INACTIVE_TIMEOUT',
@@ -828,6 +1389,7 @@ const SERVER_CONFIG_FIELDS: ServerConfigField[] = [
     type: 'number',
     defaultValue: '20',
     min: -1,
+    validation: { integer: true, message: 'Sector timeout must be a whole number.' },
   },
   {
     key: 'SECTOR_INACTIVE_CLEANUP_TIMEOUT',
@@ -837,6 +1399,7 @@ const SERVER_CONFIG_FIELDS: ServerConfigField[] = [
     type: 'number',
     defaultValue: '10',
     min: -1,
+    validation: { integer: true, message: 'Sector cleanup timeout must be a whole number.' },
   },
   {
     key: 'MAX_SIMULTANEOUS_EXPLOSIONS',
@@ -846,6 +1409,7 @@ const SERVER_CONFIG_FIELDS: ServerConfigField[] = [
     type: 'number',
     defaultValue: '10',
     min: 1,
+    validation: { integer: true, message: 'Explosion concurrency must be a whole number.' },
   },
   {
     key: 'CHUNK_REQUEST_THREAD_POOL_SIZE_TOTAL',
@@ -856,6 +1420,7 @@ const SERVER_CONFIG_FIELDS: ServerConfigField[] = [
     defaultValue: '10',
     min: 1,
     guidance: 'Setting this too high can increase CPU contention and frame-time spikes.',
+    validation: { integer: true, message: 'Chunk pool size must be a whole number.' },
   },
   {
     key: 'CHUNK_REQUEST_THREAD_POOL_SIZE_CPU',
@@ -866,14 +1431,13 @@ const SERVER_CONFIG_FIELDS: ServerConfigField[] = [
     defaultValue: '2',
     min: 1,
     guidance: 'Keep near available core count minus one to avoid heavy CPU spikes.',
+    validation: { integer: true, message: 'CPU chunk pool size must be a whole number.' },
   },
 ];
 
 const SERVER_CONFIG_DEFAULTS: Record<string, string> = Object.fromEntries(
   SERVER_CONFIG_FIELDS.map((field) => [field.key, field.defaultValue]),
 );
-
-const SERVER_CONFIG_FIELD_KEYS = new Set(SERVER_CONFIG_FIELDS.map((field) => field.key));
 
 const inferServerConfigFieldType = (rawValue: string): ServerConfigFieldType => {
   const normalized = rawValue.trim().toLowerCase();
@@ -925,6 +1489,11 @@ const getConfigFieldValidation = (field: ServerConfigField, rawValue: string): C
     }
   }
 
+  const schemaValidation = runSchemaValidation(field.validation, trimmed, field.type);
+  if (schemaValidation) {
+    return schemaValidation;
+  }
+
   if (field.type === 'string' && !trimmed) {
     return { error: null, warning: `Empty value will fall back to default (${field.defaultValue}).` };
   }
@@ -951,11 +1520,21 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [lifecycleState, setLifecycleState] = useState<ServerLifecycleState>('stopped');
   const [runtimePid, setRuntimePid] = useState<number | undefined>(undefined);
   const [runtimeUptimeMs, setRuntimeUptimeMs] = useState<number | undefined>(undefined);
-  const [maxPlayersInput, setMaxPlayersInput] = useState<number>(32);
-  const [bindAddressInput, setBindAddressInput] = useState<string>('all');
-  const [isPublicServerInput, setIsPublicServerInput] = useState<boolean>(false);
-  const [useAuthInput, setUseAuthInput] = useState<boolean>(false);
-  const [requireAuthInput, setRequireAuthInput] = useState<boolean>(false);
+  const [serverNameInput, setServerNameInput] = useState<string>('');
+  const [isSavingServerName, setIsSavingServerName] = useState(false);
+  const [serverPortInput, setServerPortInput] = useState<string>('4242');
+  const [isSavingServerPort, setIsSavingServerPort] = useState(false);
+  const [serverConfigSchemaFields, setServerConfigSchemaFields] = useState<ServerConfigField[]>(SERVER_CONFIG_FIELDS);
+  const [serverConfigCategoryLabels, setServerConfigCategoryLabels] = useState<Record<string, string>>(CONFIG_CATEGORY_LABELS);
+  const [serverConfigCategoryOrder, setServerConfigCategoryOrder] = useState<string[]>(CONFIG_CATEGORY_ORDER);
+  const [gameConfigFieldMetaByPath, setGameConfigFieldMetaByPath] = useState<Record<string, GameConfigFieldMeta>>(GAME_CONFIG_FIELD_META);
+  const [gameConfigCategoryLabels, setGameConfigCategoryLabels] = useState<Record<string, string>>(GAME_CONFIG_CATEGORY_LABELS);
+  const [gameConfigCategoryOrder, setGameConfigCategoryOrder] = useState<GameConfigCategory[]>(GAME_CONFIG_CATEGORY_ORDER);
+  const [gameConfigCommentToggleEntries, setGameConfigCommentToggleEntries] = useState<GameConfigCommentToggleEntry[]>(GAME_CONFIG_COMMENT_TOGGLE_DEFAULTS);
+  const [gameConfigHiddenPathPrefixes, setGameConfigHiddenPathPrefixes] = useState<string[]>(GAME_CONFIG_HIDDEN_PATH_PREFIXES);
+  const [gameConfigCategoryRules, setGameConfigCategoryRules] = useState<GameConfigCategoryRule[]>(GAME_CONFIG_CATEGORY_RULES);
+  const [savingGameConfigToggleId, setSavingGameConfigToggleId] = useState<string | null>(null);
+  const [gameConfigCommentToggleStates, setGameConfigCommentToggleStates] = useState<Record<string, boolean>>({});
   const [configFields, setConfigFields] = useState<ServerConfigField[]>(SERVER_CONFIG_FIELDS);
   const [serverConfigValues, setServerConfigValues] = useState<Record<string, string>>(SERVER_CONFIG_DEFAULTS);
   const [configSearchTerm, setConfigSearchTerm] = useState('');
@@ -968,14 +1547,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [gameConfigSavedValues, setGameConfigSavedValues] = useState<Record<string, string>>({});
   const [gameConfigSearchTerm, setGameConfigSearchTerm] = useState('');
   const [gameConfigCategoryFilter, setGameConfigCategoryFilter] = useState<Set<string>>(new Set());
-  const [showAdvancedGameConfigLists, setShowAdvancedGameConfigLists] = useState(false);
   const [gameConfigLoadedServerId, setGameConfigLoadedServerId] = useState<string | null>(null);
   const [isGameConfigLoading, setIsGameConfigLoading] = useState(false);
   const [savingGameConfigPath, setSavingGameConfigPath] = useState<string | null>(null);
   const [gameConfigError, setGameConfigError] = useState<string | null>(null);
   const [savingConfigKey, setSavingConfigKey] = useState<string | null>(null);
-  const [isSavingMaxPlayers, setIsSavingMaxPlayers] = useState(false);
-  const [isSavingConnectionSettings, setIsSavingConnectionSettings] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [logPath, setLogPath] = useState<string | null>(null);
   const [logCategories, setLogCategories] = useState<LogCategory[]>([]);
@@ -998,7 +1574,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [dashboardLayout, setDashboardLayout] = useState<DashboardLayout>(createDefaultDashboardLayout);
   const [dashboardLoaded, setDashboardLoaded] = useState(false);
   const [isLayoutEditMode, setIsLayoutEditMode] = useState(false);
-  const [isActionCatalogOpen, setIsActionCatalogOpen] = useState(false);
   const [selectedGroupId, setSelectedGroupId] = useState<string>('main');
   const [newGroupName, setNewGroupName] = useState('');
   const [draggedWidget, setDraggedWidget] = useState<DraggedWidget | null>(null);
@@ -1043,6 +1618,16 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const hasDownloadApi = typeof window !== 'undefined' && !!window.launcher?.download;
   const hasStoreApi = typeof window !== 'undefined' && !!window.launcher?.store;
 
+  const serverConfigDefaults = useMemo<Record<string, string>>(
+    () => Object.fromEntries(serverConfigSchemaFields.map((field) => [field.key, field.defaultValue])),
+    [serverConfigSchemaFields],
+  );
+
+  const serverConfigFieldKeys = useMemo(
+    () => new Set(serverConfigSchemaFields.map((field) => field.key)),
+    [serverConfigSchemaFields],
+  );
+
   const serverDownloadStatus = effectiveServer ? downloadStatuses[effectiveServer.id] : undefined;
   const isUpdating = serverDownloadStatus?.state === 'checksums' || serverDownloadStatus?.state === 'downloading';
 
@@ -1072,6 +1657,75 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   useEffect(() => {
     selectedLogPathByCategoryRef.current = selectedLogPathByCategoryId;
   }, [selectedLogPathByCategoryId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.launcher?.app?.getServerPanelSchema) return;
+
+    let cancelled = false;
+
+    const loadSchema = async () => {
+      try {
+        const raw = await window.launcher.app.getServerPanelSchema();
+        if (cancelled || !isServerPanelSchema(raw)) return;
+
+        const serverFields = Array.isArray(raw.serverConfig?.fields) && raw.serverConfig?.fields.length > 0
+          ? raw.serverConfig.fields
+          : SERVER_CONFIG_FIELDS;
+        const serverLabels = raw.serverConfig?.categoryLabels && typeof raw.serverConfig.categoryLabels === 'object'
+          ? raw.serverConfig.categoryLabels
+          : CONFIG_CATEGORY_LABELS;
+        const serverOrder = Array.isArray(raw.serverConfig?.categoryOrder) && raw.serverConfig.categoryOrder.length > 0
+          ? raw.serverConfig.categoryOrder
+          : CONFIG_CATEGORY_ORDER;
+
+        const gameMeta = raw.gameConfig?.fieldMeta && typeof raw.gameConfig.fieldMeta === 'object'
+          ? raw.gameConfig.fieldMeta
+          : GAME_CONFIG_FIELD_META;
+        const gameLabels = raw.gameConfig?.categoryLabels && typeof raw.gameConfig.categoryLabels === 'object'
+          ? raw.gameConfig.categoryLabels
+          : GAME_CONFIG_CATEGORY_LABELS;
+        const parsedGameOrder = Array.isArray(raw.gameConfig?.categoryOrder)
+          ? raw.gameConfig.categoryOrder.filter((entry): entry is GameConfigCategory => (
+            entry === 'economy' || entry === 'environment' || entry === 'limits' || entry === 'other'
+          ))
+          : [];
+        const gameOrder = parsedGameOrder.length > 0 ? parsedGameOrder : GAME_CONFIG_CATEGORY_ORDER;
+        const toggleEntries = Array.isArray(raw.gameConfig?.commentToggleEntries) && raw.gameConfig.commentToggleEntries.length > 0
+          ? raw.gameConfig.commentToggleEntries
+          : GAME_CONFIG_COMMENT_TOGGLE_DEFAULTS;
+        const hiddenPrefixes = Array.isArray(raw.gameConfig?.hiddenPathPrefixes)
+          ? raw.gameConfig.hiddenPathPrefixes.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+          : [];
+        const categoryRules = Array.isArray(raw.gameConfig?.categoryRules)
+          ? raw.gameConfig.categoryRules.filter((entry): entry is GameConfigCategoryRule => (
+            !!entry
+            && typeof entry === 'object'
+            && !Array.isArray(entry)
+            && (entry.category === 'economy' || entry.category === 'environment' || entry.category === 'limits' || entry.category === 'other')
+            && (typeof entry.startsWith === 'string' || typeof entry.includes === 'string')
+          ))
+          : [];
+
+        setServerConfigSchemaFields(serverFields);
+        setServerConfigCategoryLabels(serverLabels);
+        setServerConfigCategoryOrder(serverOrder);
+        setGameConfigFieldMetaByPath(gameMeta);
+        setGameConfigCategoryLabels(gameLabels);
+        setGameConfigCategoryOrder(gameOrder);
+        setGameConfigCommentToggleEntries(toggleEntries);
+        setGameConfigHiddenPathPrefixes(hiddenPrefixes.length > 0 ? hiddenPrefixes : GAME_CONFIG_HIDDEN_PATH_PREFIXES);
+        setGameConfigCategoryRules(categoryRules.length > 0 ? categoryRules : GAME_CONFIG_CATEGORY_RULES);
+      } catch (error) {
+        console.warn('[ServerPanel] Failed to load server panel schema:', error);
+      }
+    };
+
+    void loadSchema();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const reloadLogCatalog = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) {
@@ -1166,7 +1820,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setGameConfigSavedValues({});
     setGameConfigSearchTerm('');
     setGameConfigCategoryFilter(new Set());
-    setShowAdvancedGameConfigLists(false);
+    setGameConfigCommentToggleStates({});
+    setSavingGameConfigToggleId(null);
     setGameConfigLoadedServerId(null);
     setSavingGameConfigPath(null);
     setGameConfigError(null);
@@ -1177,152 +1832,87 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setFileContentByPath({});
     setSavedFileContentByPath({});
     setFileTabError(null);
+    setServerNameInput(effectiveServer?.name ?? '');
+    setServerPortInput(effectiveServer?.port?.trim() || '4242');
   }, [effectiveServer?.id]);
 
   useEffect(() => {
     void reloadLogCatalog();
   }, [reloadLogCatalog]);
 
-  useEffect(() => {
-    let cancelled = false;
-
+  const reloadServerConfigValues = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) {
-      setMaxPlayersInput(fallbackMaxPlayers);
+      setConfigFields(serverConfigSchemaFields);
+      setServerConfigValues(serverConfigDefaults);
       return;
     }
 
-    const loadMaxPlayersFromCfg = async () => {
-      try {
-        const raw = await window.launcher.game.readServerConfigValue(effectiveServer.path, 'MAX_CLIENTS');
-        if (cancelled) return;
-        const parsed = raw !== null ? Number.parseInt(raw, 10) : Number.NaN;
-        if (Number.isFinite(parsed) && parsed >= 0) {
-          setMaxPlayersInput(parsed);
-          return;
-        }
-      } catch (error) {
-        console.warn('[ServerPanel] Failed to read MAX_CLIENTS from server.cfg:', error);
+    setIsConfigLoading(true);
+    try {
+      const cfgEntries: ServerConfigEntry[] = await window.launcher.game.listServerConfigValues(effectiveServer.path);
+
+      const discoveredFields: ServerConfigField[] = cfgEntries
+        .filter((entry) => !serverConfigFieldKeys.has(entry.key))
+        .map((entry) => ({
+          key: entry.key,
+          label: humanizeServerConfigKey(entry.key),
+          description: entry.comment || 'Discovered key from server.cfg.',
+          category: 'advanced',
+          type: inferServerConfigFieldType(entry.value),
+          defaultValue: entry.value,
+        }))
+        .sort((a, b) => a.key.localeCompare(b.key));
+
+      const nextFields = [...serverConfigSchemaFields, ...discoveredFields];
+      const valueMap: Record<string, string> = Object.fromEntries(nextFields.map((field) => [field.key, field.defaultValue]));
+      for (const entry of cfgEntries) {
+        valueMap[entry.key] = entry.value;
       }
 
-      if (!cancelled) {
-        setMaxPlayersInput(fallbackMaxPlayers);
-      }
-    };
-
-    void loadMaxPlayersFromCfg();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [effectiveServer, hasGameApi, fallbackMaxPlayers]);
+      setConfigFields(nextFields);
+      setServerConfigValues(valueMap);
+    } catch (error) {
+      console.warn('[ServerPanel] Failed to load configuration values from server.cfg:', error);
+      setConfigFields(serverConfigSchemaFields);
+      setServerConfigValues(serverConfigDefaults);
+    } finally {
+      setIsConfigLoading(false);
+    }
+  }, [
+    effectiveServer,
+    hasGameApi,
+    serverConfigDefaults,
+    serverConfigFieldKeys,
+    serverConfigSchemaFields,
+  ]);
 
   useEffect(() => {
-    let cancelled = false;
-
-    if (!effectiveServer || !hasGameApi) {
-      setBindAddressInput(effectiveServerIp || 'all');
-      setIsPublicServerInput(false);
-      setUseAuthInput(false);
-      setRequireAuthInput(false);
-      return;
-    }
-
-    const loadConnectionConfig = async () => {
-      try {
-        const [listenIpRaw, publicRaw, useAuthRaw, requireAuthRaw] = await Promise.all([
-          window.launcher.game.readServerConfigValue(effectiveServer.path, 'SERVER_LISTEN_IP'),
-          window.launcher.game.readServerConfigValue(effectiveServer.path, 'ANNOUNCE_SERVER_TO_SERVERLIST'),
-          window.launcher.game.readServerConfigValue(effectiveServer.path, 'USE_STARMADE_AUTHENTICATION'),
-          window.launcher.game.readServerConfigValue(effectiveServer.path, 'REQUIRE_STARMADE_AUTHENTICATION'),
-        ]);
-
-        if (cancelled) return;
-
-        setBindAddressInput(listenIpRaw?.trim() || 'all');
-        setIsPublicServerInput(parseCfgBoolean(publicRaw, false));
-        const useAuth = parseCfgBoolean(useAuthRaw, false);
-        setUseAuthInput(useAuth);
-        setRequireAuthInput(useAuth ? parseCfgBoolean(requireAuthRaw, false) : false);
-      } catch (error) {
-        console.warn('[ServerPanel] Failed to read server.cfg connection settings:', error);
-        if (!cancelled) {
-          setBindAddressInput(effectiveServerIp || 'all');
-          setIsPublicServerInput(false);
-          setUseAuthInput(false);
-          setRequireAuthInput(false);
-        }
-      }
-    };
-
-    void loadConnectionConfig();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [effectiveServer, effectiveServerIp, hasGameApi]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!effectiveServer || !hasGameApi) {
-      setConfigFields(SERVER_CONFIG_FIELDS);
-      setServerConfigValues(SERVER_CONFIG_DEFAULTS);
-      return;
-    }
-
-    const loadConfigValues = async () => {
-      setIsConfigLoading(true);
-      try {
-        const cfgEntries: ServerConfigEntry[] = await window.launcher.game.listServerConfigValues(effectiveServer.path);
-
-        const discoveredFields: ServerConfigField[] = cfgEntries
-          .filter((entry) => !SERVER_CONFIG_FIELD_KEYS.has(entry.key))
-          .map((entry) => ({
-            key: entry.key,
-            label: humanizeServerConfigKey(entry.key),
-            description: entry.comment || 'Discovered key from server.cfg.',
-            category: 'advanced',
-            type: inferServerConfigFieldType(entry.value),
-            defaultValue: entry.value,
-          }))
-          .sort((a, b) => a.key.localeCompare(b.key));
-
-        const nextFields = [...SERVER_CONFIG_FIELDS, ...discoveredFields];
-        const valueMap: Record<string, string> = Object.fromEntries(nextFields.map((field) => [field.key, field.defaultValue]));
-        for (const entry of cfgEntries) {
-          valueMap[entry.key] = entry.value;
-        }
-
-        if (cancelled) return;
-        setConfigFields(nextFields);
-        setServerConfigValues(valueMap);
-      } catch (error) {
-        console.warn('[ServerPanel] Failed to load configuration values from server.cfg:', error);
-        if (!cancelled) {
-          setConfigFields(SERVER_CONFIG_FIELDS);
-          setServerConfigValues(SERVER_CONFIG_DEFAULTS);
-        }
-      } finally {
-        if (!cancelled) setIsConfigLoading(false);
-      }
-    };
-
-    void loadConfigValues();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [effectiveServer, hasGameApi]);
+    void reloadServerConfigValues();
+  }, [reloadServerConfigValues]);
 
   const hydrateGameConfigState = useCallback((xmlContent: string, options?: { keepDrafts?: boolean }) => {
-    const parsed = extractGameConfigFields(xmlContent);
-    const listSections = extractGameConfigListSections(xmlContent);
+    const parsed = extractGameConfigFields(
+      xmlContent,
+      gameConfigFieldMetaByPath,
+      gameConfigCategoryOrder,
+      gameConfigHiddenPathPrefixes,
+      gameConfigCategoryRules,
+    );
+    const listSections = extractGameConfigListSections(xmlContent, gameConfigCategoryOrder, gameConfigCategoryRules);
+    const toggleStates = getGameConfigCommentToggleStates(xmlContent, gameConfigCommentToggleEntries);
     setGameConfigXmlText(xmlContent);
     setGameConfigFields(parsed.fields);
     setGameConfigListSections(listSections);
     setGameConfigValues((prev) => (options?.keepDrafts ? { ...parsed.values, ...prev } : parsed.values));
     setGameConfigSavedValues(parsed.values);
-  }, []);
+    setGameConfigCommentToggleStates(toggleStates);
+  }, [
+    gameConfigCategoryOrder,
+    gameConfigCategoryRules,
+    gameConfigCommentToggleEntries,
+    gameConfigFieldMetaByPath,
+    gameConfigHiddenPathPrefixes,
+  ]);
 
   useEffect(() => {
     if (activeConfigTab !== 'game-config-xml') return;
@@ -1627,7 +2217,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   useEffect(() => {
     if (isLayoutEditMode) return;
-    setIsActionCatalogOpen(false);
     setDraggedWidget(null);
     setDraggedGroupId(null);
     setDraggedQuickAction(null);
@@ -2020,10 +2609,25 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     [dashboardLayout.quickActionIds, serverActions],
   );
 
+  const quickConfigFields = useMemo(
+    () => dashboardLayout.quickConfigKeys
+      .map((configKey) => configFields.find((field) => field.key === configKey))
+      .filter((field): field is ServerConfigField => !!field),
+    [configFields, dashboardLayout.quickConfigKeys],
+  );
+
   const updateQuickActions = useCallback((updater: (prev: ServerActionId[]) => ServerActionId[]) => {
     setDashboardLayout((prev) => {
       const next = cloneLayout(prev);
       next.quickActionIds = updater(next.quickActionIds);
+      return next;
+    });
+  }, []);
+
+  const updateQuickConfigKeys = useCallback((updater: (prev: DashboardConfigControlKey[]) => DashboardConfigControlKey[]) => {
+    setDashboardLayout((prev) => {
+      const next = cloneLayout(prev);
+      next.quickConfigKeys = updater(next.quickConfigKeys);
       return next;
     });
   }, []);
@@ -2035,6 +2639,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         : [...prev, actionId]
     ));
   }, [updateQuickActions]);
+
+  const toggleQuickConfigKey = useCallback((configKey: DashboardConfigControlKey) => {
+    updateQuickConfigKeys((prev) => (
+      prev.includes(configKey)
+        ? prev.filter((key) => key !== configKey)
+        : [...prev, configKey]
+    ));
+  }, [updateQuickConfigKeys]);
 
   const moveQuickActionToIndex = useCallback((actionId: ServerActionId, targetIndex: number) => {
     updateQuickActions((prev) => {
@@ -2114,36 +2726,69 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
   }, [effectiveServer, hasGameApi, hydrateGameConfigState]);
 
-  useEffect(() => {
-    if (activeTab !== 'control') return;
-    if (!effectiveServer || !hasGameApi) return;
-    if (gameConfigLoadedServerId === effectiveServer.id) return;
-    if (isGameConfigLoading || gameConfigError) return;
-    void reloadGameConfigXml();
+  const setGameConfigCommentToggle = useCallback(async (entry: GameConfigCommentToggleEntry, enabled: boolean) => {
+    if (!effectiveServer || !hasGameApi || savingGameConfigPath || savingGameConfigToggleId) return;
+
+    setSavingGameConfigToggleId(entry.id);
+    setGameConfigError(null);
+
+    try {
+      const doc = parseGameConfigXmlDocument(gameConfigXmlText);
+      const root = doc.documentElement;
+      if (!root || root.tagName !== 'GameConfig') {
+        throw new Error('GameConfig.xml root node is invalid.');
+      }
+
+      const target = findElementByGameConfigPath(doc, entry.path);
+      const tagName = entry.path.split('/').pop();
+      if (!tagName) {
+        throw new Error(`Invalid toggle path: ${entry.path}`);
+      }
+
+      if (enabled) {
+        if (!target) {
+          const restoredFromComment = uncommentGameConfigEntryFromComments(doc, root, tagName);
+          if (!restoredFromComment) {
+            const created = createElementFromSnippet(doc, entry.snippet, tagName);
+            if (!created) {
+              throw new Error(`Invalid snippet for ${entry.label}.`);
+            }
+            root.appendChild(doc.createTextNode('\n\n  '));
+            root.appendChild(created);
+            root.appendChild(doc.createTextNode('\n'));
+          }
+        }
+      } else if (target) {
+        const serializedTarget = new XMLSerializer().serializeToString(target);
+        const replacement = doc.createComment(`\n  ${serializedTarget}\n  `);
+        target.parentNode?.replaceChild(replacement, target);
+      }
+
+      const serialized = new XMLSerializer().serializeToString(doc);
+      const result = await window.launcher.game.writeGameConfigXml(effectiveServer.path, serialized);
+      if (!result.success) {
+        setGameConfigError(result.error ?? `Failed to update ${entry.label} in GameConfig.xml.`);
+        return;
+      }
+
+      hydrateGameConfigState(serialized, { keepDrafts: true });
+      setGameConfigLoadedServerId(effectiveServer.id);
+    } catch (error) {
+      setGameConfigError(`Failed to toggle ${entry.label}: ${String(error)}`);
+    } finally {
+      setSavingGameConfigToggleId(null);
+    }
   }, [
-    activeTab,
     effectiveServer,
-    gameConfigError,
-    gameConfigLoadedServerId,
+    gameConfigXmlText,
     hasGameApi,
-    isGameConfigLoading,
-    reloadGameConfigXml,
+    hydrateGameConfigState,
+    savingGameConfigPath,
+    savingGameConfigToggleId,
   ]);
 
-  const toggleGameConfigCategory = useCallback((category: GameConfigCategory) => {
-    setGameConfigCategoryFilter((prev) => {
-      const next = new Set(prev);
-      if (next.has(category)) {
-        next.delete(category);
-      } else {
-        next.add(category);
-      }
-      return next;
-    });
-  }, []);
-
   const saveGameConfigField = useCallback(async (field: GameConfigField, explicitValue?: string) => {
-    if (!effectiveServer || !hasGameApi || savingGameConfigPath) return;
+    if (!effectiveServer || !hasGameApi || savingGameConfigPath || savingGameConfigToggleId) return;
 
     const currentRaw = explicitValue ?? gameConfigValues[field.path] ?? field.defaultValue;
     const validation = getGameConfigFieldValidation(field, currentRaw);
@@ -2188,37 +2833,52 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setSavingGameConfigPath(null);
     }
-  }, [effectiveServer, gameConfigValues, gameConfigXmlText, hasGameApi, hydrateGameConfigState, savingGameConfigPath]);
+  }, [effectiveServer, gameConfigValues, gameConfigXmlText, hasGameApi, hydrateGameConfigState, savingGameConfigPath, savingGameConfigToggleId]);
 
-  const persistMaxPlayers = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || isSavingMaxPlayers) return;
+  const persistServerName = useCallback(async () => {
+    if (!effectiveServer || isSavingServerName) return;
 
-    const sanitized = Math.max(0, Math.round(maxPlayersInput || 0));
-    setMaxPlayersInput(sanitized);
-    setIsSavingMaxPlayers(true);
+    const sanitized = serverNameInput.trim() || effectiveServer.name;
+    setServerNameInput(sanitized);
+    if (sanitized === effectiveServer.name) return;
+
+    setIsSavingServerName(true);
     setActionError(null);
-
     try {
-      const result = await window.launcher.game.writeServerConfigValue(
-        effectiveServer.path,
-        'MAX_CLIENTS',
-        String(sanitized),
-      );
-
-      if (!result.success) {
-        setActionError(result.error ?? 'Failed to save MAX_CLIENTS in server.cfg.');
-        return;
-      }
-
-      if (effectiveServer.maxPlayers !== sanitized) {
-        updateServerItem({ ...effectiveServer, maxPlayers: sanitized });
-      }
+      updateServerItem({ ...effectiveServer, name: sanitized });
     } catch (error) {
-      setActionError(`Failed to save MAX_CLIENTS: ${String(error)}`);
+      setActionError(`Failed to save server name: ${String(error)}`);
+      setServerNameInput(effectiveServer.name);
     } finally {
-      setIsSavingMaxPlayers(false);
+      setIsSavingServerName(false);
     }
-  }, [effectiveServer, hasGameApi, isSavingMaxPlayers, maxPlayersInput, updateServerItem]);
+  }, [effectiveServer, isSavingServerName, serverNameInput, updateServerItem]);
+
+  const persistServerPort = useCallback(async () => {
+    if (!effectiveServer || isSavingServerPort) return;
+
+    const parsed = Number.parseInt(serverPortInput.trim() || '4242', 10);
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 65535) {
+      setActionError('Server port must be between 1 and 65535.');
+      setServerPortInput(effectiveServer.port?.trim() || '4242');
+      return;
+    }
+
+    const sanitized = String(parsed);
+    setServerPortInput(sanitized);
+    if (sanitized === (effectiveServer.port?.trim() || '4242')) return;
+
+    setIsSavingServerPort(true);
+    setActionError(null);
+    try {
+      updateServerItem({ ...effectiveServer, port: sanitized });
+    } catch (error) {
+      setActionError(`Failed to save server port: ${String(error)}`);
+      setServerPortInput(effectiveServer.port?.trim() || '4242');
+    } finally {
+      setIsSavingServerPort(false);
+    }
+  }, [effectiveServer, isSavingServerPort, serverPortInput, updateServerItem]);
 
   const persistServerCfgValue = useCallback(async (key: string, value: string): Promise<boolean> => {
     if (!effectiveServer || !hasGameApi) return false;
@@ -2265,7 +2925,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       if (field.key === 'MAX_CLIENTS') {
         const parsed = Number.parseInt(nextValue, 10);
         if (Number.isFinite(parsed) && parsed >= 0) {
-          setMaxPlayersInput(parsed);
           if (effectiveServer && effectiveServer.maxPlayers !== parsed) {
             updateServerItem({ ...effectiveServer, maxPlayers: parsed });
           }
@@ -2273,25 +2932,16 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       }
 
       if (field.key === 'SERVER_LISTEN_IP') {
-        setBindAddressInput(nextValue);
         if (effectiveServer && effectiveServer.serverIp !== nextValue) {
           updateServerItem({ ...effectiveServer, serverIp: nextValue });
         }
       }
 
-      if (field.key === 'ANNOUNCE_SERVER_TO_SERVERLIST') {
-        setIsPublicServerInput(parseCfgBoolean(nextValue, false));
-      }
       if (field.key === 'USE_STARMADE_AUTHENTICATION') {
         const enabled = parseCfgBoolean(nextValue, false);
-        setUseAuthInput(enabled);
         if (!enabled) {
-          setRequireAuthInput(false);
           setServerConfigValues((prev) => ({ ...prev, REQUIRE_STARMADE_AUTHENTICATION: 'false' }));
         }
-      }
-      if (field.key === 'REQUIRE_STARMADE_AUTHENTICATION') {
-        setRequireAuthInput(parseCfgBoolean(nextValue, false));
       }
     } catch (error) {
       setActionError(`Failed to save ${field.key}: ${String(error)}`);
@@ -2299,89 +2949,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setSavingConfigKey(null);
     }
   }, [effectiveServer, persistServerCfgValue, savingConfigKey, serverConfigValues, updateServerItem]);
-
-  const persistBindAddress = useCallback(async () => {
-    if (isSavingConnectionSettings) return;
-    const sanitized = bindAddressInput.trim() || 'all';
-    setBindAddressInput(sanitized);
-    setIsSavingConnectionSettings(true);
-    setActionError(null);
-    try {
-      const ok = await persistServerCfgValue('SERVER_LISTEN_IP', sanitized);
-      if (ok && effectiveServer && effectiveServer.serverIp !== sanitized) {
-        updateServerItem({ ...effectiveServer, serverIp: sanitized });
-      }
-    } catch (error) {
-      setActionError(`Failed to save SERVER_LISTEN_IP: ${String(error)}`);
-    } finally {
-      setIsSavingConnectionSettings(false);
-    }
-  }, [bindAddressInput, effectiveServer, isSavingConnectionSettings, persistServerCfgValue, updateServerItem]);
-
-  const togglePublicServer = useCallback(async (nextChecked: boolean) => {
-    if (isSavingConnectionSettings) return;
-    setIsPublicServerInput(nextChecked);
-    setIsSavingConnectionSettings(true);
-    setActionError(null);
-    try {
-      const ok = await persistServerCfgValue('ANNOUNCE_SERVER_TO_SERVERLIST', String(nextChecked));
-      if (!ok) setIsPublicServerInput(!nextChecked);
-    } catch (error) {
-      setIsPublicServerInput(!nextChecked);
-      setActionError(`Failed to save ANNOUNCE_SERVER_TO_SERVERLIST: ${String(error)}`);
-    } finally {
-      setIsSavingConnectionSettings(false);
-    }
-  }, [isSavingConnectionSettings, persistServerCfgValue]);
-
-  const toggleUseAuthentication = useCallback(async (nextChecked: boolean) => {
-    if (isSavingConnectionSettings) return;
-    const previousUseAuth = useAuthInput;
-    const previousRequireAuth = requireAuthInput;
-    setUseAuthInput(nextChecked);
-    if (!nextChecked) setRequireAuthInput(false);
-    setIsSavingConnectionSettings(true);
-    setActionError(null);
-    try {
-      const useAuthSaved = await persistServerCfgValue('USE_STARMADE_AUTHENTICATION', String(nextChecked));
-      if (!useAuthSaved) {
-        setUseAuthInput(previousUseAuth);
-        setRequireAuthInput(previousRequireAuth);
-        return;
-      }
-
-      if (!nextChecked) {
-        const requireSaved = await persistServerCfgValue('REQUIRE_STARMADE_AUTHENTICATION', 'false');
-        if (!requireSaved) {
-          setUseAuthInput(previousUseAuth);
-          setRequireAuthInput(previousRequireAuth);
-        }
-      }
-    } catch (error) {
-      setUseAuthInput(previousUseAuth);
-      setRequireAuthInput(previousRequireAuth);
-      setActionError(`Failed to save authentication settings: ${String(error)}`);
-    } finally {
-      setIsSavingConnectionSettings(false);
-    }
-  }, [isSavingConnectionSettings, persistServerCfgValue, requireAuthInput, useAuthInput]);
-
-  const toggleRequireAuthentication = useCallback(async (nextChecked: boolean) => {
-    if (isSavingConnectionSettings || !useAuthInput) return;
-    const previous = requireAuthInput;
-    setRequireAuthInput(nextChecked);
-    setIsSavingConnectionSettings(true);
-    setActionError(null);
-    try {
-      const ok = await persistServerCfgValue('REQUIRE_STARMADE_AUTHENTICATION', String(nextChecked));
-      if (!ok) setRequireAuthInput(previous);
-    } catch (error) {
-      setRequireAuthInput(previous);
-      setActionError(`Failed to save REQUIRE_STARMADE_AUTHENTICATION: ${String(error)}`);
-    } finally {
-      setIsSavingConnectionSettings(false);
-    }
-  }, [isSavingConnectionSettings, persistServerCfgValue, requireAuthInput, useAuthInput]);
 
   const renderDragHandle = (label: string) => (
     <span
@@ -2428,28 +2995,147 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     </div>
   );
 
+  const getDashboardConfigField = (key: string): ServerConfigField | null => (
+    configFields.find((field) => field.key === key) ?? null
+  );
+
+  const getDashboardConfigValue = (key: string): string => {
+    const field = getDashboardConfigField(key);
+    if (!field) return '';
+    return serverConfigValues[key] ?? field.defaultValue;
+  };
+
+  const renderDashboardConfigField = (
+    key: string,
+    options?: { labelWidthClassName?: string; requireKey?: string; compact?: boolean },
+  ) => {
+    const field = getDashboardConfigField(key);
+    if (!field) return null;
+
+    const rawValue = getDashboardConfigValue(key);
+    const validation = getConfigFieldValidation(field, rawValue);
+    const isSavingThisField = savingConfigKey === field.key;
+    const isRequirementMet = options?.requireKey
+      ? parseCfgBoolean(getDashboardConfigValue(options.requireKey), false)
+      : true;
+    const isDisabled = !!savingConfigKey || !isRequirementMet;
+
+    if (field.type === 'boolean') {
+      return (
+        <div key={field.key} className="space-y-1">
+          <label className="flex items-center gap-2 text-sm text-gray-300">
+            <input
+              type="checkbox"
+              checked={parseCfgBoolean(rawValue, field.defaultValue === 'true')}
+              onChange={(event) => {
+                const next = String(event.target.checked);
+                setServerConfigValues((prev) => ({ ...prev, [field.key]: next }));
+                void saveConfigField(field, next);
+              }}
+              disabled={isDisabled || !!validation.error}
+              className="h-4 w-4 rounded"
+            />
+            <span>{options?.compact ? 'Enabled' : field.label}</span>
+            {isSavingThisField && <span className="text-[10px] uppercase tracking-wider text-gray-500">Saving...</span>}
+          </label>
+          {(validation.error || validation.warning || !isRequirementMet) && (
+            <p className={`text-[10px] ${validation.error ? 'text-red-300' : 'text-amber-300'}`}>
+              {validation.error ?? validation.warning ?? `${field.label} requires ${getDashboardConfigField(options?.requireKey ?? '')?.label ?? options?.requireKey} to be enabled.`}
+            </p>
+          )}
+        </div>
+      );
+    }
+
+    if (options?.compact) {
+      return (
+        <div key={field.key} className="space-y-1">
+          <input
+            type={field.type === 'number' ? 'number' : 'text'}
+            min={field.type === 'number' && field.min !== undefined ? field.min : undefined}
+            max={field.type === 'number' && field.max !== undefined ? field.max : undefined}
+            value={rawValue}
+            onChange={(event) => {
+              const next = event.target.value;
+              setServerConfigValues((prev) => ({ ...prev, [field.key]: next }));
+            }}
+            onBlur={() => { void saveConfigField(field); }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                void saveConfigField(field);
+              }
+            }}
+            disabled={!!savingConfigKey}
+            className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+          />
+          {(validation.error || validation.warning) && (
+            <p className={`text-[10px] ${validation.error ? 'text-red-300' : 'text-amber-300'}`}>
+              {validation.error ?? validation.warning}
+            </p>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <label key={field.key} className="flex items-start gap-3 text-sm">
+        <span className={`${options?.labelWidthClassName ?? 'w-36'} pt-2 text-gray-300`}>{field.label}:</span>
+        <div className="flex-1">
+          <input
+            type={field.type === 'number' ? 'number' : 'text'}
+            min={field.type === 'number' && field.min !== undefined ? field.min : undefined}
+            max={field.type === 'number' && field.max !== undefined ? field.max : undefined}
+            value={rawValue}
+            onChange={(event) => {
+              const next = event.target.value;
+              setServerConfigValues((prev) => ({ ...prev, [field.key]: next }));
+            }}
+            onBlur={() => { void saveConfigField(field); }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                void saveConfigField(field);
+              }
+            }}
+            disabled={!!savingConfigKey}
+            className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+          />
+          {(validation.error || validation.warning) && (
+            <p className={`mt-1 text-[10px] ${validation.error ? 'text-red-300' : 'text-amber-300'}`}>
+              {validation.error ?? validation.warning}
+            </p>
+          )}
+        </div>
+      </label>
+    );
+  };
+
   const renderServerInfoWidget = () => (
     <div className="space-y-3">
       <label className="flex items-center gap-3 text-sm">
-        <span className="w-36 text-gray-300">Server Name:</span>
+        <span className="w-36 text-gray-300">Launcher Name:</span>
         <input
-          value={effectiveServerName}
-          readOnly
+          value={serverNameInput}
+          onChange={(event) => setServerNameInput(event.target.value)}
+          onBlur={() => { void persistServerName(); }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              void persistServerName();
+            }
+          }}
+          disabled={isSavingServerName}
           className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
         />
       </label>
+      {renderDashboardConfigField('SERVER_LIST_NAME')}
+      {renderDashboardConfigField('SERVER_LIST_DESCRIPTION')}
+      {renderDashboardConfigField('HOST_NAME_TO_ANNOUNCE_TO_SERVER_LIST')}
       <label className="flex items-center gap-3 text-sm">
         <span className="w-36 text-gray-300">Install Path:</span>
         <input
           value={effectiveServer.path || 'Not configured'}
-          readOnly
-          className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
-        />
-      </label>
-      <label className="flex items-center gap-3 text-sm">
-        <span className="w-36 text-gray-300">Server IP:</span>
-        <input
-          value={effectiveServerIp}
           readOnly
           className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
         />
@@ -2460,247 +3146,31 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const renderConnectionWidget = () => (
     <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
       <div className="space-y-3">
-        <label className="flex items-center gap-3 text-sm">
-          <span className="w-28 text-gray-300">Bind Address:</span>
-          <input
-            value={bindAddressInput}
-            onChange={(event) => setBindAddressInput(event.target.value)}
-            onBlur={() => { void persistBindAddress(); }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                void persistBindAddress();
-              }
-            }}
-            disabled={isSavingConnectionSettings}
-            className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
-          />
-        </label>
+        {renderDashboardConfigField('SERVER_LISTEN_IP', { labelWidthClassName: 'w-28' })}
         <label className="flex items-center gap-3 text-sm">
           <span className="w-28 text-gray-300">Server Port:</span>
           <input
-            value={effectiveServer.port || '4242'}
-            readOnly
-            className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
-          />
-        </label>
-        <label className="flex items-center gap-3 text-sm">
-          <span className="w-28 text-gray-300">Max Players:</span>
-          <input
-            type="number"
-            min={0}
-            value={maxPlayersInput}
-            onChange={(event) => setMaxPlayersInput(Math.max(0, Number(event.target.value) || 0))}
-            onBlur={() => { void persistMaxPlayers(); }}
+            value={serverPortInput}
+            onChange={(event) => setServerPortInput(event.target.value)}
+            onBlur={() => { void persistServerPort(); }}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 event.preventDefault();
-                void persistMaxPlayers();
+                void persistServerPort();
               }
             }}
-            disabled={isSavingMaxPlayers}
+            disabled={isSavingServerPort}
             className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
           />
         </label>
+        {renderDashboardConfigField('MAX_CLIENTS', { labelWidthClassName: 'w-28' })}
       </div>
 
       <div className="space-y-3 rounded-md border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={isPublicServerInput}
-            onChange={(event) => { void togglePublicServer(event.target.checked); }}
-            disabled={isSavingConnectionSettings}
-            className="h-4 w-4 rounded"
-          />
-          <span>Public Server</span>
-        </label>
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={useAuthInput}
-            onChange={(event) => { void toggleUseAuthentication(event.target.checked); }}
-            disabled={isSavingConnectionSettings}
-            className="h-4 w-4 rounded"
-          />
-          <span>Use Authentication</span>
-        </label>
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={requireAuthInput}
-            onChange={(event) => { void toggleRequireAuthentication(event.target.checked); }}
-            disabled={isSavingConnectionSettings || !useAuthInput}
-            className="h-4 w-4 rounded"
-          />
-          <span>Require Authentication</span>
-        </label>
-      </div>
-
-      <div className="space-y-4 rounded-md border border-white/10 bg-black/20 p-3 text-sm text-gray-300 lg:col-span-2">
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div className="space-y-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">server.cfg quick edit</p>
-              <p className="text-xs text-gray-500">Changes are written to server.cfg.</p>
-            </div>
-
-            {DASHBOARD_SERVER_CFG_QUICK_KEYS.map((key) => {
-              const field = configFields.find((candidate) => candidate.key === key);
-              if (!field) return null;
-              const rawValue = serverConfigValues[field.key] ?? field.defaultValue;
-              const validation = getConfigFieldValidation(field, rawValue);
-              const isSavingThisField = savingConfigKey === field.key;
-
-              return (
-                <div key={`dashboard-${field.key}`} className="rounded border border-white/10 bg-black/25 p-2">
-                  <p className="text-xs font-semibold text-gray-200">{field.label}</p>
-                  <p className="mb-2 text-[11px] text-gray-500">{field.key}</p>
-
-                  {field.type === 'boolean' ? (
-                    <label className="inline-flex items-center gap-2 text-xs text-gray-300">
-                      <input
-                        type="checkbox"
-                        checked={parseCfgBoolean(rawValue, field.defaultValue === 'true')}
-                        onChange={(event) => {
-                          const next = String(event.target.checked);
-                          setServerConfigValues((prev) => ({ ...prev, [field.key]: next }));
-                          void saveConfigField(field, next);
-                        }}
-                        disabled={!!savingConfigKey || !!validation.error}
-                        className="h-4 w-4 rounded"
-                      />
-                      Enabled
-                    </label>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <input
-                        type={field.type === 'number' ? 'number' : 'text'}
-                        value={rawValue}
-                        onChange={(event) => {
-                          const next = event.target.value;
-                          setServerConfigValues((prev) => ({ ...prev, [field.key]: next }));
-                        }}
-                        onBlur={() => { void saveConfigField(field); }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault();
-                            void saveConfigField(field);
-                          }
-                        }}
-                        disabled={!!savingConfigKey}
-                        className="w-full rounded-md border border-white/15 bg-black/30 px-2 py-1.5 text-xs text-gray-200"
-                      />
-                      <button
-                        onClick={() => { void saveConfigField(field); }}
-                        disabled={!!savingConfigKey || !!validation.error}
-                        className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {isSavingThisField ? 'Saving...' : 'Save'}
-                      </button>
-                    </div>
-                  )}
-
-                  {(validation.error || validation.warning) && (
-                    <p className={`mt-1 text-[10px] ${validation.error ? 'text-red-300' : 'text-amber-300'}`}>
-                      {validation.error ?? validation.warning}
-                    </p>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="space-y-3">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">GameConfig.xml quick edit</p>
-                <p className="text-xs text-gray-500">Changes are written to GameConfig.xml.</p>
-              </div>
-              <button
-                onClick={() => { void reloadGameConfigXml(); }}
-                disabled={isGameConfigLoading || !!savingGameConfigPath}
-                className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Reload XML
-              </button>
-            </div>
-
-            {!hasGameApi ? (
-              <p className="text-xs text-gray-500">Game API unavailable.</p>
-            ) : isGameConfigLoading ? (
-              <p className="text-xs text-gray-500">Loading GameConfig.xml...</p>
-            ) : gameConfigLoadedServerId !== effectiveServer?.id ? (
-              <p className="text-xs text-gray-500">GameConfig.xml not loaded yet.</p>
-            ) : (
-              DASHBOARD_GAME_CONFIG_QUICK_PATHS.map((path) => {
-                const field = gameConfigFields.find((candidate) => candidate.path === path);
-                if (!field) return null;
-
-                const rawValue = gameConfigValues[field.path] ?? field.defaultValue;
-                const validation = getGameConfigFieldValidation(field, rawValue);
-                const isSavingThisField = savingGameConfigPath === field.path;
-
-                return (
-                  <div key={`dashboard-${field.path}`} className="rounded border border-white/10 bg-black/25 p-2">
-                    <p className="text-xs font-semibold text-gray-200">{field.label}</p>
-                    <p className="mb-2 text-[11px] text-gray-500">{field.path}</p>
-
-                    {field.type === 'boolean' ? (
-                      <label className="inline-flex items-center gap-2 text-xs text-gray-300">
-                        <input
-                          type="checkbox"
-                          checked={parseCfgBoolean(rawValue, field.defaultValue.toLowerCase() === 'true')}
-                          onChange={(event) => {
-                            const next = String(event.target.checked);
-                            setGameConfigValues((prev) => ({ ...prev, [field.path]: next }));
-                            void saveGameConfigField(field, next);
-                          }}
-                          disabled={!!savingGameConfigPath || !!validation.error}
-                          className="h-4 w-4 rounded"
-                        />
-                        Enabled
-                      </label>
-                    ) : (
-                      <div className="flex items-center gap-2">
-                        <input
-                          type={field.type === 'number' ? 'number' : 'text'}
-                          value={rawValue}
-                          onChange={(event) => {
-                            const next = event.target.value;
-                            setGameConfigValues((prev) => ({ ...prev, [field.path]: next }));
-                          }}
-                          onBlur={() => { void saveGameConfigField(field); }}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') {
-                              event.preventDefault();
-                              void saveGameConfigField(field);
-                            }
-                          }}
-                          disabled={!!savingGameConfigPath}
-                          className="w-full rounded-md border border-white/15 bg-black/30 px-2 py-1.5 text-xs text-gray-200"
-                        />
-                        <button
-                          onClick={() => { void saveGameConfigField(field); }}
-                          disabled={!!savingGameConfigPath || !!validation.error}
-                          className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {isSavingThisField ? 'Saving...' : 'Save'}
-                        </button>
-                      </div>
-                    )}
-
-                    {(validation.error || validation.warning) && (
-                      <p className={`mt-1 text-[10px] ${validation.error ? 'text-red-300' : 'text-amber-300'}`}>
-                        {validation.error ?? validation.warning}
-                      </p>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
+        {renderDashboardConfigField('ANNOUNCE_SERVER_TO_SERVERLIST')}
+        {renderDashboardConfigField('USE_STARMADE_AUTHENTICATION')}
+        {renderDashboardConfigField('REQUIRE_STARMADE_AUTHENTICATION', { requireKey: 'USE_STARMADE_AUTHENTICATION' })}
+        {renderDashboardConfigField('USE_WHITELIST')}
       </div>
     </div>
   );
@@ -2724,9 +3194,26 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     return 'border-white/15 bg-black/30 text-gray-100 hover:bg-black/40';
   };
 
+  const dashboardConfigCatalogFields = DASHBOARD_CONFIG_CONTROL_KEYS
+    .map((configKey) => configFields.find((field) => field.key === configKey))
+    .filter((field): field is ServerConfigField => !!field);
+
+  const renderDashboardToggleButton = (isPinned: boolean, onClick: () => void) => (
+    <button
+      onClick={onClick}
+      className={`rounded border px-2 py-1 text-[11px] font-semibold uppercase tracking-wider transition-colors ${
+        isPinned
+          ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white hover:bg-starmade-accent/30'
+          : 'border-white/15 bg-black/25 text-gray-300 hover:bg-black/40'
+      }`}
+    >
+      {isPinned ? 'On Dashboard' : 'Add to Dashboard'}
+    </button>
+  );
+
   const renderActionGrid = (
     actions: ServerActionDefinition[],
-    options?: { showQuickToggle?: boolean; enableQuickDrag?: boolean; allowCatalogDrag?: boolean; emptyMessage?: string },
+    options?: { showDashboardToggle?: boolean; enableQuickDrag?: boolean; emptyMessage?: string },
   ) => {
     if (actions.length === 0) {
       return (
@@ -2736,7 +3223,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       );
     }
 
-    const gridClassName = options?.showQuickToggle
+    const gridClassName = options?.showDashboardToggle
       ? 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3'
       : 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4';
 
@@ -2746,7 +3233,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         {actions.map((action) => {
           const isPinned = dashboardLayout.quickActionIds.includes(action.id);
           const quickActionIndex = dashboardLayout.quickActionIds.indexOf(action.id);
-          const canDrag = isLayoutEditMode && ((!!options?.enableQuickDrag && isPinned) || !!options?.allowCatalogDrag);
+          const canDrag = isLayoutEditMode && !!options?.enableQuickDrag && isPinned;
           return (
             <React.Fragment key={action.id}>
               <div
@@ -2774,19 +3261,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   </div>
                   <p className="mt-1 text-sm text-gray-400">{action.description}</p>
                 </div>
-                {options?.showQuickToggle && isLayoutEditMode && (
+                {options?.showDashboardToggle && (
                   <div className="flex shrink-0 flex-col items-end gap-2">
-                    <button
-                      onClick={() => toggleQuickAction(action.id)}
-                      className={`rounded border px-2 py-1 text-[11px] font-semibold uppercase tracking-wider transition-colors ${
-                        isPinned
-                          ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white hover:bg-starmade-accent/30'
-                          : 'border-white/15 bg-black/25 text-gray-300 hover:bg-black/40'
-                      }`}
-                    >
-                      {isPinned ? 'On Dashboard' : 'Add to Dashboard'}
-                    </button>
-
+                    {renderDashboardToggleButton(isPinned, () => toggleQuickAction(action.id))}
                   </div>
                 )}
               </div>
@@ -2803,6 +3280,46 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               </div>
               {options?.enableQuickDrag && isLayoutEditMode && renderQuickActionDropZone((isPinned ? quickActionIndex : dashboardLayout.quickActionIds.length) + 1, 'col-span-full')}
             </React.Fragment>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderConfigControlGrid = (
+    fields: ServerConfigField[],
+    options?: { showDashboardToggle?: boolean; emptyMessage?: string },
+  ) => {
+    if (fields.length === 0) {
+      return (
+        <div className="rounded-md border border-dashed border-white/15 bg-black/20 p-4 text-sm text-gray-400">
+          {options?.emptyMessage ?? 'No config controls available.'}
+        </div>
+      );
+    }
+
+    return (
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3">
+        {fields.map((field) => {
+          const isPinned = dashboardLayout.quickConfigKeys.includes(field.key as DashboardConfigControlKey);
+          return (
+            <div key={field.key} className="rounded-lg border border-white/10 bg-black/20 p-4 transition-all hover:border-white/20">
+              <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex flex-wrap items-center gap-2">
+                    <h4 className="text-base font-semibold text-white">{field.label}</h4>
+                  </div>
+                  <p className="mt-1 text-sm text-gray-400">{field.description}</p>
+                </div>
+                {options?.showDashboardToggle && renderDashboardToggleButton(isPinned, () => toggleQuickConfigKey(field.key as DashboardConfigControlKey))}
+              </div>
+
+              <p className="mb-4 text-xs text-gray-500">{field.key}</p>
+              {renderDashboardConfigField(field.key, {
+                requireKey: field.key === 'REQUIRE_STARMADE_AUTHENTICATION' ? 'USE_STARMADE_AUTHENTICATION' : undefined,
+                compact: true,
+              })}
+            </div>
           );
         })}
       </div>
@@ -2846,13 +3363,68 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   );
 
   const renderControlsWidget = () => (
-    <div className="space-y-2">
+    <div className="space-y-4">
       {isLayoutEditMode && draggedQuickAction && renderQuickActionDropZone(0, 'w-full', 'Drop action here to pin/reorder quick actions')}
-      {renderActionGrid(quickActions, {
-        showQuickToggle: isLayoutEditMode,
-        enableQuickDrag: isLayoutEditMode,
-        emptyMessage: 'Open Add Actions in edit mode and drag actions onto this widget.',
-      })}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Pinned Actions</p>
+        </div>
+        {renderActionGrid(quickActions, {
+          showDashboardToggle: isLayoutEditMode,
+          enableQuickDrag: isLayoutEditMode,
+          emptyMessage: 'Use the Actions tab to pin server actions to this widget.',
+        })}
+      </div>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Pinned Config Controls</p>
+        </div>
+        {renderConfigControlGrid(quickConfigFields, {
+          showDashboardToggle: isLayoutEditMode,
+          emptyMessage: 'Use the Actions tab to pin config controls to this widget.',
+        })}
+      </div>
+    </div>
+  );
+
+  const renderActionsPanel = () => (
+    <div className="flex h-full min-h-0 flex-col gap-4">
+      {actionError && (
+        <div className="rounded-md border border-red-500/40 bg-red-950/30 px-4 py-2 text-sm text-red-300">
+          {actionError}
+        </div>
+      )}
+
+      <div className="rounded-lg border border-white/10 bg-black/20 p-4">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-300">Actions And Controls</h3>
+        <p className="mt-1 text-xs text-gray-500">
+          This panel lists all actionable buttons and reusable config controls. Use Add to Dashboard to pin any of them into the dashboard controls widget.
+        </p>
+      </div>
+
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto pr-1">
+        <section className="space-y-3">
+          <div>
+            <h4 className="text-sm font-semibold uppercase tracking-wider text-gray-300">Server Actions</h4>
+            <p className="mt-1 text-xs text-gray-500">Start, stop, restart, and update controls for the selected server.</p>
+          </div>
+          {renderActionGrid(serverActions, {
+            showDashboardToggle: true,
+            emptyMessage: 'No server actions available.',
+          })}
+        </section>
+
+        <section className="space-y-3">
+          <div>
+            <h4 className="text-sm font-semibold uppercase tracking-wider text-gray-300">Config Controls</h4>
+            <p className="mt-1 text-xs text-gray-500">Editable server.cfg values that can also be pinned into the dashboard controls widget.</p>
+          </div>
+          {renderConfigControlGrid(dashboardConfigCatalogFields, {
+            showDashboardToggle: true,
+            emptyMessage: 'No dashboard config controls are available for this server.',
+          })}
+        </section>
+      </div>
     </div>
   );
 
@@ -3096,13 +3668,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           </div>
         )}
 
-        <div className="relative rounded-lg border border-white/10 bg-black/20 p-3">
+        <div className="rounded-lg border border-white/10 bg-black/20 p-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-300">Dashboard Layout</h3>
               <p className="mt-1 text-xs text-gray-500">
                 {isLayoutEditMode
-                  ? 'Drag groups/widgets/actions, rename groups, and pin quick actions while edit mode is enabled.'
+                  ? 'Drag groups and widgets, rename groups, and use the Actions tab to pin controls while edit mode is enabled.'
                   : 'Enable edit mode to customize your monitoring dashboard.'}
               </p>
             </div>
@@ -3163,14 +3735,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   Reset Default
                 </button>
                 <button
-                  onClick={() => setIsActionCatalogOpen((prev) => !prev)}
-                  className={`rounded border px-2 py-1 text-sm font-semibold transition-colors ${
-                    isActionCatalogOpen
-                      ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white hover:bg-starmade-accent/30'
-                      : 'border-white/15 bg-black/30 text-gray-200 hover:bg-black/45'
-                  }`}
+                  onClick={() => setActiveTab('actions')}
+                  className="rounded border border-white/15 bg-black/30 px-2 py-1 text-sm font-semibold text-gray-200 hover:bg-black/45"
                 >
-                  {isActionCatalogOpen ? 'Hide Actions' : 'Add Actions'}
+                  Open Actions Tab
                 </button>
               </div>
 
@@ -3190,24 +3758,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   ))
                 )}
               </div>
-              <p className="mt-2 text-xs text-gray-500">Tip: drag groups to reorder columns, and drag widgets to move them between groups.</p>
+              <p className="mt-2 text-xs text-gray-500">Tip: drag groups to reorder columns, drag widgets to move them between groups, and use the Actions tab to pin controls into Server Controls.</p>
             </>
-          )}
-
-          {isLayoutEditMode && isActionCatalogOpen && (
-            <div className="pointer-events-auto absolute right-3 top-[calc(100%+0.5rem)] z-30 w-[min(56rem,calc(100vw-7rem))] rounded-lg border border-white/15 bg-black/90 p-3 shadow-2xl backdrop-blur">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <h4 className="text-sm font-semibold uppercase tracking-wider text-gray-300">Action Catalog</h4>
-                <p className="text-xs text-gray-500">Drag an action card into Server Controls to pin it on the dashboard.</p>
-              </div>
-              <div className="max-h-[50vh] overflow-y-auto pr-1">
-                {renderActionGrid(serverActions, {
-                  showQuickToggle: true,
-                  allowCatalogDrag: true,
-                  emptyMessage: 'No actions available.',
-                })}
-              </div>
-            </div>
           )}
         </div>
 
@@ -3419,8 +3971,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       loadingText: 'Loading configuration from server.cfg...',
       searchPlaceholder: 'Search key, label, or description',
       emptyMessage: 'No configuration keys match the current search/filter.',
-      categoryOrder: CONFIG_CATEGORY_ORDER,
-      categoryLabels: CONFIG_CATEGORY_LABELS,
+      categoryOrder: serverConfigCategoryOrder,
+      categoryLabels: serverConfigCategoryLabels,
       fields: configFields.map((field) => ({
         id: field.key,
         keyDisplay: field.key,
@@ -3451,6 +4003,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         const field = configFields.find((f) => f.key === id);
         return field ? getConfigFieldValidation(field, rawValue) : { error: null, warning: null };
       },
+      reloadLabel: 'Reload',
+      onReload: reloadServerConfigValues,
+      reloadDisabled: !effectiveServer || !hasGameApi || isConfigLoading || !!savingConfigKey,
     };
     return <ConfigPanel model={model} />;
   };
@@ -3460,9 +4015,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       (path) => gameConfigValues[path] !== (gameConfigSavedValues[path] ?? ''),
     );
     const needle = gameConfigSearchTerm.trim().toLowerCase();
+    const enabledTogglePaths = new Set(
+      gameConfigCommentToggleEntries
+        .filter((entry) => gameConfigCommentToggleStates[entry.id])
+        .map((entry) => entry.path),
+    );
 
     const filteredGameConfigListSections = gameConfigListSections
       .filter((section) => {
+        for (const enabledPath of enabledTogglePaths) {
+          if (section.key.startsWith(enabledPath)) return false;
+        }
         if (gameConfigCategoryFilter.size > 0 && !gameConfigCategoryFilter.has(section.category)) return false;
         if (!needle) return true;
         if (section.key.toLowerCase().includes(needle) || section.label.toLowerCase().includes(needle)) return true;
@@ -3479,127 +4042,163 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       })
       .filter((section) => section.rows.length > 0);
 
+    const visibleCommentToggleEntries = gameConfigCommentToggleEntries.filter((entry) => {
+      if (gameConfigCategoryFilter.size > 0 && !gameConfigCategoryFilter.has(entry.category)) return false;
+      if (!needle) return true;
+      return (
+        entry.label.toLowerCase().includes(needle)
+        || entry.description.toLowerCase().includes(needle)
+        || entry.path.toLowerCase().includes(needle)
+      );
+    });
+
     const bodyExtras = (
       <section className="space-y-3">
-        <label className="inline-flex items-center gap-2 text-sm text-gray-300">
-          <input
-            type="checkbox"
-            checked={showAdvancedGameConfigLists}
-            onChange={(event) => setShowAdvancedGameConfigLists(event.target.checked)}
-            className="h-4 w-4 rounded"
-          />
-          Show advanced repeated entry tables (e.g. StartingGear blocks/tools)
-        </label>
+        <div className="rounded-md border border-white/10 bg-black/20 p-3">
+          <p className="text-sm font-semibold text-white">Optional Commented Entries</p>
+          <p className="mt-1 text-xs text-gray-400">
+            Toggle these to comment/uncomment optional top-level blocks in GameConfig.xml.
+          </p>
 
-        {showAdvancedGameConfigLists && (
-          filteredGameConfigListSections.length === 0 ? (
-            <p className="rounded-md border border-dashed border-white/15 bg-black/20 px-3 py-4 text-sm text-gray-400">
-              No repeated entry tables match the current search/filter.
-            </p>
+          {visibleCommentToggleEntries.length === 0 ? (
+            <p className="mt-3 text-sm text-gray-400">No optional entries match the current search/filter.</p>
           ) : (
-            <div className="space-y-4">
-              {filteredGameConfigListSections.map((section) => (
-                <div key={section.key} className="rounded-md border border-white/10 bg-black/20 p-3">
-                  <div className="mb-2">
-                    <p className="text-sm font-semibold text-white">{section.label}</p>
-                    <p className="text-xs text-gray-400">{section.description}</p>
-                    <p className="mt-1 text-[11px] font-mono text-gray-500">{section.key}</p>
-                  </div>
-
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full border-collapse text-sm">
-                      <thead>
-                        <tr>
-                          <th className="border-b border-white/10 px-2 py-2 text-left text-xs uppercase tracking-wider text-gray-400">#</th>
-                          {section.columns.map((column) => (
-                            <th key={`${section.key}-${column.key}`} className="border-b border-white/10 px-2 py-2 text-left text-xs uppercase tracking-wider text-gray-400">
-                              {column.label}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {section.rows.map((row) => (
-                          <tr key={`${section.key}-row-${row.index}`}>
-                            <td className="border-b border-white/5 px-2 py-2 align-top text-xs text-gray-500">{row.index}</td>
-                            {section.columns.map((column) => {
-                              const fieldPath = row.fieldPaths[column.key];
-                              const rawValue = gameConfigValues[fieldPath] ?? '';
-                              const pseudoField: GameConfigField = {
-                                path: fieldPath,
-                                label: `${section.label} ${column.label}`,
-                                description: `${section.key} row ${row.index}`,
-                                category: section.category,
-                                type: column.type,
-                                defaultValue: gameConfigSavedValues[fieldPath] ?? rawValue,
-                              };
-                              const validation = getGameConfigFieldValidation(pseudoField, rawValue);
-                              const isSavingThisField = savingGameConfigPath === fieldPath;
-
-                              return (
-                                <td key={fieldPath} className="border-b border-white/5 px-2 py-2 align-top">
-                                  <div className="flex min-w-[180px] items-center gap-2">
-                                    {column.type === 'boolean' ? (
-                                      <label className="inline-flex items-center gap-2 text-xs text-gray-300">
-                                        <input
-                                          type="checkbox"
-                                          checked={parseCfgBoolean(rawValue, false)}
-                                          onChange={(event) => {
-                                            const next = String(event.target.checked);
-                                            setGameConfigValues((prev) => ({ ...prev, [fieldPath]: next }));
-                                            void saveGameConfigField(pseudoField, next);
-                                          }}
-                                          disabled={!!savingGameConfigPath || !!validation.error}
-                                          className="h-4 w-4 rounded"
-                                        />
-                                        Enabled
-                                      </label>
-                                    ) : (
-                                      <>
-                                        <input
-                                          type={column.type === 'number' ? 'number' : 'text'}
-                                          value={rawValue}
-                                          onChange={(event) => {
-                                            const next = event.target.value;
-                                            setGameConfigValues((prev) => ({ ...prev, [fieldPath]: next }));
-                                          }}
-                                          onBlur={() => { void saveGameConfigField(pseudoField); }}
-                                          onKeyDown={(event) => {
-                                            if (event.key === 'Enter') {
-                                              event.preventDefault();
-                                              void saveGameConfigField(pseudoField);
-                                            }
-                                          }}
-                                          disabled={!!savingGameConfigPath}
-                                          className="w-full rounded-md border border-white/15 bg-black/30 px-2 py-1.5 text-xs text-gray-200"
-                                        />
-                                        <button
-                                          onClick={() => { void saveGameConfigField(pseudoField); }}
-                                          disabled={!!savingGameConfigPath || !!validation.error}
-                                          className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
-                                        >
-                                          {isSavingThisField ? 'Saving...' : 'Save'}
-                                        </button>
-                                      </>
-                                    )}
-                                  </div>
-                                  {(validation.error || validation.warning) && (
-                                    <p className={`mt-1 text-[10px] ${validation.error ? 'text-red-300' : 'text-amber-300'}`}>
-                                      {validation.error ?? validation.warning}
-                                    </p>
-                                  )}
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              ))}
+            <div className="mt-3 space-y-2">
+              {visibleCommentToggleEntries.map((entry) => {
+                const checked = gameConfigCommentToggleStates[entry.id] ?? false;
+                const isSaving = savingGameConfigToggleId === entry.id;
+                return (
+                  <label key={entry.id} className="flex items-start gap-2 rounded border border-white/10 bg-black/20 px-3 py-2 text-sm text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(event) => {
+                        void setGameConfigCommentToggle(entry, event.target.checked);
+                      }}
+                      disabled={!!savingGameConfigPath || !!savingGameConfigToggleId}
+                      className="mt-0.5 h-4 w-4 rounded"
+                    />
+                    <span className="flex-1">
+                      <span className="font-semibold text-white">{entry.label}</span>
+                      <span className="mt-0.5 block text-xs text-gray-400">{entry.description}</span>
+                      <span className="mt-1 block font-mono text-[11px] text-gray-500">{entry.path}</span>
+                    </span>
+                    {isSaving && <span className="text-xs uppercase tracking-wider text-gray-500">Saving...</span>}
+                  </label>
+                );
+              })}
             </div>
-          )
+          )}
+        </div>
+
+        {filteredGameConfigListSections.length > 0 && (
+          <div className="space-y-4">
+            {filteredGameConfigListSections.map((section) => (
+              <div key={section.key} className="rounded-md border border-white/10 bg-black/20 p-3">
+                <div className="mb-2">
+                  <p className="text-sm font-semibold text-white">{section.label}</p>
+                  <p className="text-xs text-gray-400">{section.description}</p>
+                  <p className="mt-1 text-[11px] font-mono text-gray-500">{section.key}</p>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="min-w-full border-collapse text-sm">
+                    <thead>
+                      <tr>
+                        <th className="border-b border-white/10 px-2 py-2 text-left text-xs uppercase tracking-wider text-gray-400">#</th>
+                        {section.columns.map((column) => (
+                          <th key={`${section.key}-${column.key}`} className="border-b border-white/10 px-2 py-2 text-left text-xs uppercase tracking-wider text-gray-400">
+                            {column.label}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {section.rows.map((row) => (
+                        <tr key={`${section.key}-row-${row.index}`}>
+                          <td className="border-b border-white/5 px-2 py-2 align-top text-xs text-gray-500">{row.index}</td>
+                          {section.columns.map((column) => {
+                            const fieldPath = row.fieldPaths[column.key];
+                            const rawValue = gameConfigValues[fieldPath] ?? '';
+                            const explicitMeta = getGameConfigMetaForPath(gameConfigFieldMetaByPath, fieldPath);
+                            const pseudoField: GameConfigField = {
+                              path: fieldPath,
+                              label: explicitMeta?.label ?? `${section.label} ${column.label}`,
+                              description: explicitMeta?.description ?? `${section.key} row ${row.index}`,
+                              category: explicitMeta?.category ?? section.category,
+                              type: explicitMeta?.type ?? column.type,
+                              defaultValue: gameConfigSavedValues[fieldPath] ?? rawValue,
+                              min: explicitMeta?.min,
+                              max: explicitMeta?.max,
+                              guidance: explicitMeta?.guidance,
+                              validation: explicitMeta?.validation,
+                            };
+                            const validation = getGameConfigFieldValidation(pseudoField, rawValue);
+                            const isSavingThisField = savingGameConfigPath === fieldPath;
+
+                            return (
+                              <td key={fieldPath} className="border-b border-white/5 px-2 py-2 align-top">
+                                <div className="flex min-w-[180px] items-center gap-2">
+                                  {column.type === 'boolean' ? (
+                                    <label className="inline-flex items-center gap-2 text-xs text-gray-300">
+                                      <input
+                                        type="checkbox"
+                                        checked={parseCfgBoolean(rawValue, false)}
+                                        onChange={(event) => {
+                                          const next = String(event.target.checked);
+                                          setGameConfigValues((prev) => ({ ...prev, [fieldPath]: next }));
+                                          void saveGameConfigField(pseudoField, next);
+                                        }}
+                                        disabled={!!savingGameConfigPath || !!validation.error}
+                                        className="h-4 w-4 rounded"
+                                      />
+                                      Enabled
+                                    </label>
+                                  ) : (
+                                    <>
+                                      <input
+                                        type={column.type === 'number' ? 'number' : 'text'}
+                                        value={rawValue}
+                                        onChange={(event) => {
+                                          const next = event.target.value;
+                                          setGameConfigValues((prev) => ({ ...prev, [fieldPath]: next }));
+                                        }}
+                                        onBlur={() => { void saveGameConfigField(pseudoField); }}
+                                        onKeyDown={(event) => {
+                                          if (event.key === 'Enter') {
+                                            event.preventDefault();
+                                            void saveGameConfigField(pseudoField);
+                                          }
+                                        }}
+                                        disabled={!!savingGameConfigPath}
+                                        className="w-full rounded-md border border-white/15 bg-black/30 px-2 py-1.5 text-xs text-gray-200"
+                                      />
+                                      <button
+                                        onClick={() => { void saveGameConfigField(pseudoField); }}
+                                        disabled={!!savingGameConfigPath || !!validation.error}
+                                        className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+                                      >
+                                        {isSavingThisField ? 'Saving...' : 'Save'}
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                                {(validation.error || validation.warning) && (
+                                  <p className={`mt-1 text-[10px] ${validation.error ? 'text-red-300' : 'text-amber-300'}`}>
+                                    {validation.error ?? validation.warning}
+                                  </p>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </section>
     );
@@ -3610,8 +4209,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       loadingText: 'Loading GameConfig.xml...',
       searchPlaceholder: 'Search GameConfig fields...',
       emptyMessage: 'No GameConfig fields match the current search/filter.',
-      categoryOrder: GAME_CONFIG_CATEGORY_ORDER,
-      categoryLabels: GAME_CONFIG_CATEGORY_LABELS,
+      categoryOrder: gameConfigCategoryOrder,
+      categoryLabels: gameConfigCategoryLabels,
       fields: gameConfigFields.map((field) => ({
         id: field.path,
         keyDisplay: field.path,
@@ -3644,7 +4243,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       },
       reloadLabel: 'Reload',
       onReload: reloadGameConfigXml,
-      reloadDisabled: !effectiveServer || !hasGameApi || isGameConfigLoading || !!savingGameConfigPath,
+      reloadDisabled: !effectiveServer || !hasGameApi || isGameConfigLoading || !!savingGameConfigPath || !!savingGameConfigToggleId,
       bodyExtras,
     };
 
@@ -3849,6 +4448,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const renderActiveTab = () => {
     if (activeTab === 'control') return renderControlPanel();
+    if (activeTab === 'actions') return renderActionsPanel();
     if (activeTab === 'logs') return renderLogs();
     if (activeTab === 'configuration') return renderConfiguration();
     if (activeTab === 'files') return renderFilesTab();

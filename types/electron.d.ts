@@ -10,6 +10,8 @@ declare global {
         getUserDataPath: () => Promise<string>;
         /** Returns total system RAM in MB. */
         getSystemMemory: () => Promise<number>;
+        /** Returns server panel schema JSON used by config editors. */
+        getServerPanelSchema: () => Promise<unknown>;
       };
 
       window: {

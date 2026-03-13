@@ -1,0 +1,229 @@
+{
+  "version": 1,
+  "serverConfig": {
+    "categoryLabels": {
+      "networking": "Networking",
+      "security": "Security",
+      "performance": "Performance",
+      "advanced": "Advanced"
+    },
+    "categoryOrder": [
+      "networking",
+      "security",
+      "performance",
+      "advanced"
+    ],
+    "fields": [
+      {
+        "key": "MAX_CLIENTS",
+        "label": "Max Players",
+        "description": "Maximum number of clients allowed on this server.",
+        "category": "networking",
+        "type": "number",
+        "defaultValue": "32",
+        "min": 0,
+        "validation": {
+          "integer": true,
+          "message": "Max players must be a whole number."
+        }
+      },
+      {
+        "key": "SERVER_LISTEN_IP",
+        "label": "Bind Address",
+        "description": "IP/interface to bind the server to. Use all to listen on every interface.",
+        "category": "networking",
+        "type": "string",
+        "defaultValue": "all"
+      },
+      {
+        "key": "ANNOUNCE_SERVER_TO_SERVERLIST",
+        "label": "Public Server",
+        "description": "Announce this server to the public StarMade server list.",
+        "category": "networking",
+        "type": "boolean",
+        "defaultValue": "false"
+      },
+      {
+        "key": "USE_STARMADE_AUTHENTICATION",
+        "label": "Use Authentication",
+        "description": "Allow StarMade account authentication for connections.",
+        "category": "security",
+        "type": "boolean",
+        "defaultValue": "false"
+      },
+      {
+        "key": "REQUIRE_STARMADE_AUTHENTICATION",
+        "label": "Require Authentication",
+        "description": "Require authenticated StarMade accounts to join.",
+        "category": "security",
+        "type": "boolean",
+        "defaultValue": "false"
+      },
+      {
+        "key": "USE_WHITELIST",
+        "label": "Use Whitelist",
+        "description": "Only allow players listed in whitelist.txt.",
+        "category": "security",
+        "type": "boolean",
+        "defaultValue": "false"
+      },
+      {
+        "key": "SECTOR_AUTOSAVE_SEC",
+        "label": "Autosave Interval (sec)",
+        "description": "How often sectors are autosaved. Use -1 to disable.",
+        "category": "performance",
+        "type": "number",
+        "defaultValue": "300",
+        "min": -1,
+        "guidance": "Very low intervals can increase disk activity; -1 disables autosave and is risky without manual backups.",
+        "validation": {
+          "integer": true,
+          "message": "Autosave interval must be a whole number."
+        }
+      },
+      {
+        "key": "THRUST_SPEED_LIMIT",
+        "label": "Thrust Speed Limit",
+        "description": "Maximum ship speed in m/s.",
+        "category": "performance",
+        "type": "number",
+        "defaultValue": "75",
+        "min": 0,
+        "validation": {
+          "integer": true,
+          "message": "Thrust speed limit must be a whole number."
+        }
+      },
+      {
+        "key": "SOCKET_BUFFER_SIZE",
+        "label": "Socket Buffer Size",
+        "description": "Incoming/outgoing socket buffer size in bytes.",
+        "category": "networking",
+        "type": "number",
+        "defaultValue": "65536",
+        "min": 1024,
+        "validation": {
+          "integer": true,
+          "message": "Socket buffer size must be a whole number."
+        }
+      },
+      {
+        "key": "USE_UDP",
+        "label": "Use UDP",
+        "description": "Use UDP for networking instead of TCP.",
+        "category": "networking",
+        "type": "boolean",
+        "defaultValue": "false"
+      },
+      {
+        "key": "TCP_NODELAY",
+        "label": "TCP No Delay",
+        "description": "Disable Nagle buffering for lower latency.",
+        "category": "networking",
+        "type": "boolean",
+        "defaultValue": "true"
+      },
+      {
+        "key": "NT_SPAM_PROTECT_ACTIVE",
+        "label": "Spam Protection Enabled",
+        "description": "Enable connection spam protection logic.",
+        "category": "security",
+        "type": "boolean",
+        "defaultValue": "true"
+      },
+      {
+        "key": "NT_SPAM_PROTECT_TIME_MS",
+        "label": "Spam Protect Window (ms)",
+        "description": "Time window used by spam protection.",
+        "category": "security",
+        "type": "number",
+        "defaultValue": "30000",
+        "min": 0,
+        "validation": {
+          "integer": true,
+          "message": "Spam protection window must be a whole number."
+        }
+      },
+      {
+        "key": "NT_SPAM_PROTECT_MAX_ATTEMPTS",
+        "label": "Spam Protect Max Attempts",
+        "description": "Maximum connection attempts allowed per window.",
+        "category": "security",
+        "type": "number",
+        "defaultValue": "30",
+        "min": 0,
+        "validation": {
+          "integer": true,
+          "message": "Spam protection attempts must be a whole number."
+        }
+      },
+      {
+        "key": "SECTOR_INACTIVE_TIMEOUT",
+        "label": "Sector Inactive Timeout (sec)",
+        "description": "Time before sectors go inactive (-1 disables).",
+        "category": "performance",
+        "type": "number",
+        "defaultValue": "20",
+        "min": -1,
+        "validation": {
+          "integer": true,
+          "message": "Sector timeout must be a whole number."
+        }
+      },
+      {
+        "key": "SECTOR_INACTIVE_CLEANUP_TIMEOUT",
+        "label": "Sector Cleanup Timeout (sec)",
+        "description": "Time before inactive sectors are removed from memory (-1 disables).",
+        "category": "performance",
+        "type": "number",
+        "defaultValue": "10",
+        "min": -1,
+        "validation": {
+          "integer": true,
+          "message": "Sector cleanup timeout must be a whole number."
+        }
+      },
+      {
+        "key": "MAX_SIMULTANEOUS_EXPLOSIONS",
+        "label": "Max Simultaneous Explosions",
+        "description": "Threaded explosion concurrency cap.",
+        "category": "performance",
+        "type": "number",
+        "defaultValue": "10",
+        "min": 1,
+        "validation": {
+          "integer": true,
+          "message": "Explosion concurrency must be a whole number."
+        }
+      },
+      {
+        "key": "CHUNK_REQUEST_THREAD_POOL_SIZE_TOTAL",
+        "label": "Chunk Thread Pool (Total)",
+        "description": "Total thread count for chunk requests.",
+        "category": "performance",
+        "type": "number",
+        "defaultValue": "10",
+        "min": 1,
+        "guidance": "Setting this too high can increase CPU contention and frame-time spikes.",
+        "validation": {
+          "integer": true,
+          "message": "Chunk pool size must be a whole number."
+        }
+      },
+      {
+        "key": "CHUNK_REQUEST_THREAD_POOL_SIZE_CPU",
+        "label": "Chunk Thread Pool (CPU)",
+        "description": "CPU generation threads used for chunk work.",
+        "category": "performance",
+        "type": "number",
+        "defaultValue": "2",
+        "min": 1,
+        "guidance": "Keep near available core count minus one to avoid heavy CPU spikes.",
+        "validation": {
+          "integer": true,
+          "message": "CPU chunk pool size must be a whole number."
+        }
+      }
+    ]
+  }
+}

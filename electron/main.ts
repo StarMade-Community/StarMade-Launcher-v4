@@ -748,8 +748,47 @@ ipcMain.handle(IPC.DIALOG_OPEN_FILE, async (_event, defaultPath?: string, type?:
 
 // ─── App handlers ────────────────────────────────────────────────────────────
 
+function readServerPanelSchema(): unknown {
+  const readJsonObject = (candidatePath: string): Record<string, unknown> | null => {
+    try {
+      if (!fs.existsSync(candidatePath)) return null;
+      const raw = fs.readFileSync(candidatePath, 'utf8');
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch (error) {
+      console.warn('[schema] Failed to read schema file:', { candidatePath, error });
+    }
+    return null;
+  };
+
+  const userConfigDir = path.join(app.getPath('userData'), 'config');
+  const bundledConfigDir = path.join(__dirname, '..', 'presets', 'config');
+
+  const serverSchema = readJsonObject(path.join(userConfigDir, 'server-config-schema.json'))
+    ?? readJsonObject(path.join(bundledConfigDir, 'server-config-schema.json'));
+  const gameSchema = readJsonObject(path.join(userConfigDir, 'gameconfig-schema.json'))
+    ?? readJsonObject(path.join(bundledConfigDir, 'gameconfig-schema.json'));
+
+  if (serverSchema || gameSchema) {
+    const merged = {
+      version: 1,
+      ...(serverSchema ?? {}),
+      ...(gameSchema ?? {}),
+    };
+    return merged;
+  }
+
+  // Backward-compatibility fallback for previous combined schema filename.
+  return readJsonObject(path.join(userConfigDir, 'server-panel-schema.json'))
+    ?? readJsonObject(path.join(bundledConfigDir, 'server-panel-schema.json'))
+    ?? null;
+}
+
 ipcMain.handle(IPC.APP_GET_USER_DATA, () => app.getPath('userData'));
 ipcMain.handle(IPC.APP_GET_SYSTEM_MEMORY, () => Math.floor(os.totalmem() / (1024 * 1024)));
+ipcMain.handle(IPC.APP_GET_SERVER_PANEL_SCHEMA, () => readServerPanelSchema());
 
 // ─── Installation file management handlers ───────────────────────────────────
 
@@ -1162,24 +1201,15 @@ ipcMain.handle(IPC.ICONS_LIST, async () => {
  * `presetsInitialized`).
  */
 function copyPresetsToUserData(): void {
-  if (storeGet('presetsInitialized') === true) return;
-
   const presetsDir = path.join(__dirname, '..', 'presets');
   const userDataDir = app.getPath('userData');
 
-  const categories: Array<{ src: string; dest: string }> = [
-    { src: path.join(presetsDir, 'backgrounds'), dest: path.join(userDataDir, 'backgrounds') },
-    { src: path.join(presetsDir, 'icons'),       dest: path.join(userDataDir, 'icons') },
-  ];
-
-  let hadError = false;
-
-  for (const { src, dest } of categories) {
-    if (!fs.existsSync(src)) continue;
+  const copyCategory = (src: string, dest: string, fileFilter: (fileName: string) => boolean): boolean => {
+    if (!fs.existsSync(src)) return true;
 
     try {
       fs.mkdirSync(dest, { recursive: true });
-      const files = fs.readdirSync(src).filter(f => IMAGE_EXTS.has(path.extname(f).toLowerCase()));
+      const files = fs.readdirSync(src).filter(fileFilter);
       for (const file of files) {
         const srcFile  = path.join(src, file);
         const destFile = path.join(dest, file);
@@ -1188,8 +1218,39 @@ function copyPresetsToUserData(): void {
           fs.copyFileSync(srcFile, destFile);
         }
       }
+      return true;
     } catch (err) {
       console.error(`[presets] Failed to copy presets from ${src} to ${dest}:`, err);
+      return false;
+    }
+  };
+
+  // Keep schema files updated for both fresh and existing users.
+  copyCategory(
+    path.join(presetsDir, 'config'),
+    path.join(userDataDir, 'config'),
+    (fileName) => fileName.toLowerCase().endsWith('.json'),
+  );
+
+  if (storeGet('presetsInitialized') === true) return;
+
+  const categories: Array<{ src: string; dest: string; fileFilter: (fileName: string) => boolean }> = [
+    {
+      src: path.join(presetsDir, 'backgrounds'),
+      dest: path.join(userDataDir, 'backgrounds'),
+      fileFilter: (fileName) => IMAGE_EXTS.has(path.extname(fileName).toLowerCase()),
+    },
+    {
+      src: path.join(presetsDir, 'icons'),
+      dest: path.join(userDataDir, 'icons'),
+      fileFilter: (fileName) => IMAGE_EXTS.has(path.extname(fileName).toLowerCase()),
+    },
+  ];
+
+  let hadError = false;
+
+  for (const { src, dest, fileFilter } of categories) {
+    if (!copyCategory(src, dest, fileFilter)) {
       hadError = true;
     }
   }

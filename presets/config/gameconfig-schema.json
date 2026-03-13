@@ -1,0 +1,300 @@
+{
+  "version": 1,
+  "gameConfig": {
+    "categoryLabels": {
+      "economy": "Economy",
+      "environment": "Environment",
+      "limits": "Limits",
+      "other": "Other"
+    },
+    "categoryOrder": [
+      "economy",
+      "environment",
+      "limits",
+      "other"
+    ],
+    "hiddenPathPrefixes": [
+      "GameConfig/StartingGear/Block",
+      "GameConfig/StartingGear/Tool",
+      "GameConfig/StartingGear/Helmet",
+      "GameConfig/StartingGear/Flashlight",
+      "GameConfig/StartingGear/Logbook",
+      "GameConfig/StartingGear/Blueprint",
+      "GameConfig/StartingGear/BuildInhibiter"
+    ],
+    "categoryRules": [
+      {
+        "category": "economy",
+        "startsWith": "GameConfig/StartingGear"
+      },
+      {
+        "category": "environment",
+        "includes": "sun"
+      },
+      {
+        "category": "environment",
+        "includes": "heat"
+      },
+      {
+        "category": "limits",
+        "includes": "limit"
+      },
+      {
+        "category": "limits",
+        "includes": "maxdimension"
+      }
+    ],
+    "fieldMeta": {
+      "GameConfig/StartingGear/Credits": {
+        "label": "Starting Credits",
+        "description": "Credits granted to a new character on spawn.",
+        "category": "economy",
+        "type": "number",
+        "min": 0,
+        "validation": {
+          "integer": true,
+          "message": "Starting credits must be a whole number."
+        }
+      },
+      "GameConfig/SunHeatDamage/DamagePerBlock": {
+        "label": "Sun Heat Damage Per Block",
+        "description": "Damage applied per block when sun heat damage triggers.",
+        "category": "environment",
+        "type": "number",
+        "min": 0
+      },
+      "GameConfig/SunHeatDamage/MaxDelayBetweenHits": {
+        "label": "Max Delay Between Sun Hits",
+        "description": "Maximum random delay between consecutive sun heat damage hits.",
+        "category": "environment",
+        "type": "number",
+        "min": 0
+      },
+      "GameConfig/SunHeatDamage/SunDamageRadius": {
+        "label": "Sun Damage Radius",
+        "description": "Radius around the entity where sun damage applies.",
+        "category": "environment",
+        "type": "number",
+        "min": 0
+      },
+      "GameConfig/SunHeatDamage/SunDamageDelayInSecs": {
+        "label": "Sun Damage Delay (sec)",
+        "description": "Time delay before repeated sun heat damage is applied.",
+        "category": "environment",
+        "type": "number",
+        "min": 0
+      },
+      "GameConfig/SunHeatDamage/SunDamageMin": {
+        "label": "Minimum Sun Damage",
+        "description": "Lower bound for randomized sun heat damage.",
+        "category": "environment",
+        "type": "number",
+        "min": 0
+      },
+      "GameConfig/SunHeatDamage/SunDamageMax": {
+        "label": "Maximum Sun Damage",
+        "description": "Upper bound for randomized sun heat damage.",
+        "category": "environment",
+        "type": "number",
+        "min": 0
+      },
+      "GameConfig/MaxDimensionShip/X": {
+        "label": "Max Ship X",
+        "description": "Maximum ship dimension on the X axis.",
+        "category": "limits",
+        "type": "number",
+        "validation": {
+          "integer": true,
+          "message": "Ship dimensions must be whole numbers."
+        }
+      },
+      "GameConfig/MaxDimensionShip/Y": {
+        "label": "Max Ship Y",
+        "description": "Maximum ship dimension on the Y axis.",
+        "category": "limits",
+        "type": "number",
+        "validation": {
+          "integer": true,
+          "message": "Ship dimensions must be whole numbers."
+        }
+      },
+      "GameConfig/MaxDimensionShip/Z": {
+        "label": "Max Ship Z",
+        "description": "Maximum ship dimension on the Z axis.",
+        "category": "limits",
+        "type": "number",
+        "validation": {
+          "integer": true,
+          "message": "Ship dimensions must be whole numbers."
+        }
+      },
+      "GameConfig/MaxDimensionStation/X": {
+        "label": "Max Station X",
+        "description": "Maximum station dimension on the X axis.",
+        "category": "limits",
+        "type": "number",
+        "validation": {
+          "integer": true,
+          "message": "Station dimensions must be whole numbers."
+        }
+      },
+      "GameConfig/MaxDimensionStation/Y": {
+        "label": "Max Station Y",
+        "description": "Maximum station dimension on the Y axis.",
+        "category": "limits",
+        "type": "number",
+        "validation": {
+          "integer": true,
+          "message": "Station dimensions must be whole numbers."
+        }
+      },
+      "GameConfig/MaxDimensionStation/Z": {
+        "label": "Max Station Z",
+        "description": "Maximum station dimension on the Z axis.",
+        "category": "limits",
+        "type": "number",
+        "validation": {
+          "integer": true,
+          "message": "Station dimensions must be whole numbers."
+        }
+      },
+      "GameConfig/GroupLimits/Controller[]/ID": {
+        "label": "Controller ID",
+        "description": "Controller block ID used for group/computer limits.",
+        "category": "limits",
+        "type": "number",
+        "min": 0,
+        "validation": {
+          "integer": true,
+          "message": "Controller IDs must be whole numbers."
+        }
+      },
+      "GameConfig/GroupLimits/Controller[]/GroupMax": {
+        "label": "Group Max",
+        "description": "Maximum simultaneous groups for this controller.",
+        "category": "limits",
+        "type": "number",
+        "min": 0,
+        "validation": {
+          "integer": true,
+          "message": "Group max must be a whole number."
+        }
+      },
+      "GameConfig/GroupLimits/Controller[]/ComputerMax": {
+        "label": "Computer Max",
+        "description": "Maximum number of computers allowed for this controller.",
+        "category": "limits",
+        "type": "number",
+        "min": 0,
+        "validation": {
+          "integer": true,
+          "message": "Computer max must be a whole number."
+        }
+      },
+      "GameConfig/ShipLimits/Mass": {
+        "label": "Ship Mass Limit",
+        "description": "Maximum ship mass allowed.",
+        "category": "limits",
+        "type": "number",
+        "min": 0
+      },
+      "GameConfig/ShipLimits/Blocks": {
+        "label": "Ship Block Limit",
+        "description": "Maximum ship block count allowed.",
+        "category": "limits",
+        "type": "number",
+        "min": 0,
+        "validation": {
+          "integer": true,
+          "message": "Block limits must be whole numbers."
+        }
+      },
+      "GameConfig/PlanetLimits/Mass": {
+        "label": "Planet Mass Limit",
+        "description": "Maximum planet mass allowed.",
+        "category": "limits",
+        "type": "number",
+        "min": 0
+      },
+      "GameConfig/PlanetLimits/Blocks": {
+        "label": "Planet Block Limit",
+        "description": "Maximum planet block count allowed.",
+        "category": "limits",
+        "type": "number",
+        "min": 0,
+        "validation": {
+          "integer": true,
+          "message": "Block limits must be whole numbers."
+        }
+      },
+      "GameConfig/StationLimits/Mass": {
+        "label": "Station Mass Limit",
+        "description": "Maximum station mass allowed.",
+        "category": "limits",
+        "type": "number",
+        "min": 0
+      },
+      "GameConfig/StationLimits/Blocks": {
+        "label": "Station Block Limit",
+        "description": "Maximum station block count allowed.",
+        "category": "limits",
+        "type": "number",
+        "min": 0,
+        "validation": {
+          "integer": true,
+          "message": "Block limits must be whole numbers."
+        }
+      }
+    },
+    "commentToggleEntries": [
+      {
+        "id": "group-limits",
+        "label": "Enable Group Limits",
+        "description": "Adds GroupLimits controller caps to GameConfig.xml.",
+        "path": "GameConfig/GroupLimits",
+        "category": "limits",
+        "snippet": "<GroupLimits>\n    <Controller>\n      <ID>4</ID>\n      <GroupMax>30</GroupMax>\n    </Controller>\n    <Controller>\n      <ID>544</ID>\n      <ComputerMax>2</ComputerMax>\n    </Controller>\n  </GroupLimits>"
+      },
+      {
+        "id": "max-dimension-ship",
+        "label": "Enable MaxDimensionShip",
+        "description": "Adds MaxDimensionShip size limits.",
+        "path": "GameConfig/MaxDimensionShip",
+        "category": "limits",
+        "snippet": "<MaxDimensionShip>\n    <X>100</X>\n    <Y>400</Y>\n    <Z>-1</Z>\n  </MaxDimensionShip>"
+      },
+      {
+        "id": "max-dimension-station",
+        "label": "Enable MaxDimensionStation",
+        "description": "Adds MaxDimensionStation size limits.",
+        "path": "GameConfig/MaxDimensionStation",
+        "category": "limits",
+        "snippet": "<MaxDimensionStation>\n    <X>600</X>\n    <Y>800</Y>\n    <Z>1000</Z>\n  </MaxDimensionStation>"
+      },
+      {
+        "id": "ship-limits",
+        "label": "Enable ShipLimits",
+        "description": "Adds ship mass/block limits.",
+        "path": "GameConfig/ShipLimits",
+        "category": "limits",
+        "snippet": "<ShipLimits>\n    <Mass>1000.0</Mass>\n    <Blocks>100</Blocks>\n  </ShipLimits>"
+      },
+      {
+        "id": "planet-limits",
+        "label": "Enable PlanetLimits",
+        "description": "Adds planet mass/block limits.",
+        "path": "GameConfig/PlanetLimits",
+        "category": "limits",
+        "snippet": "<PlanetLimits>\n    <Mass>50000.0</Mass>\n    <Blocks>2000000</Blocks>\n  </PlanetLimits>"
+      },
+      {
+        "id": "station-limits",
+        "label": "Enable StationLimits",
+        "description": "Adds station mass/block limits.",
+        "path": "GameConfig/StationLimits",
+        "category": "limits",
+        "snippet": "<StationLimits>\n    <Mass>5000.0</Mass>\n    <Blocks>500</Blocks>\n  </StationLimits>"
+      }
+    ]
+  }
+}

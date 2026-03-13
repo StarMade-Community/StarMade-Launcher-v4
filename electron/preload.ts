@@ -15,6 +15,9 @@ const launcherApi = {
       ipcRenderer.invoke(IPC.APP_GET_USER_DATA), /** Returns total system RAM in MB. */
     getSystemMemory: (): Promise<number> =>
       ipcRenderer.invoke(IPC.APP_GET_SYSTEM_MEMORY),
+    /** Returns the server panel schema JSON used to drive config editor metadata. */
+    getServerPanelSchema: (): Promise<unknown> =>
+      ipcRenderer.invoke(IPC.APP_GET_SERVER_PANEL_SCHEMA),
   },
 
   window: {
