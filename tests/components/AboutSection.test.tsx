@@ -1,19 +1,27 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
 import AboutSection from '../../components/pages/Settings/AboutSection';
 
 describe('AboutSection', () => {
+  beforeEach(() => {
+    (window as unknown as Record<string, unknown>).launcher = {
+      updater: {
+        getVersion: vi.fn().mockResolvedValue('4.0.0'),
+      },
+    };
+  });
+
   it('renders the launcher title', () => {
     render(<AboutSection />);
     expect(screen.getByText('StarMade Launcher')).toBeInTheDocument();
   });
 
-  it('renders the version number', () => {
+  it('renders the version number', async () => {
     render(<AboutSection />);
-    expect(screen.getByText('Version 4.0.0')).toBeInTheDocument();
+    expect(await screen.findByText('Version 4.0.0')).toBeInTheDocument();
   });
 
   it('renders the "Credits & Information" heading', () => {
