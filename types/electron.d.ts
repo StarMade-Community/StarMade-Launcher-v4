@@ -145,6 +145,18 @@ declare global {
         readGameConfigXml: (installationPath: string) => Promise<string | null>;
         /** Write installation GameConfig.xml file content. */
         writeGameConfigXml: (installationPath: string, xmlContent: string) => Promise<{ success: boolean; error?: string }>;
+        /** List entries in an installation directory (relative path). */
+        listInstallationFiles: (installationPath: string, relativeDir?: string) => Promise<Array<{
+          name: string;
+          relativePath: string;
+          isDirectory: boolean;
+          sizeBytes: number;
+          modifiedMs: number;
+        }>>;
+        /** Read a text file from an installation directory. */
+        readInstallationFile: (installationPath: string, relativePath: string) => Promise<{ content: string; error?: string }>;
+        /** Write a text file in an installation directory. */
+        writeInstallationFile: (installationPath: string, relativePath: string, content: string) => Promise<{ success: boolean; error?: string }>;
         /** Subscribe to game log events. Returns a cleanup function. */
         onLog: (cb: (data: { installationId: string; level: string; message: string }) => void) => () => void;
         /**

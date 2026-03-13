@@ -487,6 +487,67 @@ function writeGameConfigXml(installationPath: string, xmlContent: string): { suc
   return { success: true };
 }
 
+function resolveInstallationTargetPath(installationPath: string, relativePath: string): string {
+  const root = path.resolve(installationPath);
+  const target = path.resolve(path.join(root, relativePath));
+  if (target !== root && !target.startsWith(`${root}${path.sep}`)) {
+    throw new Error('Invalid file path.');
+  }
+  return target;
+}
+
+function listInstallationEntries(
+  installationPath: string,
+  relativeDir = '',
+): Array<{ name: string; relativePath: string; isDirectory: boolean; sizeBytes: number; modifiedMs: number }> {
+  const dirPath = resolveInstallationTargetPath(installationPath, relativeDir || '.');
+  const stats = fs.statSync(dirPath);
+  if (!stats.isDirectory()) {
+    throw new Error('Target path is not a directory.');
+  }
+
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true }).map((entry) => {
+    const absoluteEntryPath = path.join(dirPath, entry.name);
+    const entryStat = fs.statSync(absoluteEntryPath);
+    const relativePath = path.relative(path.resolve(installationPath), absoluteEntryPath).split(path.sep).join('/');
+
+    return {
+      name: entry.name,
+      relativePath,
+      isDirectory: entry.isDirectory(),
+      sizeBytes: entry.isDirectory() ? 0 : entryStat.size,
+      modifiedMs: entryStat.mtimeMs,
+    };
+  });
+
+  entries.sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  return entries;
+}
+
+function readInstallationTextFile(installationPath: string, relativePath: string): string {
+  const targetPath = resolveInstallationTargetPath(installationPath, relativePath);
+  const stats = fs.statSync(targetPath);
+  if (!stats.isFile()) {
+    throw new Error('Target path is not a file.');
+  }
+  return fs.readFileSync(targetPath, 'utf8');
+}
+
+function writeInstallationTextFile(installationPath: string, relativePath: string, content: string): { success: boolean; error?: string } {
+  const targetPath = resolveInstallationTargetPath(installationPath, relativePath);
+  const stats = fs.statSync(targetPath);
+  if (!stats.isFile()) {
+    return { success: false, error: 'Target path is not a file.' };
+  }
+
+  fs.writeFileSync(targetPath, content, 'utf8');
+  return { success: true };
+}
+
 ipcMain.handle(IPC.GAME_SERVER_CFG_GET, (_event, installationPath: string, key: string) => {
   if (!installationPath || !key) return null;
   try {
@@ -540,6 +601,43 @@ ipcMain.handle(IPC.GAME_CONFIG_XML_SET, (_event, installationPath: string, xmlCo
     return writeGameConfigXml(installationPath, xmlContent);
   } catch (error) {
     return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.GAME_FILES_LIST, (_event, installationPath: string, relativeDir?: string) => {
+  if (!installationPath) return [];
+  try {
+    return listInstallationEntries(installationPath, relativeDir ?? '');
+  } catch (error) {
+    console.warn('[files] Failed to list entries:', { installationPath, relativeDir, error });
+    return [];
+  }
+});
+
+ipcMain.handle(IPC.GAME_FILE_READ, (_event, installationPath: string, relativePath: string) => {
+  if (!installationPath || !relativePath) return { content: '', error: 'installationPath and relativePath are required.' };
+  try {
+    const content = readInstallationTextFile(installationPath, relativePath);
+    return { content, error: undefined as string | undefined };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { content: '', error: message };
+  }
+});
+
+ipcMain.handle(IPC.GAME_FILE_WRITE, (_event, installationPath: string, relativePath: string, content: string) => {
+  if (!installationPath || !relativePath) {
+    return { success: false, error: 'installationPath and relativePath are required.' };
+  }
+  if (typeof content !== 'string') {
+    return { success: false, error: 'content must be a string.' };
+  }
+
+  try {
+    return writeInstallationTextFile(installationPath, relativePath, content);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, error: message };
   }
 });
 

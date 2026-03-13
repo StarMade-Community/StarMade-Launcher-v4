@@ -570,13 +570,6 @@ function getLogCategory(fileName: string): { id: string; label: string } {
     };
   }
 
-  if (lower === 'graphicsinfo.txt') {
-    return {
-      id: 'graphics-info',
-      label: 'Graphics Info (GraphicsInfo.txt)',
-    };
-  }
-
   if (lower.endsWith('.log')) {
     const normalizedPattern = lower.replace(/\d+/g, 'n');
     return {
@@ -601,6 +594,7 @@ export function listServerLogFiles(installationPath: string): ServerLogCatalog {
 
   for (const entry of fs.readdirSync(logsDir, { withFileTypes: true })) {
     if (!entry.isFile()) continue;
+    if (entry.name.toLowerCase() === 'graphicsinfo.txt') continue;
 
     const filePath = path.join(logsDir, entry.name);
     let stat: fs.Stats;
@@ -646,6 +640,14 @@ export function listServerLogFiles(installationPath: string): ServerLogCatalog {
         };
         return getIndex(a.fileName) - getIndex(b.fileName);
       });
+    } else if (category.id === 'server-rotated') {
+      category.files.sort((a, b) => {
+        const getIndex = (name: string) => {
+          const match = name.match(/^serverlog\.(\d+)\.log$/i);
+          return match ? Number.parseInt(match[1], 10) : Number.MAX_SAFE_INTEGER;
+        };
+        return getIndex(a.fileName) - getIndex(b.fileName);
+      });
     } else {
       category.files.sort((a, b) => b.modifiedMs - a.modifiedMs || a.fileName.localeCompare(b.fileName));
     }
@@ -656,7 +658,6 @@ export function listServerLogFiles(installationPath: string): ServerLogCatalog {
     'server-rotated': 1,
     'launcher-session': 2,
     'jvm-crash': 3,
-    'graphics-info': 4,
     other: 999,
   };
 

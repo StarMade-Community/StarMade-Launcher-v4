@@ -82,6 +82,12 @@ export const IPC = {
   GAME_CONFIG_XML_GET: 'game:config-xml-get',
   /** Renderer → Main (invoke): write installation GameConfig.xml content. */
   GAME_CONFIG_XML_SET: 'game:config-xml-set',
+  /** Renderer → Main (invoke): list files/directories inside an installation path. */
+  GAME_FILES_LIST: 'game:files-list',
+  /** Renderer → Main (invoke): read a text file from an installation path. */
+  GAME_FILE_READ: 'game:file-read',
+  /** Renderer → Main (invoke): write a text file to an installation path. */
+  GAME_FILE_WRITE: 'game:file-write',
   /**
    * Renderer → Main (invoke): read the `launcher-session.json` file written by
    * the game into an installation directory.  Returns the parsed object or

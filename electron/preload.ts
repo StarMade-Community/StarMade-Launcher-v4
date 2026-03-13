@@ -197,6 +197,23 @@ const launcherApi = {
     writeGameConfigXml: (installationPath: string, xmlContent: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC.GAME_CONFIG_XML_SET, installationPath, xmlContent),
 
+    /** List entries in an installation directory (relative path). */
+    listInstallationFiles: (installationPath: string, relativeDir?: string): Promise<Array<{
+      name: string;
+      relativePath: string;
+      isDirectory: boolean;
+      sizeBytes: number;
+      modifiedMs: number;
+    }>> => ipcRenderer.invoke(IPC.GAME_FILES_LIST, installationPath, relativeDir),
+
+    /** Read a text file from an installation directory. */
+    readInstallationFile: (installationPath: string, relativePath: string): Promise<{ content: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_FILE_READ, installationPath, relativePath),
+
+    /** Write a text file in an installation directory. */
+    writeInstallationFile: (installationPath: string, relativePath: string, content: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_FILE_WRITE, installationPath, relativePath, content),
+
     /**
      * Read the `launcher-session.json` file written by the game into the
      * installation directory.  Returns the parsed object or `null` when the

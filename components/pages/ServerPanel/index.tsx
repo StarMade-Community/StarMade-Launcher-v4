@@ -10,6 +10,7 @@ interface ServerPanelProps {
 }
 
 type ServerPanelTab = 'control' | 'logs' | 'configuration' | 'files' | 'database';
+type ConfigEditorTab = 'server-cfg' | 'game-config-xml';
 type LogFilter = 'errors' | 'warnings' | 'info' | 'debug';
 type DashboardWidgetId = 'status' | 'serverInfo' | 'connection' | 'players' | 'controls';
 type ServerActionId = 'start' | 'stop' | 'restart' | 'update';
@@ -33,6 +34,14 @@ interface LogCategory {
   id: string;
   label: string;
   files: LogFileItem[];
+}
+
+interface InstallationFileEntry {
+  name: string;
+  relativePath: string;
+  isDirectory: boolean;
+  sizeBytes: number;
+  modifiedMs: number;
 }
 
 interface DashboardGroup {
@@ -546,6 +555,7 @@ interface ServerActionDefinition {
 
 const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [activeTab, setActiveTab] = useState<ServerPanelTab>('control');
+  const [activeConfigTab, setActiveConfigTab] = useState<ConfigEditorTab>('server-cfg');
   const [activeLogFilters, setActiveLogFilters] = useState<LogFilter[]>([...LOG_FILTER_OPTIONS]);
   const [autoScroll, setAutoScroll] = useState(true);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -560,8 +570,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [configFields, setConfigFields] = useState<ServerConfigField[]>(SERVER_CONFIG_FIELDS);
   const [serverConfigValues, setServerConfigValues] = useState<Record<string, string>>(SERVER_CONFIG_DEFAULTS);
   const [configSearchTerm, setConfigSearchTerm] = useState('');
-  const [configCategoryFilter, setConfigCategoryFilter] = useState<'all' | ServerConfigCategory>('all');
+  const [configCategoryFilter, setConfigCategoryFilter] = useState<Set<ServerConfigCategory>>(new Set());
   const [isConfigLoading, setIsConfigLoading] = useState(false);
+  const [gameConfigXmlText, setGameConfigXmlText] = useState('');
+  const [gameConfigXmlSavedText, setGameConfigXmlSavedText] = useState('');
+  const [gameConfigLoadedServerId, setGameConfigLoadedServerId] = useState<string | null>(null);
+  const [isGameConfigLoading, setIsGameConfigLoading] = useState(false);
+  const [isGameConfigSaving, setIsGameConfigSaving] = useState(false);
+  const [gameConfigError, setGameConfigError] = useState<string | null>(null);
   const [savingConfigKey, setSavingConfigKey] = useState<string | null>(null);
   const [isSavingMaxPlayers, setIsSavingMaxPlayers] = useState(false);
   const [isSavingConnectionSettings, setIsSavingConnectionSettings] = useState(false);
@@ -569,10 +585,21 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [logPath, setLogPath] = useState<string | null>(null);
   const [logCategories, setLogCategories] = useState<LogCategory[]>([]);
   const [selectedLogRelativePath, setSelectedLogRelativePath] = useState<string | null>(null);
+  const [selectedLogPathByCategoryId, setSelectedLogPathByCategoryId] = useState<Record<string, string>>({});
   const [isLogListLoading, setIsLogListLoading] = useState(false);
   const [isLogFileLoading, setIsLogFileLoading] = useState(false);
   const [isLogFileTruncated, setIsLogFileTruncated] = useState(false);
   const [logLoadError, setLogLoadError] = useState<string | null>(null);
+  const [fileEntriesByDir, setFileEntriesByDir] = useState<Record<string, InstallationFileEntry[]>>({});
+  const [expandedFileDirs, setExpandedFileDirs] = useState<string[]>(['']);
+  const [openFileTabs, setOpenFileTabs] = useState<string[]>([]);
+  const [activeFileTabPath, setActiveFileTabPath] = useState<string | null>(null);
+  const [fileContentByPath, setFileContentByPath] = useState<Record<string, string>>({});
+  const [savedFileContentByPath, setSavedFileContentByPath] = useState<Record<string, string>>({});
+  const [isFileBrowserLoading, setIsFileBrowserLoading] = useState(false);
+  const [isFileEditorLoading, setIsFileEditorLoading] = useState(false);
+  const [isFileSaving, setIsFileSaving] = useState(false);
+  const [fileTabError, setFileTabError] = useState<string | null>(null);
   const [dashboardLayout, setDashboardLayout] = useState<DashboardLayout>(createDefaultDashboardLayout);
   const [dashboardLoaded, setDashboardLoaded] = useState(false);
   const [isLayoutEditMode, setIsLayoutEditMode] = useState(false);
@@ -635,16 +662,27 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     return logCategories.find((category) => category.id === selectedLogCategoryId)?.files ?? [];
   }, [logCategories, selectedLogCategoryId]);
 
+  const selectedLogCategory = useMemo(() => {
+    if (!selectedLogCategoryId) return null;
+    return logCategories.find((category) => category.id === selectedLogCategoryId) ?? null;
+  }, [logCategories, selectedLogCategoryId]);
+
   const selectedLogRelativePathRef = useRef<string | null>(null);
+  const selectedLogPathByCategoryRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
     selectedLogRelativePathRef.current = selectedLogRelativePath;
   }, [selectedLogRelativePath]);
 
+  useEffect(() => {
+    selectedLogPathByCategoryRef.current = selectedLogPathByCategoryId;
+  }, [selectedLogPathByCategoryId]);
+
   const reloadLogCatalog = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) {
       setLogCategories([]);
       setSelectedLogRelativePath(null);
+      setSelectedLogPathByCategoryId({});
       setLogPath(null);
       return;
     }
@@ -661,6 +699,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       const nextSelected = currentSelection && knownPaths.has(currentSelection)
         ? currentSelection
         : fallback;
+
+      const nextByCategory = { ...selectedLogPathByCategoryRef.current };
+      for (const category of catalog.categories) {
+        const currentForCategory = nextByCategory[category.id];
+        const inCategory = category.files.some((file) => file.relativePath === currentForCategory);
+        if (!inCategory && category.files[0]) {
+          nextByCategory[category.id] = category.files[0].relativePath;
+        }
+      }
+      setSelectedLogPathByCategoryId(nextByCategory);
+
       setSelectedLogRelativePath(nextSelected ?? null);
       setLogPath(nextSelected ? `logs/${nextSelected}` : null);
     } catch (error) {
@@ -711,8 +760,21 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setLogPath(null);
     setLogCategories([]);
     setSelectedLogRelativePath(null);
+    setSelectedLogPathByCategoryId({});
     setIsLogFileTruncated(false);
     setLogLoadError(null);
+    setActiveConfigTab('server-cfg');
+    setGameConfigXmlText('');
+    setGameConfigXmlSavedText('');
+    setGameConfigLoadedServerId(null);
+    setGameConfigError(null);
+    setFileEntriesByDir({});
+    setExpandedFileDirs(['']);
+    setOpenFileTabs([]);
+    setActiveFileTabPath(null);
+    setFileContentByPath({});
+    setSavedFileContentByPath({});
+    setFileTabError(null);
   }, [effectiveServer?.id]);
 
   useEffect(() => {
@@ -849,6 +911,152 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       cancelled = true;
     };
   }, [effectiveServer, hasGameApi]);
+
+  useEffect(() => {
+    if (activeConfigTab !== 'game-config-xml') return;
+    if (!effectiveServer || !hasGameApi) return;
+    if (gameConfigLoadedServerId === effectiveServer.id) return;
+
+    let cancelled = false;
+    setIsGameConfigLoading(true);
+    setGameConfigError(null);
+
+    const loadGameConfigXml = async () => {
+      try {
+        const content = await window.launcher.game.readGameConfigXml(effectiveServer.path);
+        if (cancelled) return;
+
+        const next = content ?? '';
+        setGameConfigXmlText(next);
+        setGameConfigXmlSavedText(next);
+        setGameConfigLoadedServerId(effectiveServer.id);
+      } catch (error) {
+        if (cancelled) return;
+        setGameConfigError(`Failed to load GameConfig.xml: ${String(error)}`);
+      } finally {
+        if (!cancelled) setIsGameConfigLoading(false);
+      }
+    };
+
+    void loadGameConfigXml();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConfigTab, effectiveServer, gameConfigLoadedServerId, hasGameApi]);
+
+  const loadFileDirectory = useCallback(async (relativeDir = '') => {
+    if (!effectiveServer || !hasGameApi) return;
+
+    setIsFileBrowserLoading(true);
+    try {
+      const entries = await window.launcher.game.listInstallationFiles(effectiveServer.path, relativeDir);
+      setFileEntriesByDir((prev) => ({ ...prev, [relativeDir]: entries }));
+    } catch (error) {
+      setFileTabError(`Failed to list files in ${relativeDir || '/'}: ${String(error)}`);
+    } finally {
+      setIsFileBrowserLoading(false);
+    }
+  }, [effectiveServer, hasGameApi]);
+
+  useEffect(() => {
+    if (activeTab !== 'files') return;
+    if (!effectiveServer || !hasGameApi) return;
+    if (fileEntriesByDir['']) return;
+    void loadFileDirectory('');
+  }, [activeTab, effectiveServer, fileEntriesByDir, hasGameApi, loadFileDirectory]);
+
+  const toggleFileDirectory = useCallback((relativeDir: string) => {
+    setExpandedFileDirs((prev) => {
+      const isExpanded = prev.includes(relativeDir);
+      if (isExpanded) {
+        return prev.filter((dir) => dir !== relativeDir);
+      }
+      return [...prev, relativeDir];
+    });
+
+    if (!fileEntriesByDir[relativeDir]) {
+      void loadFileDirectory(relativeDir);
+    }
+  }, [fileEntriesByDir, loadFileDirectory]);
+
+  const openFileInTab = useCallback(async (relativePath: string) => {
+    if (!effectiveServer || !hasGameApi) return;
+
+    setOpenFileTabs((prev) => (prev.includes(relativePath) ? prev : [...prev, relativePath]));
+    setActiveFileTabPath(relativePath);
+
+    if (relativePath in fileContentByPath) return;
+
+    setIsFileEditorLoading(true);
+    setFileTabError(null);
+    try {
+      const payload = await window.launcher.game.readInstallationFile(effectiveServer.path, relativePath);
+      if (payload.error) {
+        setFileTabError(`Failed to open ${relativePath}: ${payload.error}`);
+        return;
+      }
+
+      setFileContentByPath((prev) => ({ ...prev, [relativePath]: payload.content }));
+      setSavedFileContentByPath((prev) => ({ ...prev, [relativePath]: payload.content }));
+    } catch (error) {
+      setFileTabError(`Failed to open ${relativePath}: ${String(error)}`);
+    } finally {
+      setIsFileEditorLoading(false);
+    }
+  }, [effectiveServer, fileContentByPath, hasGameApi]);
+
+  const closeFileTab = useCallback((relativePath: string) => {
+    setOpenFileTabs((prev) => {
+      const next = prev.filter((path) => path !== relativePath);
+      setActiveFileTabPath((current) => {
+        if (current !== relativePath) return current;
+        return next.length > 0 ? next[next.length - 1] : null;
+      });
+      return next;
+    });
+  }, []);
+
+  const reloadActiveFileTab = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || !activeFileTabPath) return;
+
+    setIsFileEditorLoading(true);
+    setFileTabError(null);
+    try {
+      const payload = await window.launcher.game.readInstallationFile(effectiveServer.path, activeFileTabPath);
+      if (payload.error) {
+        setFileTabError(`Failed to reload ${activeFileTabPath}: ${payload.error}`);
+        return;
+      }
+      setFileContentByPath((prev) => ({ ...prev, [activeFileTabPath]: payload.content }));
+      setSavedFileContentByPath((prev) => ({ ...prev, [activeFileTabPath]: payload.content }));
+    } catch (error) {
+      setFileTabError(`Failed to reload ${activeFileTabPath}: ${String(error)}`);
+    } finally {
+      setIsFileEditorLoading(false);
+    }
+  }, [activeFileTabPath, effectiveServer, hasGameApi]);
+
+  const saveActiveFileTab = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || !activeFileTabPath || isFileSaving) return;
+
+    setIsFileSaving(true);
+    setFileTabError(null);
+    try {
+      const content = fileContentByPath[activeFileTabPath] ?? '';
+      const result = await window.launcher.game.writeInstallationFile(effectiveServer.path, activeFileTabPath, content);
+      if (!result.success) {
+        setFileTabError(result.error ?? `Failed to save ${activeFileTabPath}.`);
+        return;
+      }
+
+      setSavedFileContentByPath((prev) => ({ ...prev, [activeFileTabPath]: content }));
+    } catch (error) {
+      setFileTabError(`Failed to save ${activeFileTabPath}: ${String(error)}`);
+    } finally {
+      setIsFileSaving(false);
+    }
+  }, [activeFileTabPath, effectiveServer, fileContentByPath, hasGameApi, isFileSaving]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1105,6 +1313,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     return false;
   });
+
+  const activeFileTabContent = activeFileTabPath ? (fileContentByPath[activeFileTabPath] ?? '') : '';
+  const activeFileTabSavedContent = activeFileTabPath ? (savedFileContentByPath[activeFileTabPath] ?? '') : '';
+  const activeFileTabHasUnsavedChanges = activeFileTabPath
+    ? activeFileTabContent !== activeFileTabSavedContent
+    : false;
 
   const areAllLogFiltersEnabled = activeLogFilters.length === LOG_FILTER_OPTIONS.length;
 
@@ -1430,6 +1644,21 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const handleClearLogs = () => setLogs([]);
 
+  const handleClearCategoryLogs = useCallback((categoryId: string) => {
+    if (selectedLogCategoryId === categoryId) {
+      setLogs([]);
+      setIsLogFileTruncated(false);
+    }
+
+    // Forget prior per-category tab selection so reopening defaults to latest.
+    setSelectedLogPathByCategoryId((prev) => {
+      if (!(categoryId in prev)) return prev;
+      const next = { ...prev };
+      delete next[categoryId];
+      return next;
+    });
+  }, [selectedLogCategoryId]);
+
   const handleOpenLogFolder = async () => {
     if (!effectiveServer || !hasGameApi) return;
     await window.launcher.game.openLogLocation(effectiveServer.path).catch((error) => {
@@ -1452,6 +1681,45 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
+
+  const reloadGameConfigXml = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi) return;
+
+    setIsGameConfigLoading(true);
+    setGameConfigError(null);
+    try {
+      const content = await window.launcher.game.readGameConfigXml(effectiveServer.path);
+      const next = content ?? '';
+      setGameConfigXmlText(next);
+      setGameConfigXmlSavedText(next);
+      setGameConfigLoadedServerId(effectiveServer.id);
+    } catch (error) {
+      setGameConfigError(`Failed to reload GameConfig.xml: ${String(error)}`);
+    } finally {
+      setIsGameConfigLoading(false);
+    }
+  }, [effectiveServer, hasGameApi]);
+
+  const saveGameConfigXml = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || isGameConfigSaving) return;
+
+    setIsGameConfigSaving(true);
+    setGameConfigError(null);
+    try {
+      const result = await window.launcher.game.writeGameConfigXml(effectiveServer.path, gameConfigXmlText);
+      if (!result.success) {
+        setGameConfigError(result.error ?? 'Failed to save GameConfig.xml.');
+        return;
+      }
+
+      setGameConfigXmlSavedText(gameConfigXmlText);
+      setGameConfigLoadedServerId(effectiveServer.id);
+    } catch (error) {
+      setGameConfigError(`Failed to save GameConfig.xml: ${String(error)}`);
+    } finally {
+      setIsGameConfigSaving(false);
+    }
+  }, [effectiveServer, gameConfigXmlText, hasGameApi, isGameConfigSaving]);
 
   const persistMaxPlayers = useCallback(async () => {
     if (!effectiveServer || !hasGameApi || isSavingMaxPlayers) return;
@@ -2387,42 +2655,67 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             <p className="text-sm text-gray-400">{isLogListLoading ? 'Scanning logs folder...' : 'No log files found in logs/.'}</p>
           ) : (
             <>
-              <div className="mb-3 flex flex-wrap gap-2">
+              <div className="mb-3 flex flex-wrap items-center gap-2">
                 {logCategories.map((category) => {
                   const isSelectedCategory = selectedLogCategoryId === category.id;
                   return (
-                    <button
-                      key={category.id}
-                      onClick={() => {
-                        const firstFile = category.files[0];
-                        if (firstFile) setSelectedLogRelativePath(firstFile.relativePath);
-                      }}
-                      className={`rounded border px-2 py-1 text-xs font-semibold uppercase tracking-wider transition-colors ${
-                        isSelectedCategory
-                          ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white'
-                          : 'border-white/15 bg-black/30 text-gray-300 hover:bg-black/45'
-                      }`}
-                    >
-                      {category.label} ({category.files.length})
-                    </button>
+                    <div key={category.id} className="inline-flex items-center gap-1">
+                      <button
+                        onClick={() => {
+                          const remembered = selectedLogPathByCategoryId[category.id];
+                          const rememberedInCategory = category.files.find((file) => file.relativePath === remembered);
+                          const next = rememberedInCategory?.relativePath ?? category.files[0]?.relativePath ?? null;
+                          setSelectedLogRelativePath(next);
+                        }}
+                        className={`rounded border px-2 py-1 text-xs font-semibold uppercase tracking-wider transition-colors ${
+                          isSelectedCategory
+                            ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white'
+                            : 'border-white/15 bg-black/30 text-gray-300 hover:bg-black/45'
+                        }`}
+                      >
+                        {category.label} ({category.files.length})
+                      </button>
+                      <button
+                        onClick={() => handleClearCategoryLogs(category.id)}
+                        className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-300 hover:bg-black/45"
+                        title={`Clear ${category.label} view`}
+                      >
+                        Clear
+                      </button>
+                    </div>
                   );
                 })}
               </div>
 
-              <label className="flex flex-col gap-1 text-sm text-gray-300 md:flex-row md:items-center">
-                <span className="w-24 text-xs font-semibold uppercase tracking-wider text-gray-400">File</span>
-                <select
-                  value={selectedLogRelativePath ?? ''}
-                  onChange={(event) => setSelectedLogRelativePath(event.target.value || null)}
-                  className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-gray-100"
-                >
-                  {selectedLogCategoryFiles.map((file) => (
-                    <option key={file.relativePath} value={file.relativePath}>
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                  {selectedLogCategory ? `${selectedLogCategory.label} Files` : 'Files'}
+                </span>
+                {selectedLogCategoryFiles.map((file) => {
+                  const isActiveFile = selectedLogRelativePath === file.relativePath;
+                  return (
+                    <button
+                      key={file.relativePath}
+                      onClick={() => {
+                        setSelectedLogRelativePath(file.relativePath);
+                        if (selectedLogCategoryId) {
+                          setSelectedLogPathByCategoryId((prev) => ({
+                            ...prev,
+                            [selectedLogCategoryId]: file.relativePath,
+                          }));
+                        }
+                      }}
+                      className={`rounded border px-2 py-1 text-xs font-semibold transition-colors ${
+                        isActiveFile
+                          ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white'
+                          : 'border-white/15 bg-black/30 text-gray-300 hover:bg-black/45'
+                      }`}
+                    >
                       {file.fileName}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                    </button>
+                  );
+                })}
+              </div>
 
               {selectedLogRelativePath && (() => {
                 const selectedFile = selectedLogCategoryFiles.find((file) => file.relativePath === selectedLogRelativePath)
@@ -2484,8 +2777,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     </div>
   );
 
-  const renderConfiguration = () => (
-    <div className="flex h-full min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
+  const renderServerCfgConfiguration = () => (
+    <>
       <div className="border-b border-white/10 px-4 py-3">
         <h3 className="font-display text-lg font-bold uppercase tracking-wider text-white">Server Configuration</h3>
         <p className="mt-1 text-sm text-gray-400">Values are read from and written to server.cfg in this installation.</p>
@@ -2499,9 +2792,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           />
           <div className="flex flex-wrap gap-2">
             <button
-              onClick={() => setConfigCategoryFilter('all')}
+              onClick={() => setConfigCategoryFilter(new Set())}
               className={`rounded border px-3 py-2 text-xs font-semibold uppercase tracking-wider transition-colors ${
-                configCategoryFilter === 'all'
+                configCategoryFilter.size === 0
                   ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white'
                   : 'border-white/15 bg-black/30 text-gray-200 hover:bg-black/45'
               }`}
@@ -2511,9 +2804,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             {CONFIG_CATEGORY_ORDER.map((category) => (
               <button
                 key={category}
-                onClick={() => setConfigCategoryFilter(category)}
+                onClick={() => setConfigCategoryFilter((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(category)) next.delete(category);
+                  else next.add(category);
+                  return next;
+                })}
                 className={`rounded border px-3 py-2 text-xs font-semibold uppercase tracking-wider transition-colors ${
-                  configCategoryFilter === category
+                  configCategoryFilter.has(category)
                     ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white'
                     : 'border-white/15 bg-black/30 text-gray-200 hover:bg-black/45'
                 }`}
@@ -2533,7 +2831,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             {CONFIG_CATEGORY_ORDER.map((category) => {
               const categoryFields = configFields.filter((field) => {
                 if (field.category !== category) return false;
-                if (configCategoryFilter !== 'all' && configCategoryFilter !== category) return false;
+                if (configCategoryFilter.size > 0 && !configCategoryFilter.has(category)) return false;
 
                 const needle = configSearchTerm.trim().toLowerCase();
                 if (!needle) return true;
@@ -2551,78 +2849,78 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 <section key={category} className="space-y-3">
                   <h4 className="text-sm font-semibold uppercase tracking-wider text-gray-300">{CONFIG_CATEGORY_LABELS[category]}</h4>
                   {categoryFields.map((field) => {
-              const rawValue = serverConfigValues[field.key] ?? field.defaultValue;
-              const isSavingThisField = savingConfigKey === field.key;
-              const validation = getConfigFieldValidation(field, rawValue);
-              const fieldIsInvalid = !!validation.error;
+                    const rawValue = serverConfigValues[field.key] ?? field.defaultValue;
+                    const isSavingThisField = savingConfigKey === field.key;
+                    const validation = getConfigFieldValidation(field, rawValue);
+                    const fieldIsInvalid = !!validation.error;
 
-              return (
-                <div key={field.key} className="rounded-md border border-white/10 bg-black/20 p-3">
-                  <div className="mb-2">
-                    <p className="text-sm font-semibold text-white">{field.label}</p>
-                    <p className="text-xs text-gray-400">{field.description}</p>
-                    <p className="mt-1 text-[11px] font-mono uppercase tracking-wide text-gray-500">{field.key}</p>
-                  </div>
+                    return (
+                      <div key={field.key} className="rounded-md border border-white/10 bg-black/20 p-3">
+                        <div className="mb-2">
+                          <p className="text-sm font-semibold text-white">{field.label}</p>
+                          <p className="text-xs text-gray-400">{field.description}</p>
+                          <p className="mt-1 text-[11px] font-mono uppercase tracking-wide text-gray-500">{field.key}</p>
+                        </div>
 
-                  {field.type === 'boolean' ? (
-                    <label className="inline-flex items-center gap-2 text-sm text-gray-300">
-                      <input
-                        type="checkbox"
-                        checked={parseCfgBoolean(rawValue, field.defaultValue === 'true')}
-                        onChange={(event) => {
-                          const next = String(event.target.checked);
-                          setServerConfigValues((prev) => ({ ...prev, [field.key]: next }));
-                          void saveConfigField(field, next);
-                        }}
-                        disabled={!!savingConfigKey || fieldIsInvalid}
-                        className="h-4 w-4 rounded"
-                      />
-                      Enabled
-                    </label>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <input
-                        type={field.type === 'number' ? 'number' : 'text'}
-                        min={field.type === 'number' ? field.min : undefined}
-                        max={field.type === 'number' ? field.max : undefined}
-                        value={rawValue}
-                        onChange={(event) => {
-                          const next = event.target.value;
-                          setServerConfigValues((prev) => ({ ...prev, [field.key]: next }));
-                        }}
-                        onBlur={() => { void saveConfigField(field); }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault();
-                            void saveConfigField(field);
-                          }
-                        }}
-                        disabled={!!savingConfigKey}
-                        className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-gray-200"
-                      />
-                      <button
-                        onClick={() => { void saveConfigField(field); }}
-                        disabled={!!savingConfigKey || fieldIsInvalid}
-                        className="rounded-md border border-white/15 bg-black/30 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {isSavingThisField ? 'Saving...' : 'Save'}
-                      </button>
-                    </div>
-                  )}
+                        {field.type === 'boolean' ? (
+                          <label className="inline-flex items-center gap-2 text-sm text-gray-300">
+                            <input
+                              type="checkbox"
+                              checked={parseCfgBoolean(rawValue, field.defaultValue === 'true')}
+                              onChange={(event) => {
+                                const next = String(event.target.checked);
+                                setServerConfigValues((prev) => ({ ...prev, [field.key]: next }));
+                                void saveConfigField(field, next);
+                              }}
+                              disabled={!!savingConfigKey || fieldIsInvalid}
+                              className="h-4 w-4 rounded"
+                            />
+                            Enabled
+                          </label>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type={field.type === 'number' ? 'number' : 'text'}
+                              min={field.type === 'number' ? field.min : undefined}
+                              max={field.type === 'number' ? field.max : undefined}
+                              value={rawValue}
+                              onChange={(event) => {
+                                const next = event.target.value;
+                                setServerConfigValues((prev) => ({ ...prev, [field.key]: next }));
+                              }}
+                              onBlur={() => { void saveConfigField(field); }}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  event.preventDefault();
+                                  void saveConfigField(field);
+                                }
+                              }}
+                              disabled={!!savingConfigKey}
+                              className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-gray-200"
+                            />
+                            <button
+                              onClick={() => { void saveConfigField(field); }}
+                              disabled={!!savingConfigKey || fieldIsInvalid}
+                              className="rounded-md border border-white/15 bg-black/30 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {isSavingThisField ? 'Saving...' : 'Save'}
+                            </button>
+                          </div>
+                        )}
 
-                  {(validation.error || validation.warning || field.guidance) && (
-                    <p className={`mt-2 text-xs ${
-                      validation.error
-                        ? 'text-red-300'
-                        : validation.warning
-                          ? 'text-amber-300'
-                          : 'text-gray-500'
-                    }`}>
-                      {validation.error ?? validation.warning ?? field.guidance}
-                    </p>
-                  )}
-                </div>
-              );
+                        {(validation.error || validation.warning || field.guidance) && (
+                          <p className={`mt-2 text-xs ${
+                            validation.error
+                              ? 'text-red-300'
+                              : validation.warning
+                                ? 'text-amber-300'
+                                : 'text-gray-500'
+                          }`}>
+                            {validation.error ?? validation.warning ?? field.guidance}
+                          </p>
+                        )}
+                      </div>
+                    );
                   })}
                 </section>
               );
@@ -2630,7 +2928,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             {CONFIG_CATEGORY_ORDER.every((category) => {
               const categoryFields = configFields.filter((field) => {
                 if (field.category !== category) return false;
-                if (configCategoryFilter !== 'all' && configCategoryFilter !== category) return false;
+                if (configCategoryFilter.size > 0 && !configCategoryFilter.has(category)) return false;
                 const needle = configSearchTerm.trim().toLowerCase();
                 if (!needle) return true;
                 return (
@@ -2648,6 +2946,247 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           </div>
         )}
       </div>
+    </>
+  );
+
+  const renderGameConfigXmlConfiguration = () => {
+    const hasUnsavedChanges = gameConfigXmlText !== gameConfigXmlSavedText;
+
+    return (
+      <>
+        <div className="border-b border-white/10 px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="font-display text-lg font-bold uppercase tracking-wider text-white">GameConfig.xml</h3>
+              <p className="mt-1 text-sm text-gray-400">Edit raw XML for game-wide configuration values.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => { void reloadGameConfigXml(); }}
+                disabled={!effectiveServer || !hasGameApi || isGameConfigLoading || isGameConfigSaving}
+                className="rounded-md border border-white/15 bg-black/30 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Reload
+              </button>
+              <button
+                onClick={() => { void saveGameConfigXml(); }}
+                disabled={!effectiveServer || !hasGameApi || isGameConfigLoading || isGameConfigSaving || !hasUnsavedChanges}
+                className="rounded-md bg-starmade-accent px-3 py-2 text-xs font-semibold uppercase tracking-wider text-white hover:bg-starmade-accent/80 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isGameConfigSaving ? 'Saving...' : 'Save XML'}
+              </button>
+            </div>
+          </div>
+          {gameConfigError && (
+            <p className="mt-2 text-sm text-red-300">{gameConfigError}</p>
+          )}
+          {!gameConfigError && (
+            <p className="mt-2 text-xs text-gray-500">
+              {hasUnsavedChanges ? 'Unsaved changes.' : 'No unsaved changes.'}
+            </p>
+          )}
+        </div>
+
+        <div className="min-h-0 flex-1 p-4">
+          {isGameConfigLoading ? (
+            <p className="text-sm text-gray-400">Loading GameConfig.xml...</p>
+          ) : (
+            <textarea
+              value={gameConfigXmlText}
+              onChange={(event) => setGameConfigXmlText(event.target.value)}
+              spellCheck={false}
+              className="h-full w-full resize-none rounded-md border border-white/15 bg-black/40 p-3 font-mono text-xs leading-5 text-gray-200 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+            />
+          )}
+        </div>
+      </>
+    );
+  };
+
+  const renderConfiguration = () => (
+    <div className="flex h-full min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
+      <div className="border-b border-white/10 px-4 py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setActiveConfigTab('server-cfg')}
+            className={`rounded-md border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
+              activeConfigTab === 'server-cfg'
+                ? 'border-starmade-accent bg-starmade-accent/20 text-white'
+                : 'border-white/15 bg-black/25 text-gray-300 hover:bg-black/40'
+            }`}
+          >
+            server.cfg
+          </button>
+          <button
+            onClick={() => setActiveConfigTab('game-config-xml')}
+            className={`rounded-md border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
+              activeConfigTab === 'game-config-xml'
+                ? 'border-starmade-accent bg-starmade-accent/20 text-white'
+                : 'border-white/15 bg-black/25 text-gray-300 hover:bg-black/40'
+            }`}
+          >
+            GameConfig.xml
+          </button>
+        </div>
+      </div>
+
+      {activeConfigTab === 'server-cfg' ? renderServerCfgConfiguration() : renderGameConfigXmlConfiguration()}
+    </div>
+  );
+
+  const renderFileTree = (relativeDir: string, depth = 0): React.ReactNode => {
+    const entries = fileEntriesByDir[relativeDir] ?? [];
+    if (entries.length === 0) {
+      return depth === 0 ? <p className="px-2 py-1 text-xs text-gray-500">No files found.</p> : null;
+    }
+
+    return entries.map((entry) => {
+      const isDirExpanded = expandedFileDirs.includes(entry.relativePath);
+      const isTabOpen = openFileTabs.includes(entry.relativePath);
+
+      if (entry.isDirectory) {
+        return (
+          <div key={entry.relativePath}>
+            <button
+              onClick={() => toggleFileDirectory(entry.relativePath)}
+              className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm text-gray-200 hover:bg-white/5"
+              style={{ paddingLeft: `${8 + (depth * 14)}px` }}
+            >
+              <span className="w-3 text-xs text-gray-400">{isDirExpanded ? 'v' : '>'}</span>
+              <span className="font-semibold text-gray-300">{entry.name}/</span>
+            </button>
+            {isDirExpanded && (
+              <div>{renderFileTree(entry.relativePath, depth + 1)}</div>
+            )}
+          </div>
+        );
+      }
+
+      return (
+        <button
+          key={entry.relativePath}
+          onClick={() => { void openFileInTab(entry.relativePath); }}
+          className={`flex w-full items-center rounded px-2 py-1 text-left text-sm transition-colors ${
+            activeFileTabPath === entry.relativePath
+              ? 'bg-starmade-accent/20 text-white'
+              : 'text-gray-300 hover:bg-white/5'
+          }`}
+          style={{ paddingLeft: `${22 + (depth * 14)}px` }}
+        >
+          <span className="truncate">{entry.name}</span>
+          {isTabOpen && <span className="ml-2 text-[10px] uppercase tracking-wider text-gray-500">Open</span>}
+        </button>
+      );
+    });
+  };
+
+  const renderFilesTab = () => (
+    <div className="grid h-full min-h-0 grid-cols-1 gap-3 xl:grid-cols-[320px_1fr]">
+      <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
+        <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+          <div>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">Server Files</h3>
+            <p className="text-xs text-gray-500">Browse and open files from this server install.</p>
+          </div>
+          <button
+            onClick={() => { void loadFileDirectory(''); }}
+            disabled={isFileBrowserLoading || !effectiveServer}
+            className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isFileBrowserLoading ? 'Loading...' : 'Refresh'}
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          {renderFileTree('')}
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
+        <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+          <div>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">Manual File Editor</h3>
+            <p className="text-xs text-gray-500">Use Configuration tab for structured editing, or edit raw files here.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { void reloadActiveFileTab(); }}
+              disabled={!activeFileTabPath || isFileEditorLoading || isFileSaving}
+              className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Reload
+            </button>
+            <button
+              onClick={() => { void saveActiveFileTab(); }}
+              disabled={!activeFileTabPath || isFileEditorLoading || isFileSaving || !activeFileTabHasUnsavedChanges}
+              className="rounded bg-starmade-accent px-3 py-1 text-xs font-semibold uppercase tracking-wider text-white hover:bg-starmade-accent/80 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isFileSaving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </div>
+
+        <div className="border-b border-white/10 px-2 py-1">
+          <div className="flex flex-wrap items-center gap-1">
+            {openFileTabs.length === 0 ? (
+              <p className="px-2 py-1 text-xs text-gray-500">Open a file from the browser to begin editing.</p>
+            ) : (
+              openFileTabs.map((tabPath) => {
+                const tabFileName = tabPath.split('/').pop() || tabPath;
+                const tabHasUnsavedChanges = (fileContentByPath[tabPath] ?? '') !== (savedFileContentByPath[tabPath] ?? '');
+                const isActive = activeFileTabPath === tabPath;
+
+                return (
+                  <div key={tabPath} className={`inline-flex items-center rounded border ${
+                    isActive
+                      ? 'border-starmade-accent/40 bg-starmade-accent/20'
+                      : 'border-white/15 bg-black/25'
+                  }`}>
+                    <button
+                      onClick={() => setActiveFileTabPath(tabPath)}
+                      className="px-2 py-1 text-xs text-gray-200"
+                    >
+                      {tabFileName}{tabHasUnsavedChanges ? ' *' : ''}
+                    </button>
+                    <button
+                      onClick={() => closeFileTab(tabPath)}
+                      className="px-2 py-1 text-xs text-gray-400 hover:text-white"
+                      title="Close tab"
+                    >
+                      x
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {fileTabError && (
+          <div className="border-b border-red-500/30 bg-red-950/20 px-3 py-2 text-sm text-red-300">
+            {fileTabError}
+          </div>
+        )}
+
+        <div className="min-h-0 flex-1 p-3">
+          {!activeFileTabPath ? (
+            <div className="flex h-full items-center justify-center rounded-md border border-dashed border-white/15 bg-black/20 p-6 text-center text-sm text-gray-400">
+              Open a file from the left pane. For guided settings, use the Configuration tab.
+            </div>
+          ) : isFileEditorLoading ? (
+            <p className="text-sm text-gray-400">Loading {activeFileTabPath}...</p>
+          ) : (
+            <textarea
+              value={activeFileTabContent}
+              onChange={(event) => {
+                const next = event.target.value;
+                setFileContentByPath((prev) => ({ ...prev, [activeFileTabPath]: next }));
+              }}
+              spellCheck={false}
+              className="h-full w-full resize-none rounded-md border border-white/15 bg-black/40 p-3 font-mono text-xs leading-5 text-gray-200 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+            />
+          )}
+        </div>
+      </div>
     </div>
   );
 
@@ -2664,12 +3203,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     if (activeTab === 'control') return renderControlPanel();
     if (activeTab === 'logs') return renderLogs();
     if (activeTab === 'configuration') return renderConfiguration();
-    if (activeTab === 'files') {
-      return renderPlaceholderTab(
-        'Files',
-        'Server file browser placeholder. We will hook this tab to the server directory tree in a later pass.'
-      );
-    }
+    if (activeTab === 'files') return renderFilesTab();
     return renderPlaceholderTab(
       'Database',
       'Database tools placeholder. This area is reserved for universe/player data operations later.'
