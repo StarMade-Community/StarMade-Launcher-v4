@@ -21,6 +21,8 @@ import type { UpdateInfo } from './updater.js';
 import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from './updater.js';
 import { loginWithPassword, refreshAccessToken, registerAccount, logoutAccount, getAuthStatus, getAccessTokenForLaunch } from './auth.js';
 import { isRunningOnWayland } from './wayland-detect.js';
+import { isRunningAsAppImage } from './appimage-detect.js';
+import { registerAppImageDesktopIntegration } from './desktop-integration.js';
 import { parseVersionTxt } from './legacy.js';
 
 // ─── ES Module compatibility ─────────────────────────────────────────────────
@@ -767,6 +769,25 @@ app.whenReady().then(() => {
   buildMenu();
   createWindow();
   runStartupUpdateCheck();
+
+  // On Linux AppImage builds, re-register the launcher's icon and .desktop
+  // entry every time the app starts.  This repairs the icon in file managers
+  // after an in-place auto-update has replaced the AppImage binary on disk
+  // (which causes hash-based integration tools like appimaged/AppImageLauncher
+  // to orphan their old icon entries).
+  //
+  // process.env.APPIMAGE is set by the AppImage runtime to the .AppImage file
+  // path and is the authoritative source.  The app.getPath('exe') fallback
+  // covers the rare edge case where the env var was stripped by the launching
+  // environment (see appimage-detect.ts for details on how the AppImage check
+  // itself handles this).
+  if (process.platform === 'linux' && app.isPackaged &&
+      isRunningAsAppImage(process.env, app.getPath('exe'))) {
+    registerAppImageDesktopIntegration({
+      appImagePath:  process.env.APPIMAGE || app.getPath('exe'),
+      resourcesPath: process.resourcesPath,
+    });
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
