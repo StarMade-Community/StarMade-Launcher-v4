@@ -101,19 +101,27 @@ const DefaultSettingsForm: React.FC<{ isServer: boolean }> = ({ isServer }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [storeKey]);
 
-    // Populate default Java paths from Electron on mount
+    // Populate default Java paths from Electron on mount.
+    // Only fill in paths for JREs that are actually installed — using
+    // getDefaultPaths() would write the *expected* bundled path to the store
+    // even before Java is downloaded, which then gets propagated to new
+    // installations as customJavaPath and causes a spawn ENOENT on launch.
     useEffect(() => {
         if (typeof window === 'undefined' || !window.launcher?.java) {
             return;
         }
-        window.launcher.java.getDefaultPaths().then((paths) => {
+        window.launcher.java.list().then((runtimes) => {
+            // r.version is always the major version number as a string (e.g. '8', '25')
+            // because parseJavaVersion normalises '1.8.0_xxx' to 8 before storage.
+            const bundled8  = runtimes.bundled.find(r => { const v = parseInt(r.version, 10); return v >= 8 && v < 9; });
+            const bundled25 = runtimes.bundled.find(r => parseInt(r.version, 10) >= 25);
             setSettings(prev => ({
                 ...prev,
-                javaPath8: prev.javaPath8 || paths.jre8Path,
-                javaPath25: prev.javaPath25 || paths.jre25Path,
+                javaPath8:  prev.javaPath8  || bundled8?.path  || '',
+                javaPath25: prev.javaPath25 || bundled25?.path || '',
             }));
         }).catch((error) => {
-            console.error('Failed to get default Java paths:', error);
+            console.error('Failed to list Java runtimes for default paths:', error);
         });
     }, []);
 
