@@ -2307,338 +2307,86 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       const fallback = createDefaultDashboardLayout();
 
       try {
-      const toggleEntriesByPath = new Map(gameConfigCommentToggleEntries.map((entry) => [entry.path, entry]));
-      const isPathInToggleGroup = (path: string) => {
-        for (const togglePath of toggleEntriesByPath.keys()) {
-          if (path === togglePath || path.startsWith(`${togglePath}/`)) return true;
-        }
-        return false;
-      };
+        let mapRaw: unknown = null;
 
-      const fieldMatchesNeedle = (field: GameConfigField): boolean => {
-        if (!needle) return true;
-        const value = (gameConfigValues[field.path] ?? gameConfigSavedValues[field.path] ?? '').toLowerCase();
-        return (
-          field.path.toLowerCase().includes(needle)
-          || field.label.toLowerCase().includes(needle)
-          || field.description.toLowerCase().includes(needle)
-          || value.includes(needle)
-        );
-      };
-
-      const filterListSectionByNeedle = (section: GameConfigListSection): GameConfigListSection | null => {
-        if (!needle) return section;
-
-        const sectionMetaMatch = (
-          section.key.toLowerCase().includes(needle)
-          || section.label.toLowerCase().includes(needle)
-          || section.columns.some((column) => (
-            column.label.toLowerCase().includes(needle) || column.key.toLowerCase().includes(needle)
-          ))
-        );
-        if (sectionMetaMatch) return section;
-
-        const rows = section.rows.filter((row) => section.columns.some((column) => {
-          const path = row.fieldPaths[column.key];
-          const value = (gameConfigValues[path] ?? gameConfigSavedValues[path] ?? '').toLowerCase();
-          return value.includes(needle) || path.toLowerCase().includes(needle);
-        }));
-
-        if (rows.length === 0) return null;
-        return { ...section, rows };
-      };
-
-      const gameConfigFieldsOutsideToggleGroups = gameConfigFields.filter((field) => !isPathInToggleGroup(field.path));
+        if (hasStoreApi) {
+          mapRaw = await window.launcher.store.get(DASHBOARD_STORE_KEY);
+        } else if (typeof window !== 'undefined') {
           const json = window.localStorage.getItem(DASHBOARD_STORE_KEY);
           mapRaw = json ? JSON.parse(json) : null;
         }
-          if (isPathInToggleGroup(section.key)) return false;
+
+        if (cancelled) return;
+
         if (!mapRaw || typeof mapRaw !== 'object' || Array.isArray(mapRaw)) {
-          return true;
+          setDashboardLayout(fallback);
+          setDashboardLoaded(true);
+          return;
         }
-        .map((section) => filterListSectionByNeedle(section))
-        .filter((section): section is GameConfigListSection => !!section);
+
+        const map = mapRaw as Record<string, unknown>;
+        const normalized = normalizeLayout(map[serverKey]);
+        setDashboardLayout(normalized);
+        setDashboardLoaded(true);
+      } catch (error) {
+        console.warn('[ServerPanel] Failed to load dashboard layout:', error);
+        if (!cancelled) {
+          setDashboardLayout(fallback);
+          setDashboardLoaded(true);
         }
       }
     };
-        if (!needle) return true;
-        const directMatch = (
-          entry.label.toLowerCase().includes(needle)
-          || entry.description.toLowerCase().includes(needle)
-          || entry.path.toLowerCase().includes(needle)
-        );
-        if (directMatch) return true;
 
-        const nestedFieldMatch = gameConfigFields.some((field) => (
-          field.path.startsWith(`${entry.path}/`) && fieldMatchesNeedle(field)
-        ));
-        if (nestedFieldMatch) return true;
+    setDashboardLoaded(false);
+    void loadLayout();
 
-        const nestedSectionMatch = gameConfigListSections.some((section) => (
-          section.key.startsWith(entry.path) && !!filterListSectionByNeedle(section)
-        ));
-        if (nestedSectionMatch) return true;
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveServer?.id, hasStoreApi]);
 
-        return false;
-      });
-
-      const gameConfigCategoryExtras: Partial<Record<string, React.ReactNode[]>> = {};
-      for (const entry of visibleCommentToggleEntries) {
-        const category = entry.category;
-        const checked = gameConfigCommentToggleStates[entry.id] ?? false;
-        const isSavingToggle = savingGameConfigToggleId === entry.id;
-        const isExpanded = checked && (gameConfigToggleExpanded[entry.id] ?? true);
-        const nestedFields = gameConfigFields
-          .filter((field) => field.path.startsWith(`${entry.path}/`))
-          .filter((field) => fieldMatchesNeedle(field));
-        const nestedSections = gameConfigListSections
-          .filter((section) => section.key.startsWith(entry.path))
-          .map((section) => filterListSectionByNeedle(section))
-          .filter((section): section is GameConfigListSection => !!section);
-
-        const nestedContent = !checked
-          ? null
-          : (
-            <div className="mt-3 space-y-3 rounded-md border border-white/10 bg-black/20 p-3">
-              {nestedFields.length === 0 && nestedSections.length === 0 ? (
-                <p className="text-xs text-gray-400">No nested settings match the current search/filter.</p>
-              ) : (
-                <>
-                  {nestedFields.map((field) => {
-                    const rawValue = gameConfigValues[field.path] ?? field.defaultValue;
-                    const validation = getGameConfigFieldValidation(field, rawValue);
-                    const isSavingThisField = savingGameConfigPath === field.path;
-
-                    return (
-                      <div key={field.path} className="rounded-md border border-white/10 bg-black/20 p-3">
-                        <div className="mb-2">
-                          <p className="text-sm font-semibold text-white">{field.label}</p>
-                          <p className="text-xs text-gray-400">{field.description}</p>
-                          <p className="mt-1 font-mono text-[11px] text-gray-500">{field.path}</p>
-                        </div>
-
-                        {field.type === 'boolean' ? (
-                          <label className="inline-flex items-center gap-2 text-sm text-gray-300">
-                            <input
-                              type="checkbox"
-                              checked={parseCfgBoolean(rawValue, field.defaultValue.toLowerCase() === 'true')}
-                              onChange={(event) => {
-                                const next = String(event.target.checked);
-                                setGameConfigValues((prev) => ({ ...prev, [field.path]: next }));
-                                void saveGameConfigField(field, next);
-                              }}
-                              disabled={!!savingGameConfigPath || !!savingGameConfigToggleId || !!validation.error}
-                              className="h-4 w-4 rounded"
-                            />
-                            Enabled
-                          </label>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <input
-                              type={field.type === 'number' ? 'number' : 'text'}
-                              min={field.type === 'number' ? field.min : undefined}
-                              max={field.type === 'number' ? field.max : undefined}
-                              value={rawValue}
-                              onChange={(event) => {
-                                const next = event.target.value;
-                                setGameConfigValues((prev) => ({ ...prev, [field.path]: next }));
-                              }}
-                              onBlur={() => { void saveGameConfigField(field); }}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter') {
-                                  event.preventDefault();
-                                  void saveGameConfigField(field);
-                                }
-                              }}
-                              disabled={!!savingGameConfigPath || !!savingGameConfigToggleId}
-                              className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-gray-200"
-                            />
-                            <button
-                              onClick={() => { void saveGameConfigField(field); }}
-                              disabled={!!savingGameConfigPath || !!savingGameConfigToggleId || !!validation.error}
-                              className="rounded-md border border-white/15 bg-black/30 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {isSavingThisField ? 'Saving...' : 'Save'}
-                            </button>
-                          </div>
-                        )}
-
-                        {(validation.error || validation.warning || field.guidance) && (
-                          <p className={`mt-2 text-xs ${validation.error ? 'text-red-300' : validation.warning ? 'text-amber-300' : 'text-gray-500'}`}>
-                            {validation.error ?? validation.warning ?? field.guidance}
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })}
-
-                  {nestedSections.map((section) => (
-                    <div key={section.key} className="rounded-md border border-white/10 bg-black/20 p-3">
-                      <div className="mb-2">
-                        <p className="text-sm font-semibold text-white">{section.label}</p>
-                        <p className="text-xs text-gray-400">{section.description}</p>
-                        <p className="mt-1 text-[11px] font-mono text-gray-500">{section.key}</p>
-                      </div>
-
-                      <div className="overflow-x-auto">
-                        <table className="min-w-full border-collapse text-sm">
-                          <thead>
-                            <tr>
-                              <th className="border-b border-white/10 px-2 py-2 text-left text-xs uppercase tracking-wider text-gray-400">#</th>
-                              {section.columns.map((column) => (
-                                <th key={`${section.key}-${column.key}`} className="border-b border-white/10 px-2 py-2 text-left text-xs uppercase tracking-wider text-gray-400">
-                                  {column.label}
-                                </th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {section.rows.map((row) => (
-                              <tr key={`${section.key}-row-${row.index}`}>
-                                <td className="border-b border-white/5 px-2 py-2 align-top text-xs text-gray-500">{row.index}</td>
-                                {section.columns.map((column) => {
-                                  const fieldPath = row.fieldPaths[column.key];
-                                  const rawValue = gameConfigValues[fieldPath] ?? '';
-                                  const explicitMeta = getGameConfigMetaForPath(gameConfigFieldMetaByPath, fieldPath);
-                                  const pseudoField: GameConfigField = {
-                                    path: fieldPath,
-                                    label: explicitMeta?.label ?? `${section.label} ${column.label}`,
-                                    description: explicitMeta?.description ?? `${section.key} row ${row.index}`,
-                                    category: explicitMeta?.category ?? section.category,
-                                    type: explicitMeta?.type ?? column.type,
-                                    defaultValue: gameConfigSavedValues[fieldPath] ?? rawValue,
-                                    min: explicitMeta?.min,
-                                    max: explicitMeta?.max,
-                                    guidance: explicitMeta?.guidance,
-                                    validation: explicitMeta?.validation,
-                                  };
-                                  const validation = getGameConfigFieldValidation(pseudoField, rawValue);
-                                  const isSavingThisField = savingGameConfigPath === fieldPath;
-
-                                  return (
-                                    <td key={fieldPath} className="border-b border-white/5 px-2 py-2 align-top">
-                                      <div className="flex min-w-[180px] items-center gap-2">
-                                        {column.type === 'boolean' ? (
-                                          <label className="inline-flex items-center gap-2 text-xs text-gray-300">
-                                            <input
-                                              type="checkbox"
-                                              checked={parseCfgBoolean(rawValue, false)}
-                                              onChange={(event) => {
-                                                const next = String(event.target.checked);
-                                                setGameConfigValues((prev) => ({ ...prev, [fieldPath]: next }));
-                                                void saveGameConfigField(pseudoField, next);
-                                              }}
-                                              disabled={!!savingGameConfigPath || !!savingGameConfigToggleId || !!validation.error}
-                                              className="h-4 w-4 rounded"
-                                            />
-                                            Enabled
-                                          </label>
-                                        ) : (
-                                          <>
-                                            <input
-                                              type={column.type === 'number' ? 'number' : 'text'}
-                                              value={rawValue}
-                                              onChange={(event) => {
-                                                const next = event.target.value;
-                                                setGameConfigValues((prev) => ({ ...prev, [fieldPath]: next }));
-                                              }}
-                                              onBlur={() => { void saveGameConfigField(pseudoField); }}
-                                              onKeyDown={(event) => {
-                                                if (event.key === 'Enter') {
-                                                  event.preventDefault();
-                                                  void saveGameConfigField(pseudoField);
-                                                }
-                                              }}
-                                              disabled={!!savingGameConfigPath || !!savingGameConfigToggleId}
-                                              className="w-full rounded-md border border-white/15 bg-black/30 px-2 py-1.5 text-xs text-gray-200"
-                                            />
-                                            <button
-                                              onClick={() => { void saveGameConfigField(pseudoField); }}
-                                              disabled={!!savingGameConfigPath || !!savingGameConfigToggleId || !!validation.error}
-                                              className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
-                                            >
-                                              {isSavingThisField ? 'Saving...' : 'Save'}
-                                            </button>
-                                          </>
-                                        )}
-                                      </div>
-                                      {(validation.error || validation.warning) && (
-                                        <p className={`mt-1 text-[10px] ${validation.error ? 'text-red-300' : 'text-amber-300'}`}>
-                                          {validation.error ?? validation.warning}
-                                        </p>
-                                      )}
-                                    </td>
-                                  );
-                                })}
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  ))}
-                </>
-              )}
-            </div>
-          );
-
-        const group = (
-          <div key={entry.id} className="rounded-md border border-white/10 bg-black/20 p-3">
-            <div className="flex items-start gap-2">
-              <input
-                type="checkbox"
-                checked={checked}
-                onChange={(event) => {
-                  const nextEnabled = event.target.checked;
-                  if (nextEnabled) {
-                    setGameConfigToggleExpanded((prev) => ({ ...prev, [entry.id]: true }));
-                  }
-                  void setGameConfigCommentToggle(entry, nextEnabled);
-                }}
-                disabled={!!savingGameConfigPath || !!savingGameConfigToggleId}
-                className="mt-0.5 h-4 w-4 rounded"
-              />
-              <div className="flex-1">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-white">{entry.label}</p>
-                    <p className="mt-0.5 text-xs text-gray-400">{entry.description}</p>
-                    <p className="mt-1 font-mono text-[11px] text-gray-500">{entry.path}</p>
-                  </div>
-                  {checked && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setGameConfigToggleExpanded((prev) => ({ ...prev, [entry.id]: !(prev[entry.id] ?? true) }));
-                      }}
-                      disabled={!!savingGameConfigPath || !!savingGameConfigToggleId}
-                      className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {isExpanded ? 'Collapse' : 'Expand'}
-                    </button>
-                  )}
-                </div>
-
-                {isSavingToggle && <p className="mt-2 text-xs uppercase tracking-wider text-gray-500">Saving...</p>}
-                {isExpanded && nestedContent}
-                {checked && !isExpanded && (
-                  <p className="mt-2 text-xs text-gray-500">Group enabled. Expand to edit nested settings.</p>
-                )}
-                {!checked && (
-                  <p className="mt-2 text-xs text-gray-500">Disabled groups are commented out in GameConfig.xml.</p>
-                )}
-              </div>
-            </div>
-          </div>
-        );
-
-        const next = gameConfigCategoryExtras[category] ?? [];
-        next.push(group);
-        gameConfigCategoryExtras[category] = next;
-      }
+  useEffect(() => {
+    if (!effectiveServer || !dashboardLoaded) return;
 
     const persistLayout = async () => {
       const serverKey = effectiveServer.id;
+      const layoutToSave = cloneLayout(dashboardLayout);
+
+      try {
+        let existingMap: Record<string, unknown> = {};
+
+        if (hasStoreApi) {
+          const current = await window.launcher.store.get(DASHBOARD_STORE_KEY);
+          if (current && typeof current === 'object' && !Array.isArray(current)) {
+            existingMap = { ...(current as Record<string, unknown>) };
+          }
+          existingMap[serverKey] = layoutToSave;
+          await window.launcher.store.set(DASHBOARD_STORE_KEY, existingMap);
+        } else if (typeof window !== 'undefined') {
+          const currentText = window.localStorage.getItem(DASHBOARD_STORE_KEY);
+          if (currentText) {
+            const parsed = JSON.parse(currentText) as unknown;
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              existingMap = { ...(parsed as Record<string, unknown>) };
+            }
+          }
+          existingMap[serverKey] = layoutToSave;
+          window.localStorage.setItem(DASHBOARD_STORE_KEY, JSON.stringify(existingMap));
+        }
+      } catch (error) {
+        console.warn('[ServerPanel] Failed to save dashboard layout:', error);
+      }
+    };
+
+    void persistLayout();
+  }, [dashboardLayout, dashboardLoaded, effectiveServer?.id, hasStoreApi]);
+
+  useEffect(() => {
+    if (dashboardLayout.groups.some((group) => group.id === selectedGroupId)) return;
+    setSelectedGroupId(dashboardLayout.groups[0]?.id ?? '');
+  }, [dashboardLayout.groups, selectedGroupId]);
+
+  useEffect(() => {
     if (isLayoutEditMode) return;
     setDraggedWidget(null);
     setDraggedGroupId(null);
