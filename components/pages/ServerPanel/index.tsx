@@ -53,15 +53,13 @@ const ALL_WIDGETS: Array<{ id: DashboardWidgetId; label: string }> = [
 ];
 
 const tabItems: { id: ServerPanelTab; label: string }[] = [
-  { id: 'control', label: 'Control Panel' },
+  { id: 'control', label: 'Dasbboard' },
   { id: 'actions', label: 'Actions' },
   { id: 'logs', label: 'Logs' },
   { id: 'configuration', label: 'Configuration' },
   { id: 'files', label: 'Files' },
   { id: 'database', label: 'Database' },
 ];
-
-const sectionShellClass = 'rounded-lg border border-white/10 bg-black/20 p-4';
 
 const createDefaultDashboardLayout = (): DashboardLayout => ({
   groups: [
@@ -241,6 +239,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [serverId, servers, selectedServer]);
 
   const effectiveServerName = serverName || effectiveServer?.name || 'Server';
+  const effectiveServerIp = '127.0.0.1';
   const hasGameApi = typeof window !== 'undefined' && !!window.launcher?.game;
   const hasDownloadApi = typeof window !== 'undefined' && !!window.launcher?.download;
   const hasStoreApi = typeof window !== 'undefined' && !!window.launcher?.store;
@@ -805,7 +804,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }
 
   const renderStatusWidget = () => (
-    <div className={`${sectionShellClass} grid grid-cols-1 gap-4 lg:grid-cols-[1fr_3fr]`}>
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_3fr]">
       <div className="text-2xl font-semibold text-gray-300">Server Status:</div>
       <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-gray-300">
         <p className="mb-3">Lifecycle: <span className={`font-semibold uppercase ${getLifecycleColor(lifecycleState)}`}>{lifecycleState}</span></p>
@@ -818,88 +817,79 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   );
 
   const renderServerInfoWidget = () => (
-    <div className={sectionShellClass}>
-      <p className="mb-4 text-lg font-semibold text-gray-200">Server Info</p>
-      <div className="space-y-3">
-        <label className="flex items-center gap-3 text-sm">
-          <span className="w-36 text-gray-300">Server Name:</span>
-          <input
-            value={effectiveServerName}
-            readOnly
-            className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
-          />
-        </label>
-        <label className="flex items-center gap-3 text-sm">
-          <span className="w-36 text-gray-300">Install Path:</span>
-          <input
-            value={effectiveServer.path || 'Not configured'}
-            readOnly
-            className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
-          />
-        </label>
-        <label className="flex items-center gap-3 text-sm">
-          <span className="w-36 text-gray-300">Server ID:</span>
-          <input
-            value={effectiveServer.id}
-            readOnly
-            className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
-          />
-        </label>
-      </div>
+    <div className="space-y-3">
+      <label className="flex items-center gap-3 text-sm">
+        <span className="w-36 text-gray-300">Server Name:</span>
+        <input
+          value={effectiveServerName}
+          readOnly
+          className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+        />
+      </label>
+      <label className="flex items-center gap-3 text-sm">
+        <span className="w-36 text-gray-300">Install Path:</span>
+        <input
+          value={effectiveServer.path || 'Not configured'}
+          readOnly
+          className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+        />
+      </label>
+      <label className="flex items-center gap-3 text-sm">
+        <span className="w-36 text-gray-300">Server IP:</span>
+        <input
+          value={effectiveServerIp}
+          readOnly
+          className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+        />
+      </label>
     </div>
   );
 
   const renderConnectionWidget = () => (
-    <div className={sectionShellClass}>
-      <p className="mb-4 text-lg font-semibold text-gray-200">Connection Info</p>
-      <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
-        <div className="space-y-3">
-          <label className="flex items-center gap-3 text-sm">
-            <span className="w-28 text-gray-300">Bind Address:</span>
-            <input
-              value="0.0.0.0 (default)"
-              readOnly
-              className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
-            />
-          </label>
-          <label className="flex items-center gap-3 text-sm">
-            <span className="w-28 text-gray-300">Server Port:</span>
-            <input
-              value={effectiveServer.port || '4242'}
-              readOnly
-              className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
-            />
-          </label>
-          <label className="flex items-center gap-3 text-sm">
-            <span className="w-28 text-gray-300">Max Players:</span>
-            <input type="range" min={0} max={200} value={0} disabled className="w-full cursor-not-allowed accent-starmade-accent opacity-60" />
-          </label>
-        </div>
+    <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
+      <div className="space-y-3">
+        <label className="flex items-center gap-3 text-sm">
+          <span className="w-28 text-gray-300">Bind Address:</span>
+          <input
+            value="0.0.0.0 (default)"
+            readOnly
+            className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+          />
+        </label>
+        <label className="flex items-center gap-3 text-sm">
+          <span className="w-28 text-gray-300">Server Port:</span>
+          <input
+            value={effectiveServer.port || '4242'}
+            readOnly
+            className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+          />
+        </label>
+        <label className="flex items-center gap-3 text-sm">
+          <span className="w-28 text-gray-300">Max Players:</span>
+          <input type="range" min={0} max={200} value={0} disabled className="w-full cursor-not-allowed accent-starmade-accent opacity-60" />
+        </label>
+      </div>
 
-        <div className="space-y-3 rounded-md border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={false} disabled className="h-4 w-4 rounded" />
-            <span>Public Server</span>
-          </label>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={false} disabled className="h-4 w-4 rounded" />
-            <span>Use Authentication</span>
-          </label>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={false} disabled className="h-4 w-4 rounded" />
-            <span>Require Authentication</span>
-          </label>
-        </div>
+      <div className="space-y-3 rounded-md border border-white/10 bg-black/20 p-3 text-sm text-gray-300">
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={false} disabled className="h-4 w-4 rounded" />
+          <span>Public Server</span>
+        </label>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={false} disabled className="h-4 w-4 rounded" />
+          <span>Use Authentication</span>
+        </label>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={false} disabled className="h-4 w-4 rounded" />
+          <span>Require Authentication</span>
+        </label>
       </div>
     </div>
   );
 
   const renderPlayersWidget = () => (
-    <div className={`${sectionShellClass} min-h-[260px]`}>
-      <p className="mb-3 text-lg font-semibold text-gray-200">Players</p>
-      <div className="h-full min-h-[180px] overflow-y-auto rounded-md border border-white/10 bg-black/25 p-3 font-mono text-sm text-blue-300">
-        Player listing will appear here when server player-state events are wired.
-      </div>
+    <div className="min-h-[220px] overflow-y-auto rounded-md border border-white/10 bg-black/20 p-3 font-mono text-sm text-blue-300">
+      Player listing will appear here when server player-state events are wired.
     </div>
   );
 
@@ -928,8 +918,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       );
     }
 
+    const gridClassName = options?.showQuickToggle
+      ? 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3'
+      : 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4';
+
     return (
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className={gridClassName}>
         {options?.enableQuickDrag && isLayoutEditMode && renderQuickActionDropZone(0, 'md:col-span-2 xl:col-span-4')}
         {actions.map((action) => {
           const isPinned = dashboardLayout.quickActionIds.includes(action.id);
@@ -953,9 +947,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                     : 'border-white/10 bg-black/20 hover:border-white/20'
                 } ${options?.enableQuickDrag && isLayoutEditMode && isPinned ? 'cursor-move' : ''}`}
               >
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <div>
-                  <div className="mb-1 flex items-center gap-2">
+              <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex flex-wrap items-center gap-2">
                     {options?.enableQuickDrag && isLayoutEditMode && isPinned && renderDragHandle(`Drag ${action.label}`)}
                     <h4 className="text-base font-semibold text-white">{action.label}</h4>
                   </div>
@@ -1048,22 +1042,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     ) : null
   );
 
-  const renderControlsWidget = () => (
-    <div className={sectionShellClass}>
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <p className="text-lg font-semibold text-gray-200">Quick Actions</p>
-        <span className="text-xs uppercase tracking-wider text-gray-500">
-          {quickActions.length} pinned{isLayoutEditMode ? ' · edit mode' : ''}
-        </span>
-      </div>
-      {renderActionGrid(quickActions, {
-        showQuickToggle: isLayoutEditMode,
-        showQuickOrdering: isLayoutEditMode,
-        enableQuickDrag: isLayoutEditMode,
-        emptyMessage: 'Add actions from the Actions tab to show quick controls here.',
-      })}
-    </div>
-  );
+  const renderControlsWidget = () => renderActionGrid(quickActions, {
+    showQuickToggle: isLayoutEditMode,
+    showQuickOrdering: isLayoutEditMode,
+    // Widget-level drag is already active in layout edit mode; disabling per-action drag keeps this card readable.
+    enableQuickDrag: false,
+    emptyMessage: 'Add actions from the Actions tab to show quick controls here.',
+  });
 
   const renderWidgetBody = (widgetId: DashboardWidgetId) => {
     if (widgetId === 'status') return renderStatusWidget();
@@ -1154,40 +1139,45 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         {renderDropZone(group.id, 0)}
         {group.widgetIds.map((widgetId, index) => {
           const widgetLabel = ALL_WIDGETS.find((widget) => widget.id === widgetId)?.label ?? widgetId;
+          const isDragged = draggedWidget?.widgetId === widgetId && draggedWidget.sourceGroupId === group.id;
           return (
             <React.Fragment key={`${group.id}-${widgetId}`}>
-              <div
-                draggable={isLayoutEditMode}
-                onDragStart={() => {
-                  if (!isLayoutEditMode) return;
-                  setDraggedWidget({ widgetId, sourceGroupId: group.id });
-                }}
-                onDragEnd={() => {
-                  setDraggedWidget(null);
-                  setWidgetDropTarget(null);
-                }}
-                className={`rounded-lg border p-2 transition-all ${
-                  draggedWidget?.widgetId === widgetId && draggedWidget.sourceGroupId === group.id
-                    ? 'border-starmade-accent/50 bg-starmade-accent/10 opacity-60 shadow-[0_0_0_1px_rgba(34,123,134,0.25)]'
-                    : 'border-white/10 bg-black/15 hover:border-white/20'
-                }`}
-              >
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    {isLayoutEditMode && renderDragHandle(`Drag ${widgetLabel}`)}
-                    <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">{widgetLabel}</p>
-                  </div>
-                  {isLayoutEditMode && (
+              {isLayoutEditMode ? (
+                <div
+                  draggable
+                  onDragStart={() => {
+                    setDraggedWidget({ widgetId, sourceGroupId: group.id });
+                  }}
+                  onDragEnd={() => {
+                    setDraggedWidget(null);
+                    setWidgetDropTarget(null);
+                  }}
+                  className={`rounded-lg border p-2 transition-all ${
+                    isDragged
+                      ? 'border-starmade-accent/50 bg-starmade-accent/10 opacity-60 shadow-[0_0_0_1px_rgba(34,123,134,0.25)]'
+                      : 'border-white/10 bg-black/15 hover:border-white/20'
+                  }`}
+                >
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      {renderDragHandle(`Drag ${widgetLabel}`)}
+                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">{widgetLabel}</p>
+                    </div>
                     <button
                       onClick={() => removeWidgetToHidden(widgetId, group.id)}
                       className="rounded border border-white/15 bg-black/30 px-2 py-0.5 text-xs text-gray-300 hover:bg-black/45"
                     >
                       Remove
                     </button>
-                  )}
+                  </div>
+                  {renderWidgetBody(widgetId)}
                 </div>
-                {renderWidgetBody(widgetId)}
-              </div>
+              ) : (
+                <div>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">{widgetLabel}</p>
+                  {renderWidgetBody(widgetId)}
+                </div>
+              )}
               {renderDropZone(group.id, index + 1)}
             </React.Fragment>
           );
