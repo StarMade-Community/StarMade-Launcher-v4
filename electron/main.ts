@@ -475,7 +475,7 @@ ipcMain.handle(IPC.APP_GET_SYSTEM_MEMORY, () => Math.floor(os.totalmem() / (1024
 const STARMADE_MARKERS = new Set([
   'StarMade.jar', // Main game JAR
   'version.txt',  // Version descriptor written by the game/launcher
-  '.data',        // Game data folder (saves, universe, etc.)
+  'data',         // Game data folder (saves, universe, etc.)
   'logs',         // Game log folder
   'StarMade',     // Nested StarMade subdirectory (some installs)
 ]);
