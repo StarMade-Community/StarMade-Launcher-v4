@@ -137,8 +137,14 @@ declare global {
         getGraphicsInfo: (installationPath: string) => Promise<string | null>;
         /** Read a value from server.cfg by key (e.g. MAX_CLIENTS). */
         readServerConfigValue: (installationPath: string, key: string) => Promise<string | null>;
+        /** List parsed key/value entries from server.cfg. */
+        listServerConfigValues: (installationPath: string) => Promise<Array<{ key: string; value: string; comment: string | null }>>;
         /** Set a value in server.cfg by key (e.g. MAX_CLIENTS). */
         writeServerConfigValue: (installationPath: string, key: string, value: string) => Promise<{ success: boolean; error?: string }>;
+        /** Read installation GameConfig.xml file content. */
+        readGameConfigXml: (installationPath: string) => Promise<string | null>;
+        /** Write installation GameConfig.xml file content. */
+        writeGameConfigXml: (installationPath: string, xmlContent: string) => Promise<{ success: boolean; error?: string }>;
         /** Subscribe to game log events. Returns a cleanup function. */
         onLog: (cb: (data: { installationId: string; level: string; message: string }) => void) => () => void;
         /**

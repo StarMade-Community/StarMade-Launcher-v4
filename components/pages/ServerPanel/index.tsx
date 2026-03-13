@@ -268,7 +268,7 @@ const parseCfgBoolean = (raw: string | null, fallback: boolean): boolean => {
 };
 
 type ServerConfigFieldType = 'string' | 'number' | 'boolean';
-type ServerConfigCategory = 'networking' | 'security' | 'performance';
+type ServerConfigCategory = 'networking' | 'security' | 'performance' | 'advanced';
 
 interface ServerConfigField {
   key: string;
@@ -282,6 +282,12 @@ interface ServerConfigField {
   guidance?: string;
 }
 
+interface ServerConfigEntry {
+  key: string;
+  value: string;
+  comment: string | null;
+}
+
 interface ConfigFieldValidation {
   error: string | null;
   warning: string | null;
@@ -291,9 +297,10 @@ const CONFIG_CATEGORY_LABELS: Record<ServerConfigCategory, string> = {
   networking: 'Networking',
   security: 'Security',
   performance: 'Performance',
+  advanced: 'Advanced',
 };
 
-const CONFIG_CATEGORY_ORDER: ServerConfigCategory[] = ['networking', 'security', 'performance'];
+const CONFIG_CATEGORY_ORDER: ServerConfigCategory[] = ['networking', 'security', 'performance', 'advanced'];
 
 const SERVER_CONFIG_FIELDS: ServerConfigField[] = [
   {
@@ -468,6 +475,21 @@ const SERVER_CONFIG_DEFAULTS: Record<string, string> = Object.fromEntries(
   SERVER_CONFIG_FIELDS.map((field) => [field.key, field.defaultValue]),
 );
 
+const SERVER_CONFIG_FIELD_KEYS = new Set(SERVER_CONFIG_FIELDS.map((field) => field.key));
+
+const inferServerConfigFieldType = (rawValue: string): ServerConfigFieldType => {
+  const normalized = rawValue.trim().toLowerCase();
+  if (normalized === 'true' || normalized === 'false') return 'boolean';
+  if (/^-?\d+$/.test(normalized)) return 'number';
+  return 'string';
+};
+
+const humanizeServerConfigKey = (key: string): string => key
+  .toLowerCase()
+  .split('_')
+  .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+  .join(' ');
+
 const getConfigFieldValidation = (field: ServerConfigField, rawValue: string): ConfigFieldValidation => {
   const trimmed = rawValue.trim();
 
@@ -535,6 +557,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [isPublicServerInput, setIsPublicServerInput] = useState<boolean>(false);
   const [useAuthInput, setUseAuthInput] = useState<boolean>(false);
   const [requireAuthInput, setRequireAuthInput] = useState<boolean>(false);
+  const [configFields, setConfigFields] = useState<ServerConfigField[]>(SERVER_CONFIG_FIELDS);
   const [serverConfigValues, setServerConfigValues] = useState<Record<string, string>>(SERVER_CONFIG_DEFAULTS);
   const [configSearchTerm, setConfigSearchTerm] = useState('');
   const [configCategoryFilter, setConfigCategoryFilter] = useState<'all' | ServerConfigCategory>('all');
@@ -778,6 +801,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     let cancelled = false;
 
     if (!effectiveServer || !hasGameApi) {
+      setConfigFields(SERVER_CONFIG_FIELDS);
       setServerConfigValues(SERVER_CONFIG_DEFAULTS);
       return;
     }
@@ -785,18 +809,33 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     const loadConfigValues = async () => {
       setIsConfigLoading(true);
       try {
-        const entries = await Promise.all(
-          SERVER_CONFIG_FIELDS.map(async (field) => {
-            const raw = await window.launcher.game.readServerConfigValue(effectiveServer.path, field.key);
-            return [field.key, raw ?? field.defaultValue] as const;
-          }),
-        );
+        const cfgEntries: ServerConfigEntry[] = await window.launcher.game.listServerConfigValues(effectiveServer.path);
+
+        const discoveredFields: ServerConfigField[] = cfgEntries
+          .filter((entry) => !SERVER_CONFIG_FIELD_KEYS.has(entry.key))
+          .map((entry) => ({
+            key: entry.key,
+            label: humanizeServerConfigKey(entry.key),
+            description: entry.comment || 'Discovered key from server.cfg.',
+            category: 'advanced',
+            type: inferServerConfigFieldType(entry.value),
+            defaultValue: entry.value,
+          }))
+          .sort((a, b) => a.key.localeCompare(b.key));
+
+        const nextFields = [...SERVER_CONFIG_FIELDS, ...discoveredFields];
+        const valueMap: Record<string, string> = Object.fromEntries(nextFields.map((field) => [field.key, field.defaultValue]));
+        for (const entry of cfgEntries) {
+          valueMap[entry.key] = entry.value;
+        }
 
         if (cancelled) return;
-        setServerConfigValues(Object.fromEntries(entries));
+        setConfigFields(nextFields);
+        setServerConfigValues(valueMap);
       } catch (error) {
         console.warn('[ServerPanel] Failed to load configuration values from server.cfg:', error);
         if (!cancelled) {
+          setConfigFields(SERVER_CONFIG_FIELDS);
           setServerConfigValues(SERVER_CONFIG_DEFAULTS);
         }
       } finally {
@@ -2492,7 +2531,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         ) : (
           <div className="space-y-4">
             {CONFIG_CATEGORY_ORDER.map((category) => {
-              const categoryFields = SERVER_CONFIG_FIELDS.filter((field) => {
+              const categoryFields = configFields.filter((field) => {
                 if (field.category !== category) return false;
                 if (configCategoryFilter !== 'all' && configCategoryFilter !== category) return false;
 
@@ -2589,7 +2628,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               );
             })}
             {CONFIG_CATEGORY_ORDER.every((category) => {
-              const categoryFields = SERVER_CONFIG_FIELDS.filter((field) => {
+              const categoryFields = configFields.filter((field) => {
                 if (field.category !== category) return false;
                 if (configCategoryFilter !== 'all' && configCategoryFilter !== category) return false;
                 const needle = configSearchTerm.trim().toLowerCase();

@@ -181,9 +181,21 @@ const launcherApi = {
     readServerConfigValue: (installationPath: string, key: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.GAME_SERVER_CFG_GET, installationPath, key),
 
+    /** List parsed key/value entries from server.cfg. */
+    listServerConfigValues: (installationPath: string): Promise<Array<{ key: string; value: string; comment: string | null }>> =>
+      ipcRenderer.invoke(IPC.GAME_SERVER_CFG_LIST, installationPath),
+
     /** Set a value in server.cfg by key (e.g. MAX_CLIENTS). */
     writeServerConfigValue: (installationPath: string, key: string, value: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC.GAME_SERVER_CFG_SET, installationPath, key, value),
+
+    /** Read installation GameConfig.xml file content. */
+    readGameConfigXml: (installationPath: string): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.GAME_CONFIG_XML_GET, installationPath),
+
+    /** Write installation GameConfig.xml file content. */
+    writeGameConfigXml: (installationPath: string, xmlContent: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_CONFIG_XML_SET, installationPath, xmlContent),
 
     /**
      * Read the `launcher-session.json` file written by the game into the

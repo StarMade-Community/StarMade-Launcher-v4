@@ -413,6 +413,33 @@ function readServerCfgKey(installationPath: string, key: string): string | null 
   return null;
 }
 
+function listServerCfgEntries(installationPath: string): Array<{ key: string; value: string; comment: string | null }> {
+  const cfgPath = path.join(installationPath, 'server.cfg');
+  if (!fs.existsSync(cfgPath)) return [];
+
+  const content = fs.readFileSync(cfgPath, 'utf8');
+  const lines = content.split(/\r?\n/);
+  const entries: Array<{ key: string; value: string; comment: string | null }> = [];
+  const seen = new Set<string>();
+
+  for (const line of lines) {
+    const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*(?:\/\/\s*(.*))?$/);
+    if (!match) continue;
+
+    const key = match[1].trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+
+    entries.push({
+      key,
+      value: (match[2] ?? '').trim(),
+      comment: match[3]?.trim() || null,
+    });
+  }
+
+  return entries;
+}
+
 function writeServerCfgKey(installationPath: string, key: string, value: string): { success: boolean; error?: string } {
   const cfgPath = path.join(installationPath, 'server.cfg');
   if (!fs.existsSync(cfgPath)) {
@@ -444,6 +471,22 @@ function writeServerCfgKey(installationPath: string, key: string, value: string)
   return { success: true };
 }
 
+function readGameConfigXml(installationPath: string): string | null {
+  const configPath = path.join(installationPath, 'GameConfig.xml');
+  if (!fs.existsSync(configPath)) return null;
+  return fs.readFileSync(configPath, 'utf8');
+}
+
+function writeGameConfigXml(installationPath: string, xmlContent: string): { success: boolean; error?: string } {
+  const configPath = path.join(installationPath, 'GameConfig.xml');
+  if (!fs.existsSync(configPath)) {
+    return { success: false, error: `GameConfig.xml not found at ${configPath}` };
+  }
+
+  fs.writeFileSync(configPath, xmlContent, 'utf8');
+  return { success: true };
+}
+
 ipcMain.handle(IPC.GAME_SERVER_CFG_GET, (_event, installationPath: string, key: string) => {
   if (!installationPath || !key) return null;
   try {
@@ -454,12 +497,47 @@ ipcMain.handle(IPC.GAME_SERVER_CFG_GET, (_event, installationPath: string, key: 
   }
 });
 
+ipcMain.handle(IPC.GAME_SERVER_CFG_LIST, (_event, installationPath: string) => {
+  if (!installationPath) return [];
+  try {
+    return listServerCfgEntries(installationPath);
+  } catch (error) {
+    console.warn('[server-cfg] Failed to list keys:', { installationPath, error });
+    return [];
+  }
+});
+
 ipcMain.handle(IPC.GAME_SERVER_CFG_SET, (_event, installationPath: string, key: string, value: string) => {
   if (!installationPath || !key) {
     return { success: false, error: 'installationPath and key are required.' };
   }
   try {
     return writeServerCfgKey(installationPath, key, value);
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.GAME_CONFIG_XML_GET, (_event, installationPath: string) => {
+  if (!installationPath) return null;
+  try {
+    return readGameConfigXml(installationPath);
+  } catch (error) {
+    console.warn('[game-config] Failed to read GameConfig.xml:', { installationPath, error });
+    return null;
+  }
+});
+
+ipcMain.handle(IPC.GAME_CONFIG_XML_SET, (_event, installationPath: string, xmlContent: string) => {
+  if (!installationPath) {
+    return { success: false, error: 'installationPath is required.' };
+  }
+  if (typeof xmlContent !== 'string') {
+    return { success: false, error: 'xmlContent must be a string.' };
+  }
+
+  try {
+    return writeGameConfigXml(installationPath, xmlContent);
   } catch (error) {
     return { success: false, error: String(error) };
   }

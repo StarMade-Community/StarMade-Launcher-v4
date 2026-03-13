@@ -78,6 +78,10 @@ export const IPC = {
   GAME_SERVER_CFG_LIST: 'game:server-cfg-list',
   /** Renderer → Main (invoke): set a key in installation server.cfg. */
   GAME_SERVER_CFG_SET: 'game:server-cfg-set',
+  /** Renderer → Main (invoke): read installation GameConfig.xml content. */
+  GAME_CONFIG_XML_GET: 'game:config-xml-get',
+  /** Renderer → Main (invoke): write installation GameConfig.xml content. */
+  GAME_CONFIG_XML_SET: 'game:config-xml-set',
   /**
    * Renderer → Main (invoke): read the `launcher-session.json` file written by
    * the game into an installation directory.  Returns the parsed object or
