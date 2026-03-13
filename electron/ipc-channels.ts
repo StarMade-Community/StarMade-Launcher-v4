@@ -129,12 +129,37 @@ export const IPC = {
 
   // ─── Launcher auto-updater ───────────────────────────────────────────────────
 
-  /** Renderer → Main (invoke): check GitHub releases for a newer launcher version. */
+  /**
+   * Renderer → Main (invoke): check GitHub releases for a newer launcher version.
+   * Payload: { includePreReleases?: boolean }
+   */
   UPDATER_CHECK: 'updater:check',
   /** Renderer → Main (invoke): get the current running launcher version string. */
   UPDATER_GET_VERSION: 'updater:get-version',
   /** Main → Renderer: a newer launcher version was found during the startup check. */
   UPDATER_UPDATE_AVAILABLE: 'updater:update-available',
+
+  // ─── Launcher data backup ────────────────────────────────────────────────────
+
+  /**
+   * Renderer → Main (invoke): create a timestamped backup of the launcher
+   * userData directory.
+   * Returns: { success: boolean; backupPath?: string; error?: string }
+   */
+  BACKUP_CREATE: 'backup:create',
+
+  /**
+   * Renderer → Main (invoke): list available backups (newest first).
+   * Returns: Array<{ name: string; path: string; date: string }>
+   */
+  BACKUP_LIST: 'backup:list',
+
+  /**
+   * Renderer → Main (invoke): restore a backup and restart the launcher.
+   * Payload: { backupPath: string }
+   * Returns: { success: boolean; error?: string }
+   */
+  BACKUP_RESTORE: 'backup:restore',
   /**
    * Renderer → Main (invoke): download the update asset.
    * Payload: { assetUrl: string; assetName: string }

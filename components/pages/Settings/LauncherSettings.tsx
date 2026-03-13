@@ -14,6 +14,7 @@ interface UpdateInfo {
     downloadUrl: string;
     assetUrl?: string;
     assetName?: string;
+    isPreRelease?: boolean;
 }
 
 // ─── Store key ───────────────────────────────────────────────────────────────
@@ -22,6 +23,7 @@ const STORE_KEY = 'launcherSettings';
 
 interface LauncherSettingsData {
     checkForUpdates: boolean;
+    useBetaChannel: boolean;
     showLog: boolean;
     language: string;
     closeBehavior: string;
@@ -29,6 +31,7 @@ interface LauncherSettingsData {
 
 const DEFAULT_SETTINGS: LauncherSettingsData = {
     checkForUpdates: true,
+    useBetaChannel: false,
     showLog: false,
     language: 'English (US)',
     closeBehavior: 'Close launcher',
@@ -80,6 +83,17 @@ const LauncherSettings: React.FC = () => {
     const [updateModalInfo, setUpdateModalInfo] = useState<UpdateInfo | null>(null);
     const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
 
+    // ── Beta channel confirmation dialog state ────────────────────────────────
+    const [betaConfirmOpen, setBetaConfirmOpen] = useState(false);
+    const [pendingBetaValue, setPendingBetaValue] = useState<boolean>(false);
+
+    // ── Backup state ─────────────────────────────────────────────────────────
+    const [isCreatingBackup, setIsCreatingBackup] = useState(false);
+    const [backupResult, setBackupResult] = useState<string | null>(null);
+    const [backupList, setBackupList] = useState<Array<{ name: string; path: string; date: string }>>([]);
+    const [isLoadingBackups, setIsLoadingBackups] = useState(false);
+    const [isRestoringBackup, setIsRestoringBackup] = useState(false);
+
     const languageOptions = [
         { value: 'English', label: 'English' }, //Todo: Support other languages, and maybe have this set the game's language if possible
     ];
@@ -112,6 +126,9 @@ const LauncherSettings: React.FC = () => {
         
         // Load Java runtimes
         loadJavaRuntimes();
+
+        // Load backup list
+        loadBackups();
     }, []);
 
     // Listen for first-startup legacy scan results pushed from the main process
@@ -287,7 +304,9 @@ const LauncherSettings: React.FC = () => {
         setIsCheckingUpdate(true);
         setUpdateCheckResult(null);
         try {
-            const info = await window.launcher.updater.checkForUpdates();
+            const info = await window.launcher.updater.checkForUpdates({
+                includePreReleases: settings.useBetaChannel,
+            });
             if (info.available) {
                 setUpdateModalInfo(info);
                 setIsUpdateModalOpen(true);
@@ -305,6 +324,76 @@ const LauncherSettings: React.FC = () => {
         }
     };
 
+    // ── Beta channel handlers ─────────────────────────────────────────────────
+
+    /** Called when the user clicks the beta channel toggle. */
+    const handleBetaChannelToggle = (newValue: boolean) => {
+        setPendingBetaValue(newValue);
+        setBetaConfirmOpen(true);
+    };
+
+    /** Confirm the beta channel switch (optionally with backup). */
+    const confirmBetaSwitch = async (withBackup: boolean) => {
+        setBetaConfirmOpen(false);
+        if (withBackup) {
+            await handleCreateBackup();
+        }
+        update('useBetaChannel', pendingBetaValue);
+    };
+
+    // ── Backup handlers ───────────────────────────────────────────────────────
+
+    const loadBackups = async () => {
+        if (typeof window === 'undefined' || !window.launcher?.backup) return;
+        setIsLoadingBackups(true);
+        try {
+            const list = await window.launcher.backup.list();
+            setBackupList(list);
+        } catch (error) {
+            console.error('Failed to load backups:', error);
+        } finally {
+            setIsLoadingBackups(false);
+        }
+    };
+
+    const handleCreateBackup = async () => {
+        if (typeof window === 'undefined' || !window.launcher?.backup) return;
+        setIsCreatingBackup(true);
+        setBackupResult(null);
+        try {
+            const result = await window.launcher.backup.create();
+            if (result.success) {
+                setBackupResult('Backup created successfully.');
+                await loadBackups();
+            } else {
+                setBackupResult(`Backup failed: ${result.error}`);
+            }
+        } catch (error) {
+            setBackupResult(`Backup failed: ${String(error)}`);
+        } finally {
+            setIsCreatingBackup(false);
+            const RESULT_DISPLAY_DURATION_MS = 6_000;
+            setTimeout(() => setBackupResult(null), RESULT_DISPLAY_DURATION_MS);
+        }
+    };
+
+    const handleRestoreBackup = async (backupPath: string) => {
+        if (typeof window === 'undefined' || !window.launcher?.backup) return;
+        if (!window.confirm('Restoring this backup will overwrite your current launcher data and restart the launcher. Continue?')) return;
+        setIsRestoringBackup(true);
+        try {
+            const result = await window.launcher.backup.restore(backupPath);
+            if (!result.success) {
+                alert(`Restore failed: ${result.error}`);
+            }
+            // On success the app relaunches; no further UI update needed.
+        } catch (error) {
+            alert(`Restore failed: ${String(error)}`);
+        } finally {
+            setIsRestoringBackup(false);
+        }
+    };
+
     return (
         <div className="h-full flex flex-col">
             <UpdateAvailableModal
@@ -312,6 +401,53 @@ const LauncherSettings: React.FC = () => {
                 updateInfo={updateModalInfo}
                 onDismiss={() => setIsUpdateModalOpen(false)}
             />
+
+            {/* ── Beta channel confirmation dialog ─────────────────────────────── */}
+            {betaConfirmOpen && (
+                <div
+                    className="fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center"
+                    aria-modal="true"
+                    role="dialog"
+                    aria-labelledby="beta-confirm-title"
+                >
+                    <div className="relative bg-starmade-bg/90 border border-starmade-accent/30 rounded-xl shadow-2xl w-full max-w-md p-8">
+                        <h2
+                            id="beta-confirm-title"
+                            className="font-display text-xl font-bold uppercase text-white tracking-wider mb-3"
+                        >
+                            {pendingBetaValue ? 'Switch to Beta Channel' : 'Switch to Stable Channel'}
+                        </h2>
+                        <p className="text-sm text-gray-300 mb-2">
+                            {pendingBetaValue
+                                ? 'You are switching to the beta channel. Beta releases may be unstable and include experimental features.'
+                                : 'You are switching back to the stable channel.'}
+                        </p>
+                        <p className="text-sm text-gray-400 mb-6">
+                            Would you like to create a backup of your launcher settings and data before switching?
+                        </p>
+                        <div className="flex flex-col gap-3">
+                            <button
+                                onClick={() => confirmBetaSwitch(true)}
+                                className="w-full px-4 py-2 rounded-md bg-starmade-accent hover:bg-starmade-accent/80 transition-colors text-sm font-bold uppercase tracking-wider"
+                            >
+                                Create Backup &amp; Switch
+                            </button>
+                            <button
+                                onClick={() => confirmBetaSwitch(false)}
+                                className="w-full px-4 py-2 rounded-md bg-slate-700 hover:bg-slate-600 transition-colors text-sm font-semibold uppercase tracking-wider"
+                            >
+                                Switch Without Backup
+                            </button>
+                            <button
+                                onClick={() => setBetaConfirmOpen(false)}
+                                className="w-full px-4 py-2 rounded-md bg-transparent hover:bg-white/10 border border-white/10 transition-colors text-sm font-semibold uppercase tracking-wider text-gray-400"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             <h2 className="flex-shrink-0 font-display text-xl font-bold uppercase tracking-wider text-white mb-4 pb-2 border-b-2 border-white/10">
                 General
             </h2>
@@ -343,6 +479,12 @@ const LauncherSettings: React.FC = () => {
                     <div className="space-y-4">
                         <SettingRow title="Check for launcher updates" description="Automatically check for updates when the launcher starts.">
                             <ToggleSwitch checked={settings.checkForUpdates} onChange={(v) => update('checkForUpdates', v)} />
+                        </SettingRow>
+                        <SettingRow
+                            title="Use Beta Channel"
+                            description="Receive pre-release launcher updates. Beta builds may be unstable. You will be prompted to create a backup when switching channels."
+                        >
+                            <ToggleSwitch checked={settings.useBetaChannel} onChange={handleBetaChannelToggle} />
                         </SettingRow>
                          <SettingRow title="Check for updates now" description="Manually check for a new version of the launcher.">
                             <div className="flex flex-col items-end gap-1">
@@ -468,6 +610,57 @@ const LauncherSettings: React.FC = () => {
                             </div>
                         </SettingRow>
                     </div>
+                </div>
+
+                <div className="mt-8">
+                    <h2 className="font-display text-xl font-bold uppercase tracking-wider text-white mb-4 pb-2 border-b-2 border-white/10">
+                        Backups
+                    </h2>
+                    <p className="text-sm text-gray-400 mb-4">
+                        Back up and restore your launcher settings and user data (accounts, installations, backgrounds, icons).
+                    </p>
+
+                    <div className="flex flex-wrap gap-3 mb-4">
+                        <button
+                            onClick={handleCreateBackup}
+                            disabled={isCreatingBackup}
+                            className="px-4 py-2 bg-starmade-accent hover:bg-starmade-accent/80 disabled:bg-starmade-accent/50 rounded-md text-sm font-semibold uppercase tracking-wider transition-colors"
+                        >
+                            {isCreatingBackup ? 'Creating Backup…' : 'Create Backup Now'}
+                        </button>
+                    </div>
+
+                    {backupResult && (
+                        <p className="text-sm text-gray-300 mb-4">{backupResult}</p>
+                    )}
+
+                    {/* Backup list */}
+                    {isLoadingBackups ? (
+                        <div className="text-gray-400 text-sm italic p-3 bg-black/20 rounded-md">
+                            Loading backups…
+                        </div>
+                    ) : backupList.length === 0 ? (
+                        <div className="text-gray-400 text-sm italic p-3 bg-black/20 rounded-md">
+                            No backups yet. Click <span className="text-white not-italic">Create Backup Now</span> to create one.
+                        </div>
+                    ) : (
+                        <div className="space-y-2">
+                            {backupList.map(backup => (
+                                <div key={backup.name} className="flex items-center justify-between gap-3 p-3 bg-black/20 rounded-md border border-white/10">
+                                    <span className="text-xs text-gray-300 font-mono truncate flex-1 min-w-0" title={backup.path}>
+                                        {new Date(backup.date).toLocaleString()}
+                                    </span>
+                                    <button
+                                        onClick={() => handleRestoreBackup(backup.path)}
+                                        disabled={isRestoringBackup}
+                                        className="flex-shrink-0 px-3 py-1 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-md text-sm font-semibold uppercase tracking-wider transition-colors"
+                                    >
+                                        {isRestoringBackup ? 'Restoring…' : 'Restore'}
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
 
                 <div className="mt-8">

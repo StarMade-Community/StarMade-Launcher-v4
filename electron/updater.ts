@@ -28,6 +28,10 @@ import { spawn } from 'child_process';
 const GITHUB_RELEASES_API =
   'https://api.github.com/repos/StarMade-Community/StarMade-Launcher-v4/releases/latest';
 
+/** Endpoint returning ALL releases (including pre-releases), newest first. */
+const GITHUB_ALL_RELEASES_API =
+  'https://api.github.com/repos/StarMade-Community/StarMade-Launcher-v4/releases';
+
 const GITHUB_RELEASES_PAGE =
   'https://github.com/StarMade-Community/StarMade-Launcher-v4/releases/latest';
 
@@ -51,6 +55,8 @@ export interface UpdateInfo {
   assetUrl?: string;
   /** Display name of the asset (e.g. "StarMade Launcher.exe"). */
   assetName?: string;
+  /** Whether this release is a GitHub pre-release. */
+  isPreRelease?: boolean;
 }
 
 export interface DownloadProgress {
@@ -156,14 +162,23 @@ function httpGetStream(
 
 /**
  * Check GitHub releases for a newer version of the launcher.
+ *
+ * @param options.includePreReleases  When `true`, the latest release
+ *   (including pre-releases) is compared against the running version.
+ *   When `false` (default), only stable releases are considered.
  */
-export async function checkForUpdates(): Promise<UpdateInfo> {
+export async function checkForUpdates(
+  options: { includePreReleases?: boolean } = {},
+): Promise<UpdateInfo> {
+  const { includePreReleases = false } = options;
+  const apiUrl = includePreReleases ? GITHUB_ALL_RELEASES_API : GITHUB_RELEASES_API;
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
-  let body: Record<string, unknown>;
+  let release: Record<string, unknown>;
   try {
-    const res = await fetch(GITHUB_RELEASES_API, {
+    const res = await fetch(apiUrl, {
       signal: controller.signal,
       headers: {
         Accept: 'application/vnd.github.v3+json',
@@ -171,30 +186,44 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
       },
     });
     if (!res.ok) throw new Error(`GitHub API returned HTTP ${res.status}`);
-    body = (await res.json()) as Record<string, unknown>;
+
+    if (includePreReleases) {
+      // All-releases endpoint returns an array; pick the first non-draft entry
+      // (GitHub returns releases sorted newest-published-at first).
+      const releases = (await res.json()) as Array<Record<string, unknown>>;
+      if (!Array.isArray(releases) || releases.length === 0) {
+        throw new Error('GitHub API returned no releases');
+      }
+      const found = releases.find(r => !r.draft);
+      if (!found) throw new Error('GitHub API returned no publishable releases');
+      release = found;
+    } else {
+      release = (await res.json()) as Record<string, unknown>;
+    }
   } finally {
     clearTimeout(timeoutId);
   }
 
-  if (typeof body !== 'object' || body === null) {
+  if (typeof release !== 'object' || release === null) {
     throw new Error('GitHub API response is not an object');
   }
 
-  const tagName = typeof body.tag_name === 'string' ? body.tag_name : '';
+  const tagName = typeof release.tag_name === 'string' ? release.tag_name : '';
   if (!tagName) throw new Error('GitHub API response missing tag_name');
 
   const latestVersion  = tagName.replace(/^v/, '');
   const currentVersion = app.getVersion();
-  const releaseNotes   = typeof body.body === 'string' ? body.body.trim() : '';
+  const releaseNotes   = typeof release.body === 'string' ? release.body.trim() : '';
+  const isPreRelease   = release.prerelease === true;
   const available      = compareSemver(currentVersion, latestVersion) < 0;
 
   // Try to locate a direct-download asset for the current platform
   let assetUrl: string | undefined;
   let assetName: string | undefined;
 
-  if (available && Array.isArray(body.assets)) {
+  if (available && Array.isArray(release.assets)) {
     const picked = pickAsset(
-      body.assets as Array<{ name: string; browser_download_url: string }>
+      release.assets as Array<{ name: string; browser_download_url: string }>
     );
     if (picked) {
       assetUrl  = picked.browser_download_url;
@@ -207,6 +236,7 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
     latestVersion,
     currentVersion,
     releaseNotes,
+    isPreRelease,
     downloadUrl: GITHUB_RELEASES_PAGE,
     assetUrl,
     assetName,

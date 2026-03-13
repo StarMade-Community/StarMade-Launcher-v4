@@ -19,6 +19,7 @@ import { downloadJava, detectSystemJava, resolveJavaPath, getDefaultJavaPaths, f
 import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, getGraphicsInfo } from './launcher.js';
 import type { UpdateInfo } from './updater.js';
 import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from './updater.js';
+import { createBackup, listBackups, restoreBackup } from './backup.js';
 import { loginWithPassword, refreshAccessToken, registerAccount, logoutAccount, getAuthStatus, getAccessTokenForLaunch } from './auth.js';
 import { isRunningOnWayland } from './wayland-detect.js';
 import { isRunningAsAppImage } from './appimage-detect.js';
@@ -823,9 +824,15 @@ ipcMain.handle(IPC.AUTH_GET_STATUS, (_event, { accountId }: { accountId: string 
 
 ipcMain.handle(IPC.UPDATER_GET_VERSION, () => app.getVersion());
 
-ipcMain.handle(IPC.UPDATER_CHECK, async (): Promise<UpdateInfo> => {
-  return checkForUpdates();
-});
+ipcMain.handle(
+  IPC.UPDATER_CHECK,
+  async (
+    _event,
+    options?: { includePreReleases?: boolean },
+  ): Promise<UpdateInfo> => {
+    return checkForUpdates(options);
+  },
+);
 
 ipcMain.handle(
   IPC.UPDATER_DOWNLOAD,
@@ -871,6 +878,32 @@ ipcMain.handle(
 ipcMain.handle(IPC.UPDATER_OPEN_RELEASES_PAGE, () => {
   openReleasesPage();
 });
+
+// ─── Backup / Restore ─────────────────────────────────────────────────────────
+
+ipcMain.handle(IPC.BACKUP_CREATE, async () => {
+  return createBackup();
+});
+
+ipcMain.handle(IPC.BACKUP_LIST, async () => {
+  return listBackups();
+});
+
+ipcMain.handle(
+  IPC.BACKUP_RESTORE,
+  async (
+    _event,
+    { backupPath }: { backupPath: string },
+  ): Promise<{ success: boolean; error?: string }> => {
+    const result = await restoreBackup(backupPath);
+    if (result.success) {
+      // Restart the app so the restored data is picked up by all modules.
+      app.relaunch();
+      app.quit();
+    }
+    return result;
+  },
+);
 
 /** Milliseconds to wait after window creation before sending the update-available event. */
 const WINDOW_READY_DELAY_MS = 2_000;
@@ -922,17 +955,19 @@ async function runStartupLegacyScan(): Promise<void> {
 /**
  * Perform a background update check on launch and push a notification to the
  * renderer if a newer version is available.  Respects the user's
- * `checkForUpdates` launcher setting.
+ * `checkForUpdates` and `useBetaChannel` launcher settings.
  */
 async function runStartupUpdateCheck(): Promise<void> {
   try {
     const stored = storeGet('launcherSettings');
+    let includePreReleases = false;
     if (stored && typeof stored === 'object') {
       const settings = stored as Record<string, unknown>;
       if (settings.checkForUpdates === false) return;
+      if (settings.useBetaChannel === true) includePreReleases = true;
     }
 
-    const info = await checkForUpdates();
+    const info = await checkForUpdates({ includePreReleases });
     if (info.available) {
       // Delay so the window is fully loaded before the modal appears.
       setTimeout(() => {
