@@ -21,9 +21,12 @@ export const getIconComponent = (icon: string, size: 'large' | 'small' = 'small'
         case 'pre': return <DevIcon className={`${sizeClass} text-yellow-400`} />;
         case 'archive': return <ArchiveIcon className={`${sizeClass} text-gray-400`} />;
         case 'rocket': return <RocketIcon className={`${sizeClass} text-indigo-400`} />;
+        case 'planet': return <PlanetIcon className={`${sizeClass} text-cyan-400`} />;
         case 'star': return <StarIcon className={`${sizeClass} text-yellow-300`} />;
         case 'server': return <ServerIcon className={`${sizeClass} text-slate-400`} />;
+        case 'code': return <CodeBracketIcon className={`${sizeClass} text-sky-400`} />;
         case 'bolt': return <BoltIcon className={`${sizeClass} text-amber-400`} />;
+        case 'beaker': return <BeakerIcon className={`${sizeClass} text-emerald-400`} />;
         case 'cube': return <CubeIcon className={`${sizeClass} text-rose-400`} />;
         default: return <GamepadIcon className={`${sizeClass} text-gray-400`} />;
     }

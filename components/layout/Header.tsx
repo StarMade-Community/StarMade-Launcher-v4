@@ -153,9 +153,6 @@ const UserProfile: React.FC = () => {
                                                 </div>
                                                 <div className="flex-1 min-w-0">
                                                     <p className="text-sm text-white truncate">{account.displayName ?? account.name}</p>
-                                                    {account.displayName && (
-                                                        <p className="text-xs text-gray-500 truncate">{account.name}</p>
-                                                    )}
                                                 </div>
                                                 {activeAccount.id === account.id && <CheckCircleIcon className="w-5 h-5 text-starmade-accent" />}
                                             </button>
