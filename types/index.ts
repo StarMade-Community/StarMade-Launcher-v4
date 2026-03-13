@@ -161,9 +161,11 @@ export interface AppContextType {
     logViewerOpen: boolean;
     logViewerInstallation: ManagedItem | null;
     navigate: (page: Page, props?: PageProps) => void;
-    openLaunchModal: (installation?: ManagedItem, sessionArgs?: SessionLaunchArgs) => void;
+    openLaunchModal: (installation?: ManagedItem, sessionArgs?: SessionLaunchArgs) => void | Promise<void>;
     closeLaunchModal: () => void;
     startLaunching: () => void;
+    /** Stop all currently-running game processes and then launch. */
+    startLaunchingAndTerminate: () => void;
     completeLaunching: () => void;
     openLogViewer: (installation: ManagedItem) => void;
     closeLogViewer: () => void;
