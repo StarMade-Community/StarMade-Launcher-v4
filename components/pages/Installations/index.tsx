@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { PlusIcon } from '../../common/icons';
 import InstallationForm from '../../common/InstallationForm';
 import ItemCard from '../../common/ItemCard';
+import DeleteConfirmModal from '../../common/DeleteConfirmModal';
 import type { ManagedItem, InstallationsTab } from '../../../types';
 import PageContainer from '../../common/PageContainer';
 import { useData } from '../../../contexts/DataContext';
@@ -17,6 +18,7 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
     const [view, setView] = useState<'list' | 'form'>('list');
     const [activeItem, setActiveItem] = useState<ManagedItem | null>(null);
     const [isNew, setIsNew] = useState(false);
+    const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
 
     const { openLaunchModal } = useApp();
     const { 
@@ -91,8 +93,33 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
     };
 
     const handleDelete = (id: string) => {
+        const allItems = activeTab === 'installations' ? installations : servers;
+        const item = allItems.find(i => i.id === id) ?? null;
+        setDeleteTarget(item);
+    };
+
+    const handleDeleteConfirm = async () => {
+        if (!deleteTarget) return;
+        const { id, path: itemPath } = deleteTarget;
+
+        // Delete physical files first (best-effort; ignore errors so the record
+        // is still removed from the store even if the directory is already gone).
+        if (itemPath && typeof window !== 'undefined' && window.launcher?.installation) {
+            try {
+                await window.launcher.installation.deleteFiles(itemPath);
+            } catch (err) {
+                console.error('[Installations] Failed to delete files:', err);
+            }
+        }
+
         if (activeTab === 'installations') deleteInstallation(id);
         else deleteServer(id);
+
+        setDeleteTarget(null);
+    };
+
+    const handleDeleteCancel = () => {
+        setDeleteTarget(null);
     };
     
     const handleTabChange = (tab: InstallationsTab) => {
@@ -185,6 +212,13 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
     return (
       <PageContainer>
         {renderContent()}
+        <DeleteConfirmModal
+            isOpen={deleteTarget !== null}
+            itemName={deleteTarget?.name ?? ''}
+            itemTypeName={itemTypeName}
+            onConfirm={handleDeleteConfirm}
+            onCancel={handleDeleteCancel}
+        />
       </PageContainer>
     );
 };

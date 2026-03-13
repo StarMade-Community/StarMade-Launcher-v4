@@ -145,6 +145,16 @@ declare global {
         openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
       };
 
+      /** Installation file management APIs */
+      installation: {
+        /**
+         * Recursively delete all files at the given path.
+         * Returns `{ success: true }` when done (or when the directory was already absent),
+         * or `{ success: false, error }` on failure.
+         */
+        deleteFiles: (targetPath: string) => Promise<{ success: boolean; error?: string }>;
+      };
+
       /** Background image APIs */
       backgrounds: {
         /** List available background image paths (file:// URLs). */

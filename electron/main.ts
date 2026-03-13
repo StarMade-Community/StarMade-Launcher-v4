@@ -466,6 +466,67 @@ ipcMain.handle(IPC.DIALOG_OPEN_FILE, async (_event, defaultPath?: string, type?:
 ipcMain.handle(IPC.APP_GET_USER_DATA, () => app.getPath('userData'));
 ipcMain.handle(IPC.APP_GET_SYSTEM_MEMORY, () => Math.floor(os.totalmem() / (1024 * 1024)));
 
+// ─── Installation file management handlers ───────────────────────────────────
+
+/**
+ * Returns true when `targetPath` is safe to recursively delete.
+ *
+ * Safety checks:
+ * - Must be an absolute path with at least 3 components (prevents root / home
+ *   directory deletion on UNIX and drive-root deletion on Windows).
+ * - Must not be, or be a parent of, any well-known system directory.
+ */
+function isSafeDeletionPath(targetPath: string): boolean {
+  const normalized = path.normalize(targetPath);
+
+  // Must be absolute.
+  if (!path.isAbsolute(normalized)) return false;
+
+  // Must have a minimum directory depth to avoid deleting e.g. "/" or "C:\".
+  const parts = normalized.split(path.sep).filter(Boolean);
+  if (parts.length < 2) return false;
+
+  // Reject well-known system roots.
+  const systemRoots = process.platform === 'win32'
+    ? ['windows', 'program files', 'program files (x86)', 'system32', 'syswow64']
+    : ['/', '/bin', '/boot', '/dev', '/etc', '/lib', '/lib64', '/proc', '/root',
+       '/sbin', '/sys', '/tmp', '/usr', '/var'];
+
+  const lowerNormalized = normalized.toLowerCase();
+  for (const systemRoot of systemRoots) {
+    const lowerRoot = systemRoot.toLowerCase();
+    // Block if the path IS a system root or is a direct parent of one.
+    if (
+      lowerNormalized === lowerRoot ||
+      lowerNormalized === path.normalize(lowerRoot) ||
+      lowerRoot.startsWith(lowerNormalized + path.sep)
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+ipcMain.handle(IPC.INSTALLATION_DELETE_FILES, async (_event, targetPath: string) => {
+  if (typeof targetPath !== 'string' || targetPath.trim() === '') {
+    return { success: false, error: 'Invalid path.' };
+  }
+  if (!isSafeDeletionPath(targetPath)) {
+    return { success: false, error: 'Path is not safe to delete.' };
+  }
+  try {
+    if (!fs.existsSync(targetPath)) {
+      // Directory already gone — treat as success.
+      return { success: true };
+    }
+    fs.rmSync(targetPath, { recursive: true, force: true });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+});
+
 // ─── Shell handlers ──────────────────────────────────────────────────────────
 
 ipcMain.handle(IPC.SHELL_OPEN_PATH, async (_event, targetPath: string) => {
