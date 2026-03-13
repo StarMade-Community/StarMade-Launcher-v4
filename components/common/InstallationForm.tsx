@@ -309,14 +309,15 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
     });
   }, [javaMemory]);
 
-  useEffect(() => {
-    const xmxMatch = jvmArgs.match(/-Xmx(\d+)G/i);
+  const handleJvmArgsChange = (newArgs: string) => {
+    setJvmArgs(newArgs);
+    // Sync the memory slider when the user manually edits -Xmx
+    const xmxMatch = newArgs.match(/-Xmx(\d+)G/i);
     if (xmxMatch && xmxMatch[1]) {
-        const memoryInGB = parseInt(xmxMatch[1]);
-        const memoryInMB = memoryInGB * 1024;
-        setJavaMemory(prev => (prev !== memoryInMB ? memoryInMB : prev));
+      const memoryInMB = parseInt(xmxMatch[1]) * 1024;
+      setJavaMemory(prev => prev !== memoryInMB ? memoryInMB : prev);
     }
-  }, [jvmArgs]);
+  };
 
   // When creating a new item, the actual install path is baseDir/name.
   // When editing, the user controls the full path directly.
@@ -499,7 +500,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
                           </div>
                         </FormField>
                         <FormField label="JVM Arguments" htmlFor="jvmArgs">
-                          <textarea id="jvmArgs" value={jvmArgs} onChange={e => setJvmArgs(e.target.value)} rows={2} className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent font-mono text-sm"></textarea>
+                          <textarea id="jvmArgs" value={jvmArgs} onChange={e => handleJvmArgsChange(e.target.value)} rows={2} className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent font-mono text-sm"></textarea>
                         </FormField>
                     </div>
                 )}

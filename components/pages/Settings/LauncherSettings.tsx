@@ -62,7 +62,7 @@ const ToggleSwitch: React.FC<{ checked: boolean; onChange: (checked: boolean) =>
 // ─── Main component ──────────────────────────────────────────────────────────
 
 const LauncherSettings: React.FC = () => {
-    const { installations, addInstallation } = useData();
+    const { installations, addInstallation, versions } = useData();
     const [isLoaded, setIsLoaded] = useState(false);
     const [settings, setSettings] = useState<LauncherSettingsData>(DEFAULT_SETTINGS);
     const [userDataPath, setUserDataPath] = useState<string>('');
@@ -246,13 +246,20 @@ const LauncherSettings: React.FC = () => {
 
         // Extract the last path segment as a display name (works on both / and \ separators)
         const folderName = installPath.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? 'legacy-install';
+        // Determine the correct branch type by looking up the version in the live manifest.
+        // Fall back to 'archive' only when the version can't be matched (e.g. very old build).
+        const matchedVersion = versions.find(v => v.id === version);
+        const detectedType = matchedVersion?.type ?? 'archive';
+
         const newItem = {
             id: Date.now().toString(),
             name: folderName,
             version,
-            // 'archive' is the closest built-in type for pre-existing installs not sourced from the CDN
-            type: 'archive' as const,
-            icon: 'release',
+            type: detectedType,
+            icon: detectedType === 'release' ? 'release'
+                : detectedType === 'dev'     ? 'dev'
+                : detectedType === 'pre'     ? 'pre'
+                : 'archive',
             path: installPath,
             lastPlayed: 'Never',
             installed: true,
