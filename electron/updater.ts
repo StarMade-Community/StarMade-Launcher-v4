@@ -347,8 +347,18 @@ export async function installUpdate(installerPath: string): Promise<void> {
       // Make the AppImage executable
       fs.chmodSync(installerPath, 0o755);
 
-      // Determine the path of the currently running AppImage (if any)
-      const currentExe = app.getPath('exe');
+      // When running as an AppImage, app.getPath('exe') returns the Electron
+      // binary path *inside* the read-only squashfs mount (e.g.
+      // /tmp/.mount_StarMaXXXX/starmade-launcher-v4.bin), not the .AppImage
+      // file itself.  Copying to that path fails because the squashfs is
+      // read-only, and after app.quit() the mount is torn down so the exec
+      // also fails — leaving the old AppImage untouched and causing the update
+      // prompt to reappear on every launch.
+      //
+      // The AppImage runtime always sets APPIMAGE to the path of the actual
+      // .AppImage file on disk, so use that when available and fall back to
+      // app.getPath('exe') for non-AppImage Linux installs (deb, rpm, etc.).
+      const currentExe = process.env.APPIMAGE || app.getPath('exe');
 
       // Write a tiny shell script that waits for us to exit, then replaces
       // the current executable and relaunches it.

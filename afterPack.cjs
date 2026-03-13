@@ -39,8 +39,8 @@ module.exports = async function afterPack(context) {
 
   if (electronPlatformName !== "linux") return;
 
-  const executableName  = packager.executableName;          // e.g. "starmade-launcher-v4"
-  const realBinaryName  = `${executableName}.bin`;           // e.g. "starmade-launcher-v4.bin"
+  const executableName  = packager.executableName;          // e.g. "starmade-launcher"
+  const realBinaryName  = `${executableName}.bin`;           // e.g. "starmade-launcher.bin"
 
   const binaryPath      = path.join(appOutDir, executableName);
   const realBinaryPath  = path.join(appOutDir, realBinaryName);
