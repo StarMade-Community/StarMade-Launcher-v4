@@ -203,6 +203,36 @@ const launcherApi = {
      */
     deleteFiles: (targetPath: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC.INSTALLATION_DELETE_FILES, targetPath),
+
+    /**
+     * Create a compressed (.zip) backup of the installation directory.
+     * Returns { success: true, backupPath } on success or { success: false, error } on failure.
+     */
+    backup: (
+      installationPath: string,
+      installationId: string,
+      installationName: string,
+    ): Promise<{ success: boolean; backupPath?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.INSTALLATION_BACKUP, { installationPath, installationId, installationName }),
+
+    /**
+     * Restore an installation from a compressed backup.
+     * Returns { success: true } or { success: false, error }.
+     */
+    restore: (
+      backupPath: string,
+      targetPath: string,
+    ): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.INSTALLATION_RESTORE, { backupPath, targetPath }),
+
+    /**
+     * List available backups for an installation (newest first).
+     * Returns an array of backup descriptors.
+     */
+    listBackups: (
+      installationId: string,
+    ): Promise<Array<{ name: string; path: string; createdAt: string; sizeBytes: number }>> =>
+      ipcRenderer.invoke(IPC.INSTALLATION_LIST_BACKUPS, installationId),
   },
 
   /** Background image APIs */

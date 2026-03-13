@@ -99,6 +99,28 @@ export const IPC = {
    */
   INSTALLATION_DELETE_FILES: 'installation:delete-files',
 
+  /**
+   * Renderer → Main (invoke): create a compressed (.zip) backup of an
+   * installation directory.
+   * Payload: { installationPath: string; installationId: string; installationName: string }
+   * Returns: { success: boolean; backupPath?: string; error?: string }
+   */
+  INSTALLATION_BACKUP: 'installation:backup',
+
+  /**
+   * Renderer → Main (invoke): restore an installation from a compressed backup.
+   * Payload: { backupPath: string; targetPath: string }
+   * Returns: { success: boolean; error?: string }
+   */
+  INSTALLATION_RESTORE: 'installation:restore',
+
+  /**
+   * Renderer → Main (invoke): list available backups for an installation.
+   * Payload: installationId: string
+   * Returns: Array<{ name: string; path: string; createdAt: string; sizeBytes: number }>
+   */
+  INSTALLATION_LIST_BACKUPS: 'installation:list-backups',
+
   // ─── Shell ──────────────────────────────────────────────────────────────────
 
   /** Renderer → Main (invoke): open a path in the native file manager. */

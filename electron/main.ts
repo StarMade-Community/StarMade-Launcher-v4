@@ -10,6 +10,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import os from 'os';
+import AdmZip from 'adm-zip';
 import { IPC } from './ipc-channels.js';
 import { storeGet, storeSet, storeDelete } from './store.js';
 import { fetchAllVersions, invalidateVersionCache } from './versions.js';
@@ -602,6 +603,135 @@ ipcMain.handle(IPC.INSTALLATION_DELETE_FILES, async (_event, targetPath: string)
     return { success: true };
   } catch (err) {
     return { success: false, error: String(err) };
+  }
+});
+
+// ─── Installation backup / restore handlers ──────────────────────────────────
+
+/**
+ * Returns the directory used to store backups for a given installation.
+ * Backups live under `<userData>/backups/<installationId>/`.
+ */
+function getBackupDir(installationId: string): string {
+  return path.join(app.getPath('userData'), 'backups', installationId);
+}
+
+ipcMain.handle(
+  IPC.INSTALLATION_BACKUP,
+  async (
+    _event,
+    payload: { installationPath: string; installationId: string; installationName: string },
+  ) => {
+    const { installationPath, installationId, installationName } = payload ?? {};
+
+    if (typeof installationPath !== 'string' || installationPath.trim() === '') {
+      return { success: false, error: 'Invalid installation path.' };
+    }
+    if (typeof installationId !== 'string' || installationId.trim() === '') {
+      return { success: false, error: 'Invalid installation ID.' };
+    }
+
+    if (!fs.existsSync(installationPath)) {
+      return { success: false, error: 'Installation directory does not exist.' };
+    }
+
+    const backupDir = getBackupDir(installationId);
+    try {
+      fs.mkdirSync(backupDir, { recursive: true });
+    } catch (err) {
+      return { success: false, error: `Failed to create backup directory: ${String(err)}` };
+    }
+
+    // Build a safe filename from the installation name and a timestamp.
+    const safeName = (installationName ?? 'backup').replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') || 'backup';
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupFileName = `${safeName}_${timestamp}.zip`;
+    const backupPath = path.join(backupDir, backupFileName);
+
+    try {
+      const zip = new AdmZip();
+      zip.addLocalFolder(installationPath, '');
+      await new Promise<void>((resolve, reject) => {
+        zip.writeZip(backupPath, (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+      return { success: true, backupPath };
+    } catch (err) {
+      // Clean up partial zip if it was created.
+      try { fs.unlinkSync(backupPath); } catch (cleanupErr) {
+        console.warn('[backup] Failed to clean up partial zip:', cleanupErr);
+      }
+      return { success: false, error: String(err) };
+    }
+  },
+);
+
+ipcMain.handle(
+  IPC.INSTALLATION_RESTORE,
+  async (_event, payload: { backupPath: string; targetPath: string }) => {
+    const { backupPath, targetPath } = payload ?? {};
+
+    if (typeof backupPath !== 'string' || backupPath.trim() === '') {
+      return { success: false, error: 'Invalid backup path.' };
+    }
+    if (typeof targetPath !== 'string' || targetPath.trim() === '') {
+      return { success: false, error: 'Invalid target path.' };
+    }
+    if (!fs.existsSync(backupPath)) {
+      return { success: false, error: 'Backup file does not exist.' };
+    }
+    if (!isSafeDeletionPath(targetPath)) {
+      return { success: false, error: 'Target path is not safe.' };
+    }
+
+    try {
+      // Clear the target directory before restoring.
+      if (fs.existsSync(targetPath)) {
+        await fs.promises.rm(targetPath, { recursive: true, force: true });
+      }
+      fs.mkdirSync(targetPath, { recursive: true });
+
+      const zip = new AdmZip(backupPath);
+      zip.extractAllTo(targetPath, /* overwrite */ true);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
+  },
+);
+
+ipcMain.handle(IPC.INSTALLATION_LIST_BACKUPS, async (_event, installationId: string) => {
+  if (typeof installationId !== 'string' || installationId.trim() === '') {
+    return [];
+  }
+
+  const backupDir = getBackupDir(installationId);
+  if (!fs.existsSync(backupDir)) return [];
+
+  try {
+    const files = fs.readdirSync(backupDir).filter(f => f.endsWith('.zip'));
+    const result = files
+      .map(f => {
+        const filePath = path.join(backupDir, f);
+        try {
+          const stat = fs.statSync(filePath);
+          return {
+            name: f,
+            path: filePath,
+            createdAt: stat.birthtime.toISOString(),
+            sizeBytes: stat.size,
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter((b): b is NonNullable<typeof b> => b !== null)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return result;
+  } catch {
+    return [];
   }
 });
 
