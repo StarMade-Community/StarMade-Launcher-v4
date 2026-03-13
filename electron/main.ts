@@ -737,6 +737,50 @@ ipcMain.handle(IPC.UPDATER_OPEN_RELEASES_PAGE, () => {
 const WINDOW_READY_DELAY_MS = 2_000;
 
 /**
+ * On the very first launch, run a background legacy-installation scan and push
+ * the results to the renderer via `IPC.LEGACY_SCAN_RESULT`.  Subsequent
+ * launches skip the scan entirely (tracked via the store key
+ * `legacyAutoScanDone`) so startup performance is not degraded.
+ *
+ * If the scan throws an unexpected error it is still marked as done to prevent
+ * a broken environment from causing every subsequent startup to re-run the
+ * slow scan indefinitely.
+ */
+async function runStartupLegacyScan(): Promise<void> {
+  if (storeGet('legacyAutoScanDone') === true) return;
+
+  try {
+    const searchRoots = getLegacyAutoDetectRoots();
+    const found = new Set<string>();
+    await Promise.all(
+      searchRoots.map(({ root, maxDepth }) =>
+        findLegacyInstalls(root, maxDepth).then(paths => paths.forEach(p => found.add(p)))
+      )
+    );
+    const results = Array.from(found);
+
+    // Mark as done before pushing so a crash during push doesn't re-run the
+    // slow scan on every subsequent launch.
+    storeSet('legacyAutoScanDone', true);
+
+    if (results.length > 0) {
+      // Delay so the window is fully loaded before the event is delivered.
+      // mainWindow may be null if the user closed the window very quickly;
+      // the optional-chain handles that case gracefully (identical pattern to
+      // runStartupUpdateCheck above).
+      setTimeout(() => {
+        mainWindow?.webContents.send(IPC.LEGACY_SCAN_RESULT, results);
+      }, WINDOW_READY_DELAY_MS);
+    }
+  } catch (err) {
+    // Non-fatal: mark as done to avoid re-running the slow scan on every
+    // subsequent launch in environments with a persistent error.
+    console.warn('[legacy] Startup scan failed:', err);
+    storeSet('legacyAutoScanDone', true);
+  }
+}
+
+/**
  * Perform a background update check on launch and push a notification to the
  * renderer if a newer version is available.  Respects the user's
  * `checkForUpdates` launcher setting.
@@ -768,6 +812,7 @@ app.whenReady().then(() => {
   copyPresetsToUserData();
   buildMenu();
   createWindow();
+  runStartupLegacyScan();
   runStartupUpdateCheck();
 
   // On Linux AppImage builds, re-register the launcher's icon and .desktop
