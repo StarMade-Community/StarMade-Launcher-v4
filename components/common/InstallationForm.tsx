@@ -194,6 +194,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
 
   const [name, setName] = useState(item.name);
   const [port, setPort] = useState(item.port ?? '4242');
+  const [serverIp, setServerIp] = useState(item.serverIp ?? '127.0.0.1');
   const [icon, setIcon] = useState(item.icon);
   const [type, setType] = useState<ItemType>(item.type === 'latest' ? 'release' : item.type);
   const [version, setVersion] = useState(item.version);
@@ -228,6 +229,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
       const defaults = (stored && typeof stored === 'object') ? stored as {
         gameDir?: string;
         port?: string;
+        serverIp?: string;
         javaMemory?: number;
         jvmArgs?: string;
         javaPath8?: string;
@@ -236,6 +238,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
 
       if (defaults.gameDir) setGameDir(defaults.gameDir);
       if (defaults.port && itemTypeName === 'Server') setPort(defaults.port);
+      if (defaults.serverIp && itemTypeName === 'Server') setServerIp(defaults.serverIp);
       if (defaults.javaMemory) setJavaMemory(defaults.javaMemory);
       if (defaults.jvmArgs) setJvmArgs(defaults.jvmArgs);
 
@@ -357,7 +360,10 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         maxMemory: javaMemory,
         jvmArgs: extraJvmArgs || undefined,
         customJavaPath: javaPath || undefined,
-        ...(itemTypeName === 'Server' && { port }),
+        ...(itemTypeName === 'Server' && {
+          port,
+          serverIp: serverIp.trim() || '127.0.0.1',
+        }),
     });
   };
 
@@ -401,11 +407,14 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
           <div className="flex-1 grid grid-cols-2 gap-x-6 gap-y-4">
             {itemTypeName === 'Server' ? (
               <>
-                <FormField label="Name" htmlFor="itemName">
+                <FormField label="Name" htmlFor="itemName" className="col-span-2">
                   <input id="itemName" type="text" value={name} onChange={e => setName(e.target.value)} className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
                 </FormField>
                 <FormField label="Port" htmlFor="itemPort">
                   <input id="itemPort" type="text" value={port} onChange={e => setPort(e.target.value)} className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
+                </FormField>
+                <FormField label="Server IP" htmlFor="itemServerIp">
+                  <input id="itemServerIp" type="text" value={serverIp} onChange={e => setServerIp(e.target.value)} className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
                 </FormField>
               </>
             ) : (

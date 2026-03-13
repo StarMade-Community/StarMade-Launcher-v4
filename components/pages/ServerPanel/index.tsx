@@ -239,7 +239,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [serverId, servers, selectedServer]);
 
   const effectiveServerName = serverName || effectiveServer?.name || 'Server';
-  const effectiveServerIp = '127.0.0.1';
+  const effectiveServerIp = effectiveServer?.serverIp?.trim() || '127.0.0.1';
   const hasGameApi = typeof window !== 'undefined' && !!window.launcher?.game;
   const hasDownloadApi = typeof window !== 'undefined' && !!window.launcher?.download;
   const hasStoreApi = typeof window !== 'undefined' && !!window.launcher?.store;
@@ -851,7 +851,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         <label className="flex items-center gap-3 text-sm">
           <span className="w-28 text-gray-300">Bind Address:</span>
           <input
-            value="0.0.0.0 (default)"
+            value={effectiveServerIp}
             readOnly
             className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
           />
