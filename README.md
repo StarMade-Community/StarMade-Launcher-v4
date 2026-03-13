@@ -161,7 +161,7 @@ tests/
 ## Links
 
 - **Official Website**: https://www.star-made.org/
-- **Discord**: https://discord.gg/starmade
+- **Discord**: https://discord.gg/SXbkYpU
 - **Steam**: https://store.steampowered.com/app/244770/StarMade/
 
 ## License
