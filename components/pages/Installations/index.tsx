@@ -90,6 +90,14 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
         setActiveItem(null);
     };
 
+    const handleRepair = () => {
+        if (!activeItem) return;
+        const itemId = activeItem.id;
+        setView('list');
+        setActiveItem(null);
+        downloadVersion(itemId);
+    };
+
     const handleDelete = (id: string) => {
         if (activeTab === 'installations') deleteInstallation(id);
         else deleteServer(id);
@@ -127,6 +135,7 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
                     isNew={isNew}
                     onSave={handleSave}
                     onCancel={handleCancel}
+                    onRepairInstall={!isNew ? handleRepair : undefined}
                     itemTypeName={itemTypeName}
                 />
             );

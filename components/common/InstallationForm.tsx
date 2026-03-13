@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FolderIcon, MonitorIcon, ChevronDownIcon, CloseIcon, PencilIcon } from './icons';
+import { FolderIcon, MonitorIcon, ChevronDownIcon, CloseIcon, PencilIcon, WrenchIcon } from './icons';
 import type { ManagedItem, ItemType, Version } from '../../types';
 import { getIconComponent } from '../../utils/getIconComponent';
 import CustomDropdown from './CustomDropdown';
@@ -11,6 +11,7 @@ interface InstallationFormProps {
   isNew: boolean;
   onSave: (data: ManagedItem) => void;
   onCancel: () => void;
+  onRepairInstall?: () => void;
   itemTypeName: string;
 }
 
@@ -190,7 +191,7 @@ async function resolveJavaPaths(
   };
 }
 
-const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave, onCancel, itemTypeName }) => {
+const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave, onCancel, onRepairInstall, itemTypeName }) => {
   const { versions: allVersions, isVersionsLoading } = useData();
 
   const [name, setName] = useState(item.name);
@@ -450,7 +451,29 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
                 placeholder="Click the folder icon to choose…"
                 className={`flex-1 bg-slate-900/80 border rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent ${pathError ? 'border-red-500' : 'border-slate-700'}`}
               />
-              <button onClick={handleFolderPicker} className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80 transition-colors"><FolderIcon className="w-5 h-5 text-gray-400" /></button>
+              {(() => {
+                const hasRepairBtn = !isNew && !!onRepairInstall;
+                return (
+                  <button
+                    onClick={handleFolderPicker}
+                    className={`bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 hover:bg-slate-700/80 transition-colors${hasRepairBtn ? '' : ' rounded-r-md'}`}
+                    aria-label="Open folder picker"
+                  >
+                    <FolderIcon className="w-5 h-5 text-gray-400" />
+                  </button>
+                );
+              })()}
+              {!isNew && onRepairInstall && (
+                <button
+                  onClick={onRepairInstall}
+                  className="flex items-center gap-2 bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80 transition-colors"
+                  title="Repair Install — re-verify and re-download missing or corrupt files"
+                  aria-label="Repair install — re-verify and re-download missing or corrupt files"
+                >
+                  <WrenchIcon className="w-4 h-4 text-gray-400" />
+                  <span className="text-sm text-gray-400 font-semibold">Repair</span>
+                </button>
+              )}
             </div>
             {pathError && <p className="text-xs text-red-400 mt-1">{pathError}</p>}
             {isNew && (
