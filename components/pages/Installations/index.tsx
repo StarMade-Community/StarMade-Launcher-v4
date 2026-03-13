@@ -165,8 +165,8 @@ const Installations: React.FC<InstallationsProps> = ({ initialTab }) => {
                             actionButtonText={cardActionButtonText}
                             statusLabel={cardStatusLabel}
                             downloadStatus={downloadStatuses[item.id]}
-                            onDownload={activeTab === 'installations' ? () => downloadVersion(item.id) : undefined}
-                            onCancelDownload={activeTab === 'installations' ? () => cancelDownload(item.id) : undefined}
+                            onDownload={() => downloadVersion(item.id)}
+                            onCancelDownload={() => cancelDownload(item.id)}
                             onAction={activeTab === 'installations'
                                 ? (i) => openLaunchModal(i)
                                 : undefined}
