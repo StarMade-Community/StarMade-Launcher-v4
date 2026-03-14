@@ -17,6 +17,8 @@ declare global {
       window: {
         /** Minimize the application window */
         minimize: () => void;
+        /** Hide the application window without quitting the app */
+        hide: () => void;
         /** Toggle maximize / restore the application window */
         maximize: () => void;
         /** Close the application window */

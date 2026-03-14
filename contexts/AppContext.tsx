@@ -80,7 +80,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 }, POST_LAUNCH_CLOSE_DELAY_MS);
                 break;
             case 'Hide launcher':
-                window.launcher.window.minimize();
+                window.launcher.window.hide();
                 break;
             case 'Keep the launcher open':
             default:

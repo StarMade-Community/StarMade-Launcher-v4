@@ -5,6 +5,8 @@
 export const IPC = {
   /** Renderer → Main: minimize the application window */
   WINDOW_MINIMIZE: 'window:minimize',
+  /** Renderer → Main: hide the application window without quitting the app */
+  WINDOW_HIDE: 'window:hide',
   /** Renderer → Main: toggle maximize / restore the application window */
   WINDOW_MAXIMIZE: 'window:maximize',
   /** Renderer → Main: close the application window */

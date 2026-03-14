@@ -8,7 +8,7 @@
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import fs from 'fs';
-import { shell } from 'electron';
+import { app, shell } from 'electron';
 import { getRequiredJavaVersion, getJvmArgsForJava, resolveJavaPath } from './java.js';
 import { BrowserWindow } from 'electron';
 
@@ -46,6 +46,18 @@ export interface ServerLogCatalog {
 }
 
 const runningProcesses = new Map<string, RunningProcess>();
+
+function quitLauncherIfIdle(): void {
+  if (process.platform === 'darwin') return;
+  if (runningProcesses.size > 0) return;
+  if (BrowserWindow.getAllWindows().length > 0) return;
+
+  app.quit();
+}
+
+export function hasRunningGames(): boolean {
+  return runningProcesses.size > 0;
+}
 
 /**
  * Send a log event to all renderer windows.
@@ -462,6 +474,7 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
         running.logFileWatcher?.close();
       }
       runningProcesses.delete(installationId);
+      quitLauncherIfIdle();
     });
 
     // Handle process errors
@@ -477,6 +490,7 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
         running.logFileWatcher?.close();
       }
       runningProcesses.delete(installationId);
+      quitLauncherIfIdle();
     });
 
     return {
@@ -508,6 +522,7 @@ export function stopGame(installationId: string): boolean {
   try {
     running.process.kill('SIGTERM');
     runningProcesses.delete(installationId);
+    quitLauncherIfIdle();
     console.log(`[Launcher] Stopped process ${installationId}`);
     return true;
   } catch (error) {

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 // Mock electron and Node-specific modules before importing launcher
 vi.mock('electron', () => ({
+  app: { quit: vi.fn() },
   BrowserWindow: { getAllWindows: vi.fn(() => []) },
   shell: { openPath: vi.fn() },
 }));

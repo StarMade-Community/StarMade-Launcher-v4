@@ -22,6 +22,7 @@ const launcherApi = {
 
   window: {
     minimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
+    hide: () => ipcRenderer.send(IPC.WINDOW_HIDE),
     maximize: () => ipcRenderer.send(IPC.WINDOW_MAXIMIZE),
     close:    () => ipcRenderer.send(IPC.WINDOW_CLOSE),
     openServerPanel: (serverId?: string, serverName?: string): Promise<{ success: boolean; error?: string }> =>

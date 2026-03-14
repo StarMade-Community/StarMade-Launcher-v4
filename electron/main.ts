@@ -18,7 +18,7 @@ import { fetchAllVersions, invalidateVersionCache } from './versions.js';
 import { startDownload, cancelDownload } from './downloader.js';
 import type { DownloadProgress } from './downloader.js';
 import { downloadJava, detectSystemJava, resolveJavaPath, getDefaultJavaPaths, findJavaExecutableInDir } from './java.js';
-import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, clearServerLogFiles, getGraphicsInfo, listServerLogFiles, readServerLogFile, sendServerStdin, listChatFiles, readChatFile } from './launcher.js';
+import { launchGame, stopGame, getGameStatus, getAllRunningGames, hasRunningGames, stopAllGames, getLogPath, openLogLocation, clearServerLogFiles, getGraphicsInfo, listServerLogFiles, readServerLogFile, sendServerStdin, listChatFiles, readChatFile } from './launcher.js';
 import type { UpdateInfo } from './updater.js';
 import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from './updater.js';
 import { createBackup, listBackups, restoreBackup } from './backup.js';
@@ -288,6 +288,11 @@ function createServerPanelWindow(serverId?: string, serverName?: string): Browse
 ipcMain.on(IPC.WINDOW_MINIMIZE, (event) => {
   const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
   targetWindow?.minimize();
+});
+
+ipcMain.on(IPC.WINDOW_HIDE, (event) => {
+  const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  targetWindow?.hide();
 });
 
 ipcMain.on(IPC.WINDOW_MAXIMIZE, (event) => {
@@ -1863,6 +1868,11 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    if (hasRunningGames()) {
+      console.log('[main] All launcher windows closed while StarMade is still running; keeping the app alive in the background.');
+      return;
+    }
+
     app.quit();
   }
 });

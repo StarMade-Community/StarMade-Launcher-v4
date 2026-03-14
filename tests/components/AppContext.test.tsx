@@ -61,6 +61,7 @@ describe('AppContext post-launch behavior', () => {
 
   it('closes the launcher after a successful launch when closeBehavior is set to close', async () => {
     const close = vi.fn();
+    const hide = vi.fn();
     const launch = vi.fn().mockResolvedValue({ success: true, pid: 1234 });
 
     (window as unknown as Record<string, unknown>).launcher = {
@@ -73,6 +74,7 @@ describe('AppContext post-launch behavior', () => {
       },
       window: {
         close,
+        hide,
         minimize: vi.fn(),
       },
     };
@@ -95,12 +97,51 @@ describe('AppContext post-launch behavior', () => {
 
     expect(launch).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledTimes(1);
+    expect(hide).not.toHaveBeenCalled();
     expect(mockRecordSession).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('log-viewer-state')).toHaveTextContent('closed');
   });
 
+  it('hides the launcher after a successful launch when closeBehavior is set to hide', async () => {
+    const close = vi.fn();
+    const hide = vi.fn();
+    const launch = vi.fn().mockResolvedValue({ success: true, pid: 9876 });
+
+    (window as unknown as Record<string, unknown>).launcher = {
+      game: {
+        launch,
+        listRunning: vi.fn().mockResolvedValue([]),
+      },
+      store: {
+        get: vi.fn().mockResolvedValue({ closeBehavior: 'Hide launcher', showLog: false }),
+      },
+      window: {
+        close,
+        hide,
+        minimize: vi.fn(),
+      },
+    };
+
+    render(
+      <AppProvider>
+        <LaunchHarness />
+      </AppProvider>,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Launch'));
+    });
+
+    await flushLaunch();
+
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(hide).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
+  });
+
   it('keeps the launcher open and opens the log viewer when requested', async () => {
     const close = vi.fn();
+    const hide = vi.fn();
     const launch = vi.fn().mockResolvedValue({ success: true, pid: 5678 });
 
     (window as unknown as Record<string, unknown>).launcher = {
@@ -113,6 +154,7 @@ describe('AppContext post-launch behavior', () => {
       },
       window: {
         close,
+        hide,
         minimize: vi.fn(),
       },
     };
@@ -132,6 +174,7 @@ describe('AppContext post-launch behavior', () => {
     expect(launch).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('log-viewer-state')).toHaveTextContent('open');
     expect(close).not.toHaveBeenCalled();
+    expect(hide).not.toHaveBeenCalled();
   });
 });
 
