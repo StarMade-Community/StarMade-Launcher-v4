@@ -173,6 +173,35 @@ declare global {
         /** Subscribe to game log events. Returns a cleanup function. */
         onLog: (cb: (data: { installationId: string; level: string; message: string }) => void) => () => void;
         /**
+         * Send a line of text to a running server's stdin (console input).
+         * Used to send admin commands such as server_message_broadcast.
+         */
+        sendServerCommand: (installationId: string, line: string) => Promise<{ success: boolean; error?: string }>;
+        /** List chat log files from an installation's chatlogs directory. */
+        listChatFiles: (installationPath: string) => Promise<Array<{
+          fileName: string;
+          channelId: string;
+          channelLabel: string;
+          channelType: 'general' | 'faction' | 'direct' | 'custom';
+          sizeBytes: number;
+          modifiedMs: number;
+        }>>;
+        /** Read the tail of a chat log file from the chatlogs directory. */
+        readChatFile: (installationPath: string, fileName: string, maxBytes?: number) => Promise<{
+          content: string;
+          truncated: boolean;
+          error?: string;
+        }>;
+        /** Subscribe to live chat messages from a running server. Returns a cleanup function. */
+        onChatMessage: (cb: (data: {
+          installationId: string;
+          sender: string;
+          receiverType: string;
+          receiver: string;
+          text: string;
+          timestamp: string;
+        }) => void) => () => void;
+        /**
          * Read the `launcher-session.json` file written by the game into the
          * installation directory.  Returns the parsed object or `null` when the
          * file does not exist or cannot be read.
