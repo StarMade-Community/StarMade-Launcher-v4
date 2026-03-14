@@ -1574,8 +1574,12 @@ function normalizeStoredFileUrl(maybeUrl: string): string | null {
     const normalizedPath = /^[a-zA-Z]:\//.test(withoutScheme)
       ? withoutScheme
       : withoutScheme.replace(/^\/+/, '/');
-    const decodedPath = decodeURIComponent(normalizedPath);
-    return pathToFileURL(decodedPath).href;
+    try {
+      const decodedPath = decodeURIComponent(normalizedPath);
+      return pathToFileURL(decodedPath).href;
+    } catch {
+      return null;
+    }
   }
 
   try {
@@ -1704,8 +1708,9 @@ function listPngScreenshots(installationPath: string): {
     .map(fileName => {
       const absolutePath = path.join(screenshotsDir, fileName);
       const stats = fs.statSync(absolutePath);
-      const img = nativeImage.createFromPath(absolutePath);
-      const { width, height } = img.getSize();
+      const dimensions = sizeOf(fs.readFileSync(absolutePath));
+      const width = dimensions.width ?? 0;
+      const height = dimensions.height ?? 0;
 
       return {
         name: fileName,
