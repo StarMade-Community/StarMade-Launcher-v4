@@ -1,4 +1,4 @@
-import type { Version, DownloadProgress, ModRecord, ModpackManifest, SmdModResource } from './index';
+import type { Version, DownloadProgress, ModRecord, ModpackManifest, SmdModResource, SmdInstalledUpdateStatus } from './index';
 
 declare global {
   interface Window {
@@ -337,6 +337,10 @@ declare global {
           resourceId: number,
           enabled?: boolean,
         ) => Promise<{ success: boolean; mod?: ModRecord; error?: string }>;
+        /** Check installed SMD mods for available updates. */
+        checkSmdUpdates: (
+          installed: Array<{ resourceId: number; smdVersion: string }>,
+        ) => Promise<{ success: boolean; updates: SmdInstalledUpdateStatus[]; error?: string }>;
         /** Delete a mod jar from an installation. */
         remove: (installationPath: string, relativePath: string) => Promise<{ success: boolean; error?: string }>;
         /** Enable or disable a mod by moving it between folders. */

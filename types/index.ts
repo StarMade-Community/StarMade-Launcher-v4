@@ -168,6 +168,14 @@ export interface SmdModResource {
   latestVersion?: string;
 }
 
+export interface SmdInstalledUpdateStatus {
+  resourceId: number;
+  currentVersion: string;
+  latestVersion?: string;
+  hasUpdate: boolean;
+  error?: string;
+}
+
 export interface ModpackEntry {
   /** Display name of the mod entry. */
   name: string;

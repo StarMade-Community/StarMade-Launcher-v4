@@ -34,13 +34,13 @@ import {
   listModsForInstallation,
   listSmdMods,
   installOrUpdateSmdModForInstallation,
+  checkSmdUpdatesForInstalled,
   removeModForInstallation,
   setModEnabledForInstallation,
   createModpackManifest,
   importModpackFromFile,
   writeModpackManifest,
 } from './mods.js';
-import sizeOf from 'image-size';
 
 // ─── ES Module compatibility ─────────────────────────────────────────────────
 
@@ -1709,9 +1709,8 @@ function listPngScreenshots(installationPath: string): {
     .map(fileName => {
       const absolutePath = path.join(screenshotsDir, fileName);
       const stats = fs.statSync(absolutePath);
-      const dimensions = sizeOf(absolutePath);
-      const width = dimensions.width ?? 0;
-      const height = dimensions.height ?? 0;
+      const img = nativeImage.createFromPath(absolutePath);
+      const { width, height } = img.getSize();
 
       return {
         name: fileName,
@@ -1888,6 +1887,18 @@ ipcMain.handle(
       return { success: true, mod };
     } catch (error) {
       return { success: false, error: String(error) };
+    }
+  },
+);
+
+ipcMain.handle(
+  IPC.MODS_SMD_CHECK_UPDATES,
+  async (_event, installed: Array<{ resourceId: number; smdVersion: string }>) => {
+    try {
+      const updates = await checkSmdUpdatesForInstalled(Array.isArray(installed) ? installed : []);
+      return { success: true, updates };
+    } catch (error) {
+      return { success: false, updates: [], error: String(error) };
     }
   },
 );

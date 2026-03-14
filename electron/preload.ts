@@ -493,6 +493,19 @@ const launcherApi = {
       error?: string;
     }> => ipcRenderer.invoke(IPC.MODS_SMD_INSTALL_OR_UPDATE, installationPath, resourceId, enabled),
 
+    /** Check installed SMD mods for newer versions. */
+    checkSmdUpdates: (installed: Array<{ resourceId: number; smdVersion: string }>): Promise<{
+      success: boolean;
+      updates: Array<{
+        resourceId: number;
+        currentVersion: string;
+        latestVersion?: string;
+        hasUpdate: boolean;
+        error?: string;
+      }>;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.MODS_SMD_CHECK_UPDATES, installed),
+
     /** Remove a mod jar from an installation. */
     remove: (installationPath: string, relativePath: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC.MODS_REMOVE, installationPath, relativePath),
