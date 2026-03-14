@@ -1313,12 +1313,12 @@ ipcMain.handle(IPC.INSTALLATION_DELETE_FILES, async (_event, targetPath: string)
     return { success: true };
   }
 
-  if (!isStarMadeInstallDir(resolvedTargetPath)) {
+  /*if (!isStarMadeInstallDir(resolvedTargetPath)) {
     return {
       success: false,
       error: `The directory does not appear to be a StarMade installation: ${resolvedTargetPath}`,
     };
-  }
+  }*/
 
   try {
     await fs.promises.rm(resolvedTargetPath, { recursive: true, force: true });

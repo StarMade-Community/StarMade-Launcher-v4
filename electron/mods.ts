@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { gunzipSync } from 'zlib';
 import { getManagedPathCandidates } from './install-paths.js';
 
 export interface ModRecord {
@@ -78,6 +79,7 @@ export interface ModMetadataStore {
 const MODS_DIR_NAME = 'mods';
 const LEGACY_MODS_DISABLED_DIR_NAME = 'mods-disabled';
 const SMD_API_BASE = 'https://starmadedock.net/api';
+const SMD_CACHED_API_BASE = 'https://starmadedock.net/cached-api';
 const SMD_MOD_CATEGORY_ID = 6;
 const SMD_API_KEY_ENV_NAMES = ['SMD_API_KEY', 'SMD_XF_API_KEY', 'XENFORO_API_KEY'] as const;
 
@@ -277,6 +279,36 @@ function getSmdApiKey(): string {
   );
 }
 
+function getOptionalSmdApiKey(): string | null {
+  for (const value of [process.env.SMD_API_KEY, process.env.SMD_XF_API_KEY, process.env.XENFORO_API_KEY]) {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function isSmdHost(urlValue: string): boolean {
+  try {
+    const host = new URL(urlValue).hostname.toLowerCase();
+    return host === 'starmadedock.net' || host.endsWith('.starmadedock.net');
+  } catch {
+    return false;
+  }
+}
+
+function getDownloadRequestHeaders(downloadUrl: string): Record<string, string> | undefined {
+  if (!isSmdHost(downloadUrl)) return undefined;
+
+  const apiKey = getOptionalSmdApiKey();
+  if (!apiKey) return undefined;
+
+  return {
+    'XF-Api-Key': apiKey,
+    'User-Agent': 'StarMade-Launcher',
+  };
+}
+
 function asObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -293,60 +325,133 @@ function getNumberField(record: Record<string, unknown>, key: string): number | 
   return typeof value === 'number' ? value : undefined;
 }
 
+function getPaginationPageCount(root: Record<string, unknown> | null): number {
+  const pagination = asObject(root?.pagination);
+  const lastPage = pagination ? getNumberField(pagination, 'last_page') : undefined;
+  return typeof lastPage === 'number' && Number.isFinite(lastPage) && lastPage > 1 ? lastPage : 1;
+}
+
+function appendPageQuery(apiPath: string, page: number): string {
+  const separator = apiPath.includes('?') ? '&' : '?';
+  return `${apiPath}${separator}page=${page}`;
+}
+
+async function smdFetchPaginatedResources(apiPath: string): Promise<unknown[]> {
+  const firstRaw = await smdFetchJson(apiPath);
+  const firstRoot = asObject(firstRaw);
+  const firstPageResources = Array.isArray(firstRoot?.resources) ? firstRoot.resources : [];
+  const lastPage = getPaginationPageCount(firstRoot);
+
+  if (lastPage <= 1) return firstPageResources;
+
+  const resources = [...firstPageResources];
+  for (let page = 2; page <= lastPage; page += 1) {
+    const pageRaw = await smdFetchJson(appendPageQuery(apiPath, page));
+    const pageRoot = asObject(pageRaw);
+    if (!Array.isArray(pageRoot?.resources)) continue;
+    resources.push(...pageRoot.resources);
+  }
+
+  return resources;
+}
+
+async function smdFetchCachedCategoryResources(categoryId: number): Promise<unknown[]> {
+  const response = await fetch(`${SMD_CACHED_API_BASE}/resource-categories/${categoryId}.json.gz`, {
+    headers: {
+      'User-Agent': 'StarMade-Launcher',
+    },
+  });
+
+  if (!response.ok) {
+    const bodyText = await response.text().catch(() => '');
+    const suffix = bodyText.trim().length > 0
+      ? `: ${bodyText.trim().slice(0, 240)}`
+      : '';
+    throw new Error(`SMD cached category request failed (${response.status}) for ${categoryId}${suffix}`);
+  }
+
+  const gzipped = Buffer.from(await response.arrayBuffer());
+  const rawJson = gunzipSync(gzipped).toString('utf8');
+  const root = asObject(JSON.parse(rawJson));
+  return Array.isArray(root?.resources) ? root.resources : [];
+}
+
+function isResourceInModsCategory(resource: Record<string, unknown>): boolean {
+  const categoryId = getNumberField(resource, 'category_id')
+    ?? getNumberField(resource, 'resource_category_id');
+  if (categoryId === SMD_MOD_CATEGORY_ID) return true;
+
+  const category = asObject(resource.Category) ?? asObject(resource.category);
+  const parentCategoryId = category ? getNumberField(category, 'parent_category_id') : undefined;
+  return parentCategoryId === SMD_MOD_CATEGORY_ID;
+}
+
+function mapSmdResource(resourceRaw: unknown): SmdModResource | null {
+  const resource = asObject(resourceRaw);
+  if (!resource) return null;
+
+  const resourceId = getNumberField(resource, 'resource_id');
+  const name = getStringField(resource, 'title');
+  const author = getStringField(resource, 'username') ?? 'Unknown';
+  if (!resourceId || !name) return null;
+
+  const customFields = asObject(resource.custom_fields);
+  const gameVersion = customFields ? getStringField(customFields, 'Gameversion') : undefined;
+
+  return {
+    resourceId,
+    name,
+    author,
+    tagLine: getStringField(resource, 'tag_line'),
+    gameVersion,
+    downloadCount: getNumberField(resource, 'download_count') ?? 0,
+    ratingAverage: getNumberField(resource, 'rating_avg') ?? 0,
+    latestVersion: undefined,
+  };
+}
+
 
 async function fetchSmdCategoryResources(): Promise<SmdModResource[]> {
-  let raw: unknown;
+  let listRaw: unknown[] = [];
   let usingFallback = false;
   try {
-    raw = await smdFetchJson(`/resource-categories/${SMD_MOD_CATEGORY_ID}/resources`);
+    listRaw = await smdFetchPaginatedResources(`/resource-categories/${SMD_MOD_CATEGORY_ID}/resources`);
   } catch (error) {
     const message = toErrorMessage(error);
     // Some XenForo keys can read /resources but are denied from category-scoped routes.
     if (!message.includes('(403)')) throw error;
-    raw = await smdFetchJson('/resources');
-    usingFallback = true;
-  }
-  const root = asObject(raw);
-  const listRaw = root?.resources;
-  if (!Array.isArray(listRaw)) return [];
 
-  const entries: SmdModResource[] = [];
+    try {
+      listRaw = await smdFetchCachedCategoryResources(SMD_MOD_CATEGORY_ID);
+    } catch {
+      listRaw = await smdFetchPaginatedResources('/resources');
+      usingFallback = true;
+    }
+  }
+
+  const entriesById = new Map<number, SmdModResource>();
   for (const resourceRaw of listRaw) {
     const resource = asObject(resourceRaw);
     if (!resource) continue;
 
-    const resourceId = getNumberField(resource, 'resource_id');
-    const name = getStringField(resource, 'title');
-    const author = getStringField(resource, 'username') ?? 'Unknown';
-    if (!resourceId || !name) continue;
-
     // Only filter by category when using the fallback /resources endpoint which
     // returns all categories.  The primary /resource-categories/{id}/resources
-    // endpoint already scopes to the right category, so we include everything it
-    // returns regardless of what category_id field says (sub-categories are fine).
-    if (usingFallback) {
-      const categoryId = getNumberField(resource, 'category_id')
-        ?? getNumberField(resource, 'resource_category_id');
-      if (typeof categoryId === 'number' && categoryId !== SMD_MOD_CATEGORY_ID) continue;
-    }
+    // endpoint already scopes to the right category, so we include everything it returns.
+    if (usingFallback && !isResourceInModsCategory(resource)) continue;
 
-    const customFields = asObject(resource.custom_fields);
-    const gameVersion = customFields ? getStringField(customFields, 'Gameversion') : undefined;
-
-    entries.push({
-      resourceId,
-      name,
-      author,
-      tagLine: getStringField(resource, 'tag_line'),
-      gameVersion,
-      downloadCount: getNumberField(resource, 'download_count') ?? 0,
-      ratingAverage: getNumberField(resource, 'rating_avg') ?? 0,
-      latestVersion: undefined,
-    });
+    const entry = mapSmdResource(resource);
+    if (!entry) continue;
+    entriesById.set(entry.resourceId, entry);
   }
 
+  const entries = [...entriesById.values()];
   entries.sort((a, b) => b.downloadCount - a.downloadCount || a.name.localeCompare(b.name));
   return entries;
+}
+
+/** Clears the in-memory SMD mod cache.  Intended for use in tests only. */
+export function clearSmdCache(): void {
+  smdCache = null;
 }
 
 export async function listSmdMods(searchQuery?: string): Promise<SmdModResource[]> {
@@ -480,10 +585,18 @@ export function listModsForInstallation(
   };
 }
 
-async function downloadToFile(downloadUrl: string, targetPath: string): Promise<void> {
-  const response = await fetch(downloadUrl);
+async function downloadToFile(
+  downloadUrl: string,
+  targetPath: string,
+  headers?: Record<string, string>,
+): Promise<void> {
+  const response = await fetch(downloadUrl, headers ? { headers } : undefined);
   if (!response.ok) {
-    throw new Error(`Download request failed with status ${response.status}.`);
+    const bodyText = await response.text().catch(() => '');
+    const suffix = bodyText.trim().length > 0
+      ? `: ${bodyText.trim().slice(0, 240)}`
+      : '';
+    throw new Error(`Download request failed with status ${response.status}${suffix}`);
   }
   const arrayBuffer = await response.arrayBuffer();
   fs.writeFileSync(targetPath, Buffer.from(arrayBuffer));
@@ -543,7 +656,11 @@ export async function downloadModForInstallation(options: {
   const modsDir = path.join(installationRoot, MODS_DIR_NAME);
   fs.mkdirSync(modsDir, { recursive: true });
 
-  const headResponse = await fetch(downloadUrl, { method: 'HEAD' }).catch(() => null);
+  const downloadHeaders = getDownloadRequestHeaders(downloadUrl);
+  const headResponse = await fetch(
+    downloadUrl,
+    downloadHeaders ? { method: 'HEAD', headers: downloadHeaders } : { method: 'HEAD' },
+  ).catch(() => null);
   const inferredFileName = inferDownloadFileName(
     downloadUrl,
     headResponse?.headers.get('content-disposition') ?? null,
@@ -553,7 +670,7 @@ export async function downloadModForInstallation(options: {
   const targetPath = getUniqueFilePath(modsDir, inferredFileName);
   assertWithin(installationRoot, targetPath);
 
-  await downloadToFile(downloadUrl, targetPath);
+  await downloadToFile(downloadUrl, targetPath, downloadHeaders);
 
   const fileName = path.basename(targetPath);
   updateMetadataForFile(metadataStore, installationRoot, fileName, {

@@ -1,11 +1,39 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { gzipSync } from 'zlib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { listSmdMods, parseModpackManifest, sanitizeModFileName } from '../../electron/mods.js';
+import {
+  clearSmdCache,
+  downloadModForInstallation,
+  listSmdMods,
+  parseModpackManifest,
+  sanitizeModFileName,
+} from '../../electron/mods.js';
 
 let previousSmdApiKey: string | undefined;
+const tempDirs: string[] = [];
+
+function createMetadataStore() {
+  let value: unknown = undefined;
+  return {
+    get: () => value,
+    set: (next: unknown) => {
+      value = next;
+    },
+  };
+}
+
+function createInstallationDir(): string {
+  const installationRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'starmade-mods-test-'));
+  tempDirs.push(installationRoot);
+  return installationRoot;
+}
 
 beforeEach(() => {
   previousSmdApiKey = process.env.SMD_API_KEY;
   process.env.SMD_API_KEY = 'test-api-key';
+  clearSmdCache();
 });
 
 afterEach(() => {
@@ -13,6 +41,9 @@ afterEach(() => {
     process.env.SMD_API_KEY = previousSmdApiKey;
   } else {
     delete process.env.SMD_API_KEY;
+  }
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -136,7 +167,6 @@ describe('listSmdMods', () => {
   });
 
   it('includes mods with no tags when no search query is given', async () => {
-    vi.spyOn(Date, 'now').mockReturnValue(Number.MAX_SAFE_INTEGER - 1);
 
     const mockResponse = {
       ok: true,
@@ -170,30 +200,179 @@ describe('listSmdMods', () => {
     expect(ids).toContain(99);
   });
 
-  it('fallback /resources endpoint: excludes mods from a different category', async () => {
-    vi.spyOn(Date, 'now').mockReturnValue(Number.MAX_SAFE_INTEGER - 2);
-
-    // First fetch (primary) → 403; second fetch (fallback) → mixed categories
-    let callCount = 0;
-    vi.stubGlobal('fetch', vi.fn(async () => {
-      callCount += 1;
-      if (callCount === 1) {
-        return { ok: false, status: 403, text: async () => 'Forbidden' } as unknown as Response;
+  it('loads all pages from the category endpoint instead of only the first page', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/resource-categories/6/resources?page=2')) {
+        return {
+          ok: true,
+          json: async () => ({
+            resources: [
+              { resource_id: 12, title: 'Third Mod', username: 'C', download_count: 5, rating_avg: 4.1 },
+            ],
+            pagination: { current_page: 2, last_page: 2, per_page: 20, shown: 1, total: 3 },
+          }),
+        } as unknown as Response;
       }
+
       return {
         ok: true,
         json: async () => ({
           resources: [
-            { resource_id: 10, title: 'Mod In Category 6', username: 'A', category_id: 6, download_count: 10, rating_avg: 4 },
-            { resource_id: 11, title: 'Mod In Other Category', username: 'B', category_id: 99, download_count: 20, rating_avg: 5 },
+            { resource_id: 10, title: 'First Mod', username: 'A', download_count: 10, rating_avg: 4.0 },
+            { resource_id: 11, title: 'Second Mod', username: 'B', download_count: 8, rating_avg: 3.8 },
           ],
+          pagination: { current_page: 1, last_page: 2, per_page: 20, shown: 2, total: 3 },
         }),
       } as unknown as Response;
     }));
 
     const mods = await listSmdMods();
-    expect(mods).toHaveLength(1);
-    expect(mods[0].resourceId).toBe(10);
+    expect(mods).toHaveLength(3);
+    expect(mods.map((mod) => mod.resourceId)).toEqual([10, 11, 12]);
+  });
+
+  it('falls back to the cached category endpoint when the category API returns 403', async () => {
+    const cachedPayload = gzipSync(Buffer.from(JSON.stringify({
+      resources: [
+        { resource_id: 42, title: 'BetterChambers', username: 'Author', download_count: 12, rating_avg: 4.5 },
+        { resource_id: 99, title: 'Resources Reorganized', username: 'Dev', download_count: 8, rating_avg: 4.2 },
+      ],
+      pagination: { current_page: 1, last_page: 1, per_page: 200, shown: 2, total: 2 },
+    })));
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/resource-categories/6/resources')) {
+        return { ok: false, status: 403, text: async () => 'Forbidden' } as unknown as Response;
+      }
+      if (url.includes('/cached-api/resource-categories/6.json.gz')) {
+        return {
+          ok: true,
+          arrayBuffer: async () => cachedPayload.buffer.slice(
+            cachedPayload.byteOffset,
+            cachedPayload.byteOffset + cachedPayload.byteLength,
+          ),
+        } as unknown as Response;
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    }));
+
+    const mods = await listSmdMods();
+    expect(mods).toHaveLength(2);
+    expect(mods.map((mod) => mod.resourceId)).toEqual([42, 99]);
+  });
+
+  it('last-resort /resources fallback keeps mods and excludes unrelated categories', async () => {
+    let resourcesPage = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/resource-categories/6/resources')) {
+        return { ok: false, status: 403, text: async () => 'Forbidden' } as unknown as Response;
+      }
+      if (url.includes('/cached-api/resource-categories/6.json.gz')) {
+        return { ok: false, status: 500, text: async () => 'Cache unavailable' } as unknown as Response;
+      }
+
+      resourcesPage += 1;
+      if (resourcesPage === 1) {
+        return {
+          ok: true,
+          json: async () => ({
+            resources: [
+              { resource_id: 10, title: 'Mod In Category 6', username: 'A', resource_category_id: 6, download_count: 10, rating_avg: 4 },
+              { resource_id: 11, title: 'Mod In Subcategory', username: 'B', resource_category_id: 12, Category: { parent_category_id: 6 }, download_count: 20, rating_avg: 5 },
+            ],
+            pagination: { current_page: 1, last_page: 2, per_page: 20, shown: 2, total: 3 },
+          }),
+        } as unknown as Response;
+      }
+
+      return {
+        ok: true,
+        json: async () => ({
+          resources: [
+            { resource_id: 12, title: 'Mod In Other Category', username: 'C', resource_category_id: 99, Category: { parent_category_id: 0 }, download_count: 30, rating_avg: 5 },
+          ],
+          pagination: { current_page: 2, last_page: 2, per_page: 20, shown: 1, total: 3 },
+        }),
+      } as unknown as Response;
+    }));
+
+    const mods = await listSmdMods();
+    expect(mods).toHaveLength(2);
+    expect(mods.map((mod) => mod.resourceId)).toEqual([11, 10]);
+  });
+});
+
+describe('downloadModForInstallation', () => {
+  it('sends XF-Api-Key headers to starmadedock download URLs', async () => {
+    const installationPath = createInstallationDir();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === 'HEAD') {
+        return {
+          ok: true,
+          headers: { get: () => null },
+        } as unknown as Response;
+      }
+
+      expect(url).toContain('starmadedock.net');
+      expect(init?.headers).toMatchObject({
+        'XF-Api-Key': 'test-api-key',
+      });
+
+      return {
+        ok: true,
+        arrayBuffer: async () => new TextEncoder().encode('jar-bytes').buffer,
+      } as unknown as Response;
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await downloadModForInstallation({
+      installationPath,
+      launcherDir: installationPath,
+      downloadUrl: 'https://starmadedock.net/resources/example/download',
+      preferredFileName: 'Example.jar',
+      source: 'smd',
+      metadataStore: createMetadataStore(),
+    });
+
+    expect(mod.fileName).toBe('Example.jar');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not send XF-Api-Key headers to non-SMD URLs', async () => {
+    const installationPath = createInstallationDir();
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'HEAD') {
+        return {
+          ok: true,
+          headers: { get: () => null },
+        } as unknown as Response;
+      }
+
+      expect(init?.headers).toBeUndefined();
+      return {
+        ok: true,
+        arrayBuffer: async () => new TextEncoder().encode('jar-bytes').buffer,
+      } as unknown as Response;
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await downloadModForInstallation({
+      installationPath,
+      launcherDir: installationPath,
+      downloadUrl: 'https://example.com/mods/example.jar',
+      preferredFileName: 'Example.jar',
+      source: 'modpack-import',
+      metadataStore: createMetadataStore(),
+    });
+
+    expect(mod.fileName).toBe('Example.jar');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 
