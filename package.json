@@ -1,9 +1,9 @@
 {
   "name": "starmade-launcher",
   "private": true,
-  "version": "4.0.17",
+  "version": "4.0.18",
   "description": "StarMade Launcher",
-  "author": "StarMade Community",
+  "author": "Schine GmbH & StarMade Contributors",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -51,7 +51,7 @@
     "appId": "org.starmade.launcher",
     "afterPack": "./afterPack.cjs",
     "productName": "StarMade Launcher",
-    "copyright": "Copyright © 2026 Schine, GmbH",
+    "copyright": "Copyright © 2026 Schine GmbH",
     "artifactName": "StarMade-Launcher.${ext}",
     "files": [
       "dist/**/*",

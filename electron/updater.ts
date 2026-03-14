@@ -21,7 +21,7 @@ import http  from 'http';
 import fs    from 'fs';
 import path  from 'path';
 import os    from 'os';
-import { spawn } from 'child_process';
+import { spawn, type SpawnOptions } from 'child_process';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -154,6 +154,36 @@ function httpGetStream(
     req.on('timeout', () => {
       req.destroy();
       reject(new Error(`Timeout downloading ${url}`));
+    });
+  });
+}
+
+/** Resolve PowerShell path explicitly for environments where PATH is restricted. */
+function resolvePowerShellPath(): string {
+  const systemRoot = process.env.SystemRoot || process.env.WINDIR;
+  if (systemRoot) {
+    const candidate = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return 'powershell.exe';
+}
+
+/**
+ * Launch a detached child and resolve only once the process has successfully
+ * spawned.  If spawn fails (e.g. executable not found), reject so callers can
+ * avoid quitting the current app instance.
+ */
+async function spawnDetachedAndConfirm(
+  command: string,
+  args: string[],
+  options: SpawnOptions,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, options);
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
     });
   });
 }
@@ -310,6 +340,10 @@ export async function installUpdate(installerPath: string): Promise<void> {
 
   try {
     if (plat === 'win32') {
+      if (!installerPath || !fs.existsSync(installerPath)) {
+        throw new Error(`Downloaded update file is missing: ${installerPath}`);
+      }
+
       // The Windows build is a portable executable — there is no installer to
       // run silently.  Instead, write a PowerShell helper script that waits
       // for the current process to exit, copies the new exe over the current
@@ -360,7 +394,9 @@ export async function installUpdate(installerPath: string): Promise<void> {
 
       fs.writeFileSync(scriptPath, script);
 
-      spawn('powershell.exe', [
+      const powershellPath = resolvePowerShellPath();
+
+      await spawnDetachedAndConfirm(powershellPath, [
         '-WindowStyle', 'Hidden',
         '-ExecutionPolicy', 'Bypass',
         '-File', scriptPath,
@@ -374,7 +410,7 @@ export async function installUpdate(installerPath: string): Promise<void> {
           UPDATE_PID: String(process.pid),
           UPDATE_SCRIPT: scriptPath,
         },
-      }).unref();
+      });
 
       app.quit();
       return;
