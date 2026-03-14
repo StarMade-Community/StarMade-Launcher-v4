@@ -362,12 +362,9 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
     }
 
     // Pass the authentication token to the game so players don't need to
-    // log in again through the in-game menu (mirrors v2 launcher behaviour).
-    // Each flag and its value are separate spawn arguments so the OS/JVM
-    // receives them correctly (a single combined string would be treated as
-    // one opaque argument by the process).
+    // log in again through the in-game menu
     if (authToken) {
-      args.push('-auth', authToken);
+      args.push('-auth ' + authToken); //The game requires it to be like this, no idea why
       sendLogEvent(installationId, 'INFO', 'Auth token injected.');
     }
 
