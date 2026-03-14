@@ -198,6 +198,7 @@ export interface DataContextType {
     activeAccount: Account | null;
     installations: ManagedItem[];
     servers: ManagedItem[];
+    selectedInstallationId: string | null;
     selectedServerId: string | null;
     selectedServer: ManagedItem | null;
     versions: Version[];
@@ -225,6 +226,7 @@ export interface DataContextType {
     addServer: (item: ManagedItem) => void;
     updateServer: (item: ManagedItem) => void;
     deleteServer: (id: string) => void;
+    setSelectedInstallationId: (installationId: string | null) => void;
     setSelectedServerId: (serverId: string | null) => void;
     getInstallationDefaults: () => ManagedItem;
     getServerDefaults: () => ManagedItem;

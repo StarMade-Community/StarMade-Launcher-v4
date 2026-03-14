@@ -6,6 +6,7 @@ import type { DataContextType, ManagedItem, Account, Version, DownloadStatus, Do
 const SK_ACCOUNTS          = 'accounts';
 const SK_ACTIVE_ACCOUNT_ID = 'activeAccountId';
 const SK_INSTALLATIONS     = 'installations';
+const SK_SELECTED_INSTALLATION_ID = 'selectedInstallationId';
 const SK_SERVERS           = 'servers';
 const SK_SELECTED_SERVER_ID = 'selectedServerId';
 const SK_SELECTED_VER_ID   = 'selectedVersionId';
@@ -66,6 +67,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const [accounts,       setAccounts]       = useState<Account[]>([]);
     const [activeAccount,  setActiveAccount]  = useState<Account | null>(null);
     const [installations,  setInstallations]  = useState<ManagedItem[]>([]);
+    const [selectedInstallationId, setSelectedInstallationId] = useState<string | null>(null);
     const [servers,        setServers]        = useState<ManagedItem[]>([]);
     const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
     const [versions,       setVersions]       = useState<Version[]>([]);
@@ -85,6 +87,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             window.launcher.store.get(SK_ACCOUNTS),
             window.launcher.store.get(SK_ACTIVE_ACCOUNT_ID),
             window.launcher.store.get(SK_INSTALLATIONS),
+            window.launcher.store.get(SK_SELECTED_INSTALLATION_ID),
             window.launcher.store.get(SK_SERVERS),
             window.launcher.store.get(SK_SELECTED_SERVER_ID),
             window.launcher.store.get(SK_SELECTED_VER_ID),
@@ -94,6 +97,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             storedAccounts,
             storedActiveAccountId,
             storedInstallations,
+            storedSelectedInstallationId,
             storedServers,
             storedSelectedServerId,
             storedSelectedVersionId,
@@ -116,6 +120,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             // Load installations
             if (Array.isArray(storedInstallations)) {
                 setInstallations(storedInstallations as ManagedItem[]);
+            }
+
+            if (typeof storedSelectedInstallationId === 'string') {
+                setSelectedInstallationId(storedSelectedInstallationId);
             }
 
             // Load servers
@@ -287,6 +295,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }, [installations, isLoaded]);
 
     useEffect(() => {
+        if (isLoaded && hasStore()) window.launcher.store.set(SK_SELECTED_INSTALLATION_ID, selectedInstallationId);
+    }, [selectedInstallationId, isLoaded]);
+
+    useEffect(() => {
         if (isLoaded && hasStore()) window.launcher.store.set(SK_SERVERS, servers);
     }, [servers, isLoaded]);
 
@@ -317,6 +329,25 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             return servers[0]?.id ?? null;
         });
     }, [servers, isLoaded]);
+
+    // Keep the selected installation id valid as the installation list changes.
+    useEffect(() => {
+        if (!isLoaded) return;
+        setSelectedInstallationId(prev => {
+            const installedInstallations = installations.filter(installation => installation.installed !== false);
+
+            if (prev && installedInstallations.some(installation => installation.id === prev)) {
+                return prev;
+            }
+
+            const lastPlayedInstallationId = lastPlayedSession?.installationId;
+            if (lastPlayedInstallationId && installedInstallations.some(installation => installation.id === lastPlayedInstallationId)) {
+                return lastPlayedInstallationId;
+            }
+
+            return installedInstallations[0]?.id ?? null;
+        });
+    }, [installations, isLoaded, lastPlayedSession]);
 
     // ── Mutations ────────────────────────────────────────────────────────────
 
@@ -511,6 +542,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         activeAccount,
         installations,
         servers,
+        selectedInstallationId,
         selectedServerId,
         selectedServer,
         versions,
@@ -530,6 +562,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         addServer,
         updateServer,
         deleteServer,
+        setSelectedInstallationId,
         setSelectedServerId,
         getInstallationDefaults,
         getServerDefaults,
