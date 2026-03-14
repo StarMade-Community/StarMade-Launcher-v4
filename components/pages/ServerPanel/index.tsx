@@ -179,6 +179,12 @@ interface FileContextMenuState {
   destinationDir: string;
 }
 
+interface FileActionTarget {
+  path: string;
+  name: string;
+  isDirectory: boolean;
+}
+
 // ─── Database tab types ───────────────────────────────────────────────────────
 
 type DatabaseSqlMode = 'query' | 'update' | 'insertKeys';
@@ -231,6 +237,7 @@ interface DraggedQuickAction {
 }
 
 const LOG_BUFFER_CAP = 30000;
+const LIVE_PROCESS_LOG_PATH = '__live_process_output__';
 const DASHBOARD_STORE_KEY = 'serverPanelDashboardLayoutsV2';
 const MIN_GROUP_HEIGHT = 260;
 const MAX_GROUP_HEIGHT = 1200;
@@ -261,6 +268,15 @@ function getRelativeParentDir(relativePath: string): string {
 
 function isSamePathOrChild(pathValue: string, parentPath: string): boolean {
   return pathValue === parentPath || pathValue.startsWith(`${parentPath}/`);
+}
+
+function isEditableDomTarget(target: EventTarget | null): boolean {
+  const element = target instanceof HTMLElement ? target : null;
+  if (!element) return false;
+
+  if (element.isContentEditable) return true;
+  const editableAncestor = element.closest('input, textarea, [contenteditable="true"]');
+  return !!editableAncestor;
 }
 
 const WIDGET_HEIGHT_WEIGHT: Record<DashboardWidgetId, number> = {
@@ -1908,6 +1924,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [isLogFileTruncated, setIsLogFileTruncated] = useState(false);
   const [logLoadError, setLogLoadError] = useState<string | null>(null);
   const [isClearingLogFiles, setIsClearingLogFiles] = useState(false);
+  const [liveProcessLogs, setLiveProcessLogs] = useState<LogEntry[]>([]);
 
   // ─── Chat state ─────────────────────────────────────────────────────────────
   const [chatChannels, setChatChannels] = useState<ChatChannelInfo[]>([]);
@@ -1996,8 +2013,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [serverId, servers, selectedServer]);
 
   const effectiveServerName = serverName || effectiveServer?.name || 'Server';
-  const effectiveServerIp = effectiveServer?.serverIp?.trim() || '127.0.0.1';
-  const fallbackMaxPlayers = Math.max(0, effectiveServer?.maxPlayers ?? 32);
   const hasGameApi = typeof window !== 'undefined' && !!window.launcher?.game;
   const hasDownloadApi = typeof window !== 'undefined' && !!window.launcher?.download;
   const hasStoreApi = typeof window !== 'undefined' && !!window.launcher?.store;
@@ -2034,9 +2049,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [logCategories]);
 
   const selectedLogFile = useMemo(() => {
-    if (!selectedLogRelativePath) return null;
+    if (!selectedLogRelativePath || selectedLogRelativePath === LIVE_PROCESS_LOG_PATH) return null;
     return allLogFiles.find((file) => file.relativePath === selectedLogRelativePath) ?? null;
   }, [allLogFiles, selectedLogRelativePath]);
+
+  const isLiveLogSelected = selectedLogRelativePath === LIVE_PROCESS_LOG_PATH;
 
   const selectedLogRelativePathRef = useRef<string | null>(null);
 
@@ -2161,13 +2178,16 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setLogCategories(catalog.categories);
 
       const knownPaths = new Set(catalog.categories.flatMap((category) => category.files.map((file) => file.relativePath)));
-      const fallback = catalog.defaultRelativePath;
+      knownPaths.add(LIVE_PROCESS_LOG_PATH);
+      const fallback = catalog.defaultRelativePath ?? LIVE_PROCESS_LOG_PATH;
       const currentSelection = selectedLogRelativePathRef.current;
       const nextSelected = currentSelection && knownPaths.has(currentSelection)
         ? currentSelection
         : fallback;
       setSelectedLogRelativePath(nextSelected ?? null);
-      setLogPath(nextSelected ? `logs/${nextSelected}` : null);
+      setLogPath(nextSelected
+        ? (nextSelected === LIVE_PROCESS_LOG_PATH ? 'process output (live)' : `logs/${nextSelected}`)
+        : null);
     } catch (error) {
       setLogCategories([]);
       setSelectedLogRelativePath(null);
@@ -2363,6 +2383,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   useEffect(() => {
     setLogs([]);
+    setLiveProcessLogs([]);
     setActionError(null);
     setPendingServerAction(null);
     setOnlinePlayers([]);
@@ -2928,33 +2949,32 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     });
   }, [effectiveServer]);
 
-  const handleFileContextCopyLikeAction = useCallback((mode: FileClipboardMode) => {
-    if (!effectiveServer || !fileContextMenu?.targetPath) return;
+  const copyOrCutFileTarget = useCallback((mode: FileClipboardMode, target: FileActionTarget, closeMenu = true) => {
+    if (!effectiveServer) return;
 
     setFileClipboard({
       mode,
       sourceServerId: effectiveServer.id,
-      sourcePath: fileContextMenu.targetPath,
-      sourceName: fileContextMenu.targetName,
-      isDirectory: fileContextMenu.targetIsDirectory,
+      sourcePath: target.path,
+      sourceName: target.name,
+      isDirectory: target.isDirectory,
     });
-    closeFileContextMenu();
-  }, [closeFileContextMenu, effectiveServer, fileContextMenu]);
+    if (closeMenu) closeFileContextMenu();
+  }, [closeFileContextMenu, effectiveServer]);
 
-  const handleFileContextRename = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || !fileContextMenu?.targetPath) return;
+  const renameFileTarget = useCallback(async (target: FileActionTarget, closeMenu = true) => {
+    if (!effectiveServer || !hasGameApi) return;
 
-    const currentName = fileContextMenu.targetName;
-    const promptedName = window.prompt(`Rename "${currentName}" to:`, currentName);
+    const promptedName = window.prompt(`Rename "${target.name}" to:`, target.name);
     if (promptedName === null) {
-      closeFileContextMenu();
+      if (closeMenu) closeFileContextMenu();
       return;
     }
 
     const nextName = promptedName.trim();
     if (!nextName) {
       setFileTabError('Name cannot be empty.');
-      closeFileContextMenu();
+      if (closeMenu) closeFileContextMenu();
       return;
     }
 
@@ -2962,15 +2982,15 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     try {
       const result = await window.launcher.game.renameInstallationPath(
         effectiveServer.path,
-        fileContextMenu.targetPath,
+        target.path,
         nextName,
       );
       if (!result.success || !result.oldRelativePath || !result.newRelativePath) {
-        setFileTabError(result.error ?? `Failed to rename ${currentName}.`);
+        setFileTabError(result.error ?? `Failed to rename ${target.name}.`);
         return;
       }
 
-      remapOpenFilePaths(result.oldRelativePath, result.newRelativePath, fileContextMenu.targetIsDirectory);
+      remapOpenFilePaths(result.oldRelativePath, result.newRelativePath, target.isDirectory);
 
       if (fileClipboard && fileClipboard.sourcePath === result.oldRelativePath) {
         setFileClipboard((prev) => {
@@ -2984,35 +3004,34 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         getRelativeParentDir(result.newRelativePath),
       ]);
     } catch (error) {
-      setFileTabError(`Failed to rename ${currentName}: ${String(error)}`);
+      setFileTabError(`Failed to rename ${target.name}: ${String(error)}`);
     } finally {
-      closeFileContextMenu();
+      if (closeMenu) closeFileContextMenu();
     }
   }, [
     closeFileContextMenu,
     effectiveServer,
     fileClipboard,
-    fileContextMenu,
     hasGameApi,
     refreshFileBrowserAfterMutation,
     remapOpenFilePaths,
   ]);
 
-  const handleFileContextDelete = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || !fileContextMenu?.targetPath) return;
+  const deleteFileTarget = useCallback(async (target: FileActionTarget, closeMenu = true) => {
+    if (!effectiveServer || !hasGameApi) return;
 
-    const targetLabel = fileContextMenu.targetIsDirectory ? 'folder' : 'file';
-    const shouldDelete = window.confirm(`Delete ${targetLabel} "${fileContextMenu.targetName}"? This cannot be undone.`);
+    const targetLabel = target.isDirectory ? 'folder' : 'file';
+    const shouldDelete = window.confirm(`Delete ${targetLabel} "${target.name}"? This cannot be undone.`);
     if (!shouldDelete) {
-      closeFileContextMenu();
+      if (closeMenu) closeFileContextMenu();
       return;
     }
 
     setFileTabError(null);
     try {
-      const result = await window.launcher.game.deleteInstallationPath(effectiveServer.path, fileContextMenu.targetPath);
+      const result = await window.launcher.game.deleteInstallationPath(effectiveServer.path, target.path);
       if (!result.success || !result.deletedRelativePath) {
-        setFileTabError(result.error ?? `Failed to delete ${fileContextMenu.targetName}.`);
+        setFileTabError(result.error ?? `Failed to delete ${target.name}.`);
         return;
       }
 
@@ -3026,26 +3045,25 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         getRelativeParentDir(result.deletedRelativePath),
       ]);
     } catch (error) {
-      setFileTabError(`Failed to delete ${fileContextMenu.targetName}: ${String(error)}`);
+      setFileTabError(`Failed to delete ${target.name}: ${String(error)}`);
     } finally {
-      closeFileContextMenu();
+      if (closeMenu) closeFileContextMenu();
     }
   }, [
     closeFileContextMenu,
     effectiveServer,
     fileClipboard,
-    fileContextMenu,
     hasGameApi,
     refreshFileBrowserAfterMutation,
     removeFilePathsFromTabs,
   ]);
 
-  const handleFileContextPaste = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || !fileContextMenu || !fileClipboard) return;
+  const pasteIntoDestinationDir = useCallback(async (destinationDir: string, closeMenu = true) => {
+    if (!effectiveServer || !hasGameApi || !fileClipboard) return;
 
     if (fileClipboard.sourceServerId !== effectiveServer.id) {
       setFileTabError('Paste is only supported within the same server installation.');
-      closeFileContextMenu();
+      if (closeMenu) closeFileContextMenu();
       return;
     }
 
@@ -3055,23 +3073,21 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         const result = await window.launcher.game.copyInstallationPath(
           effectiveServer.path,
           fileClipboard.sourcePath,
-          fileContextMenu.destinationDir,
+          destinationDir,
         );
         if (!result.success || !result.destinationRelativePath) {
           setFileTabError(result.error ?? `Failed to copy ${fileClipboard.sourceName}.`);
           return;
         }
 
-        await refreshFileBrowserAfterMutation([
-          fileContextMenu.destinationDir,
-        ]);
+        await refreshFileBrowserAfterMutation([destinationDir]);
         return;
       }
 
       const result = await window.launcher.game.moveInstallationPath(
         effectiveServer.path,
         fileClipboard.sourcePath,
-        fileContextMenu.destinationDir,
+        destinationDir,
       );
       if (!result.success || !result.sourceRelativePath || !result.destinationRelativePath) {
         setFileTabError(result.error ?? `Failed to move ${fileClipboard.sourceName}.`);
@@ -3088,16 +3104,158 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } catch (error) {
       setFileTabError(`Failed to paste ${fileClipboard.sourceName}: ${String(error)}`);
     } finally {
-      closeFileContextMenu();
+      if (closeMenu) closeFileContextMenu();
     }
   }, [
     closeFileContextMenu,
     effectiveServer,
     fileClipboard,
-    fileContextMenu,
     hasGameApi,
     refreshFileBrowserAfterMutation,
     remapOpenFilePaths,
+  ]);
+
+  const handleFileContextCopyLikeAction = useCallback((mode: FileClipboardMode) => {
+    if (!fileContextMenu?.targetPath) return;
+    copyOrCutFileTarget(mode, {
+      path: fileContextMenu.targetPath,
+      name: fileContextMenu.targetName,
+      isDirectory: fileContextMenu.targetIsDirectory,
+    });
+  }, [copyOrCutFileTarget, fileContextMenu]);
+
+  const handleFileContextRename = useCallback(async () => {
+    if (!fileContextMenu?.targetPath) return;
+    await renameFileTarget({
+      path: fileContextMenu.targetPath,
+      name: fileContextMenu.targetName,
+      isDirectory: fileContextMenu.targetIsDirectory,
+    });
+  }, [fileContextMenu, renameFileTarget]);
+
+  const handleFileContextDelete = useCallback(async () => {
+    if (!fileContextMenu?.targetPath) return;
+    await deleteFileTarget({
+      path: fileContextMenu.targetPath,
+      name: fileContextMenu.targetName,
+      isDirectory: fileContextMenu.targetIsDirectory,
+    });
+  }, [deleteFileTarget, fileContextMenu]);
+
+  const handleFileContextPaste = useCallback(async () => {
+    if (!fileContextMenu) return;
+    await pasteIntoDestinationDir(fileContextMenu.destinationDir);
+  }, [fileContextMenu, pasteIntoDestinationDir]);
+
+  useEffect(() => {
+    if (activeTab !== 'files' || !effectiveServer || !hasGameApi) return;
+
+    const getTargetFromFocusedRow = (): FileActionTarget | null => {
+      const focusedElement = document.activeElement;
+      const entryRow = focusedElement instanceof HTMLElement
+        ? focusedElement.closest<HTMLElement>('[data-file-browser-entry="true"]')
+        : null;
+      const targetPath = entryRow?.dataset.filePath;
+      if (!targetPath) return null;
+
+      return {
+        path: targetPath,
+        name: entryRow?.dataset.fileName || targetPath.split('/').pop() || targetPath,
+        isDirectory: entryRow?.dataset.fileIsDirectory === 'true',
+      };
+    };
+
+    const resolveShortcutTarget = (): FileActionTarget | null => {
+      if (fileContextMenu?.targetPath) {
+        return {
+          path: fileContextMenu.targetPath,
+          name: fileContextMenu.targetName,
+          isDirectory: fileContextMenu.targetIsDirectory,
+        };
+      }
+
+      const focusedTarget = getTargetFromFocusedRow();
+      if (focusedTarget) return focusedTarget;
+
+      if (!activeFileTabPath) return null;
+      return {
+        path: activeFileTabPath,
+        name: activeFileTabPath.split('/').pop() || activeFileTabPath,
+        isDirectory: false,
+      };
+    };
+
+    const resolvePasteDestination = (): string => {
+      if (fileContextMenu) return fileContextMenu.destinationDir;
+
+      const focusedTarget = getTargetFromFocusedRow();
+      if (focusedTarget) {
+        return focusedTarget.isDirectory ? focusedTarget.path : getRelativeParentDir(focusedTarget.path);
+      }
+
+      if (activeFileTabPath) return getRelativeParentDir(activeFileTabPath);
+      return '';
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (isEditableDomTarget(event.target)) return;
+
+      const commandKey = event.ctrlKey || event.metaKey;
+
+      if (event.key === 'F2') {
+        const target = resolveShortcutTarget();
+        if (!target) return;
+        event.preventDefault();
+        void renameFileTarget(target, false);
+        return;
+      }
+
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        const target = resolveShortcutTarget();
+        if (!target) return;
+        event.preventDefault();
+        void deleteFileTarget(target, false);
+        return;
+      }
+
+      if (!commandKey) return;
+
+      const target = resolveShortcutTarget();
+      const key = event.key.toLowerCase();
+
+      if (key === 'c' && target) {
+        event.preventDefault();
+        copyOrCutFileTarget('copy', target, false);
+        return;
+      }
+
+      if (key === 'x' && target) {
+        event.preventDefault();
+        copyOrCutFileTarget('cut', target, false);
+        return;
+      }
+
+      if (key === 'v' && fileClipboard) {
+        event.preventDefault();
+        void pasteIntoDestinationDir(resolvePasteDestination(), false);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [
+    activeFileTabPath,
+    activeTab,
+    copyOrCutFileTarget,
+    deleteFileTarget,
+    effectiveServer,
+    fileClipboard,
+    fileContextMenu,
+    hasGameApi,
+    pasteIntoDestinationDir,
+    renameFileTarget,
   ]);
 
   useEffect(() => {
@@ -3107,6 +3265,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setLogs([]);
       setIsLogFileTruncated(false);
       setIsLogFileLoading(false);
+      return;
+    }
+
+    if (selectedLogRelativePath === LIVE_PROCESS_LOG_PATH) {
+      setIsLogFileLoading(false);
+      setIsLogFileTruncated(false);
+      setLogLoadError(null);
+      setLogPath('process output (live)');
       return;
     }
 
@@ -3157,7 +3323,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     if (autoScroll && logContainerRef.current) {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
-  }, [logs, autoScroll]);
+  }, [autoScroll, logs, liveProcessLogs]);
 
   useEffect(() => {
     if (!effectiveServer) {
@@ -3678,6 +3844,18 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     const cleanup = window.launcher.game.onLog((data) => {
       if (data.installationId !== effectiveServer.id) return;
 
+      const runtimeEntry: LogEntry = {
+        timestamp: new Date().toISOString().slice(11, 19),
+        level: normalizeLogLevel(data.level),
+        message: data.message,
+      };
+      setLiveProcessLogs((prev) => {
+        const next = [...prev, runtimeEntry];
+        return next.length <= LOG_BUFFER_CAP
+          ? next
+          : next.slice(next.length - LOG_BUFFER_CAP);
+      });
+
       // ── Player-list parsing ────────────────────────────────────────────────
       const playerNameMatch = data.message.match(/\[PL\]\s+Name:\s*(.+)$/i);
       if (playerNameMatch) {
@@ -3792,7 +3970,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     };
   }, []);
 
-  const filteredLogs = logs.filter((log) => {
+  const filteredLogs = (isLiveLogSelected ? liveProcessLogs : logs).filter((log) => {
     if (activeLogFilters.length === 0) return false;
 
     if (activeLogFilters.includes('errors') && (log.level === 'ERROR' || log.level === 'FATAL')) {
@@ -4244,8 +4422,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
       setLogs([]);
       setIsLogFileTruncated(false);
-      setSelectedLogRelativePath(null);
-      setLogPath(null);
+      setSelectedLogRelativePath(LIVE_PROCESS_LOG_PATH);
+      setLogPath('process output (live)');
       await reloadLogCatalog();
     } catch (error) {
       setLogLoadError(`Failed to clear logs folder: ${String(error)}`);
@@ -4255,9 +4433,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [effectiveServer, hasGameApi, isClearingLogFiles, reloadLogCatalog]);
 
   const handleClearBufferedLogs = useCallback(() => {
-    setLogs([]);
+    if (isLiveLogSelected) {
+      setLiveProcessLogs([]);
+    } else {
+      setLogs([]);
+    }
     setIsLogFileTruncated(false);
-  }, []);
+  }, [isLiveLogSelected]);
 
   const handleOpenLogFolder = async () => {
     if (!effectiveServer || !hasGameApi) return;
@@ -5658,8 +5840,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             {isLogListLoading
               ? 'Scanning logs folder...'
               : allLogFiles.length > 0
-                ? `${allLogFiles.length} log file${allLogFiles.length === 1 ? '' : 's'} available`
-                : 'No log files found in logs'}
+                ? `${allLogFiles.length + 1} sources available (${allLogFiles.length} saved file${allLogFiles.length === 1 ? '' : 's'} + live process output)`
+                : '1 source available (live process output)'}
           </p>
           <button
             onClick={() => { void reloadLogCatalog(); }}
@@ -5669,6 +5851,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             {isLogListLoading ? 'Refreshing...' : 'Refresh List'}
           </button>
         </div>
+
+        {isLiveLogSelected && (
+          <p className="mt-2 text-xs text-gray-400">
+            Current process output stream from the running server instance.
+          </p>
+        )}
 
         {selectedLogFile && (
           <p className="mt-2 text-xs text-gray-400">
@@ -5684,31 +5872,45 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[320px_1fr]">
         <div className="flex min-h-0 flex-col border-b border-white/10 xl:border-b-0 xl:border-r xl:border-white/10">
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {allLogFiles.length === 0 ? (
-              <p className="p-2 text-sm text-gray-500">No log files available.</p>
-            ) : (
-              <div className="space-y-1">
-                {allLogFiles.map((file) => {
-                  const isActiveFile = selectedLogRelativePath === file.relativePath;
-                  return (
-                    <button
-                      key={file.relativePath}
-                      onClick={() => setSelectedLogRelativePath(file.relativePath)}
-                      className={`w-full rounded border px-2 py-2 text-left transition-colors ${
-                        isActiveFile
-                          ? 'border-starmade-accent/40 bg-starmade-accent/20'
-                          : 'border-white/15 bg-black/25 hover:bg-black/35'
-                      }`}
-                    >
-                      <p className="truncate text-xs font-semibold text-gray-200">{file.fileName}</p>
-                      <p className="truncate text-[11px] text-gray-500">
-                        {formatLogFileSize(file.sizeBytes)} - {formatLogModifiedTime(file.modifiedMs)}
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+            <div className="space-y-1">
+              <button
+                onClick={() => setSelectedLogRelativePath(LIVE_PROCESS_LOG_PATH)}
+                className={`w-full rounded border px-2 py-2 text-left transition-colors ${
+                  isLiveLogSelected
+                    ? 'border-starmade-accent/40 bg-starmade-accent/20'
+                    : 'border-white/15 bg-black/25 hover:bg-black/35'
+                }`}
+              >
+                <p className="truncate text-xs font-semibold text-gray-200">Current Process Output</p>
+                <p className="truncate text-[11px] text-gray-500">
+                  {lifecycleState === 'running' ? 'Live stream from active process' : 'Server is not running'}
+                </p>
+              </button>
+
+              {allLogFiles.length === 0 && (
+                <p className="px-2 py-1 text-xs text-gray-500">No saved log files in logs/.</p>
+              )}
+
+              {allLogFiles.map((file) => {
+                const isActiveFile = selectedLogRelativePath === file.relativePath;
+                return (
+                  <button
+                    key={file.relativePath}
+                    onClick={() => setSelectedLogRelativePath(file.relativePath)}
+                    className={`w-full rounded border px-2 py-2 text-left transition-colors ${
+                      isActiveFile
+                        ? 'border-starmade-accent/40 bg-starmade-accent/20'
+                        : 'border-white/15 bg-black/25 hover:bg-black/35'
+                    }`}
+                  >
+                    <p className="truncate text-xs font-semibold text-gray-200">{file.fileName}</p>
+                    <p className="truncate text-[11px] text-gray-500">
+                      {formatLogFileSize(file.sizeBytes)} - {formatLogModifiedTime(file.modifiedMs)}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
@@ -5721,7 +5923,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 <p className="text-gray-500">Select a log file from the left to load it.</p>
               )}
               {selectedLogRelativePath != null && filteredLogs.length === 0 && (
-                <p className="text-gray-500">No log lines in this file yet.</p>
+                <p className="text-gray-500">
+                  {isLiveLogSelected ? 'No output from the current process yet.' : 'No log lines in this file yet.'}
+                </p>
               )}
               {filteredLogs.map((log, index) => (
                 <div
@@ -5741,12 +5945,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       <div className="flex items-center justify-between gap-3 border-t border-white/10 bg-black/20 px-4 py-3">
         <p className="text-sm text-gray-400">
           {filteredLogs.length} / {LOG_BUFFER_CAP} buffered log entries
-          {isLogFileTruncated ? ' (tail view)' : ''}
+          {!isLiveLogSelected && isLogFileTruncated ? ' (tail view)' : ''}
         </p>
         <div className="flex gap-2">
           <button
             onClick={handleClearBufferedLogs}
-            disabled={logs.length === 0}
+            disabled={(isLiveLogSelected ? liveProcessLogs.length : logs.length) === 0}
             className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
           >
             Clear Buffer
@@ -6033,6 +6237,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             <button
               onClick={() => toggleFileDirectory(entry.relativePath)}
               onContextMenu={(event) => openFileContextMenu(event, entry)}
+              data-file-browser-entry="true"
+              data-file-path={entry.relativePath}
+              data-file-name={entry.name}
+              data-file-is-directory="true"
               className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm text-gray-200 hover:bg-white/5"
               style={{ paddingLeft: `${8 + (depth * 14)}px` }}
             >
@@ -6052,6 +6260,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           key={entry.relativePath}
           onClick={() => { void openFileInTab(entry); }}
           onContextMenu={(event) => openFileContextMenu(event, entry)}
+          data-file-browser-entry="true"
+          data-file-path={entry.relativePath}
+          data-file-name={entry.name}
+          data-file-is-directory="false"
           className={`flex w-full items-center rounded px-2 py-1 text-left text-sm transition-colors ${
             !isEditableTextFile
               ? 'cursor-not-allowed text-gray-500'
@@ -6077,6 +6289,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           <div>
             <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">Server Files</h3>
             <p className="text-xs text-gray-500">Browse and open files from this server install.</p>
+            <p className="text-xs text-gray-500">Hint: Right-click for actions. Shortcuts: F2 rename, Del delete, Ctrl/Cmd+C/X/V copy-cut-paste.</p>
           </div>
           <button
             onClick={() => { void loadFileDirectory(''); }}
