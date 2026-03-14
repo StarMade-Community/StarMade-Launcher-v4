@@ -53,6 +53,7 @@ const Mods: React.FC = () => {
   const [mods, setMods] = useState<ModRecord[]>([]);
   const [smdMods, setSmdMods] = useState<SmdModResource[]>([]);
   const [smdSearch, setSmdSearch] = useState('');
+  const [debouncedSmdSearch, setDebouncedSmdSearch] = useState('');
   const [isBusy, setIsBusy] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingSmd, setIsLoadingSmd] = useState(false);
@@ -97,6 +98,14 @@ const Mods: React.FC = () => {
     [smdMods],
   );
 
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDebouncedSmdSearch(smdSearch.trim());
+    }, 300);
+
+    return () => window.clearTimeout(timeout);
+  }, [smdSearch]);
+
   const loadMods = useCallback(async () => {
     if (!selectedInstance) {
       setMods([]);
@@ -132,7 +141,7 @@ const Mods: React.FC = () => {
     void loadMods();
   }, [loadMods]);
 
-  const loadSmdMods = useCallback(async () => {
+  const loadSmdMods = useCallback(async (queryOverride?: string) => {
     if (!launcher?.mods?.listSmdMods) {
       setError('SMD browsing is unavailable in this environment.');
       setSmdMods([]);
@@ -142,7 +151,8 @@ const Mods: React.FC = () => {
     setIsLoadingSmd(true);
 
     try {
-      const result = await launcher.mods.listSmdMods(smdSearch);
+      const searchQuery = typeof queryOverride === 'string' ? queryOverride.trim() : debouncedSmdSearch;
+      const result = await launcher.mods.listSmdMods(searchQuery);
       if (!result.success) {
         setError(result.error ?? 'Failed to load SMD mods.');
         setSmdMods([]);
@@ -155,7 +165,7 @@ const Mods: React.FC = () => {
     } finally {
       setIsLoadingSmd(false);
     }
-  }, [launcher, smdSearch]);
+  }, [debouncedSmdSearch, launcher]);
 
   useEffect(() => {
     void loadSmdMods();
@@ -391,7 +401,7 @@ const Mods: React.FC = () => {
             </div>
             <button
               type="button"
-              onClick={() => void loadSmdMods()}
+              onClick={() => void loadSmdMods(smdSearch)}
               className="px-3 py-2 rounded-md border border-slate-700 bg-slate-900/70 hover:bg-slate-800/80 text-sm"
               disabled={isBusy || isLoadingSmd}
             >
