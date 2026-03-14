@@ -539,6 +539,39 @@ export function openLogLocation(installationPath: string): void {
 }
 
 /**
+ * Delete all files/directories inside the installation's logs folder.
+ */
+export function clearServerLogFiles(installationPath: string): { success: boolean; deletedCount: number; error?: string } {
+  const logsDir = path.resolve(path.join(installationPath, 'logs'));
+
+  try {
+    if (!fs.existsSync(logsDir)) {
+      return { success: true, deletedCount: 0 };
+    }
+
+    const stats = fs.statSync(logsDir);
+    if (!stats.isDirectory()) {
+      return { success: false, deletedCount: 0, error: 'Logs path is not a directory.' };
+    }
+
+    let deletedCount = 0;
+    for (const entry of fs.readdirSync(logsDir, { withFileTypes: true })) {
+      const entryPath = path.join(logsDir, entry.name);
+      fs.rmSync(entryPath, { recursive: true, force: true });
+      deletedCount += 1;
+    }
+
+    return { success: true, deletedCount };
+  } catch (error) {
+    return {
+      success: false,
+      deletedCount: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
  * Get GraphicsInfo.txt content if it exists in the installation's logs folder.
  */
 export function getGraphicsInfo(installationPath: string): string | null {
@@ -590,7 +623,7 @@ function getLogCategory(fileName: string): { id: string; label: string } {
     const normalizedPattern = lower.replace(/\d+/g, 'n');
     return {
       id: `pattern:${normalizedPattern}`,
-      label: `Pattern: ${normalizedPattern}`,
+      label: `${normalizedPattern}`,
     };
   }
 
@@ -611,6 +644,7 @@ export function listServerLogFiles(installationPath: string): ServerLogCatalog {
   for (const entry of fs.readdirSync(logsDir, { withFileTypes: true })) {
     if (!entry.isFile()) continue;
     if (entry.name.toLowerCase() === 'graphicsinfo.txt') continue;
+    if (entry.name.toLowerCase().endsWith('.lck')) continue;
 
     const filePath = path.join(logsDir, entry.name);
     let stat: fs.Stats;

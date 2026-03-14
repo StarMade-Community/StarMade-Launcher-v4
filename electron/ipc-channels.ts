@@ -76,6 +76,8 @@ export const IPC = {
   GAME_READ_LOG_FILE: 'game:read-log-file',
   /** Renderer → Main (invoke): open log directory in file manager. */
   GAME_OPEN_LOG_LOCATION: 'game:open-log-location',
+  /** Renderer → Main (invoke): delete all files/directories inside an installation logs folder. */
+  GAME_CLEAR_LOG_FILES: 'game:clear-log-files',
   /** Renderer → Main (invoke): get GraphicsInfo.txt content if it exists. */
   GAME_GET_GRAPHICS_INFO: 'game:get-graphics-info',
   /** Renderer → Main (invoke): read a key from installation server.cfg. */

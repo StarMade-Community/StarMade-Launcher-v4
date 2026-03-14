@@ -18,7 +18,7 @@ import { fetchAllVersions, invalidateVersionCache } from './versions.js';
 import { startDownload, cancelDownload } from './downloader.js';
 import type { DownloadProgress } from './downloader.js';
 import { downloadJava, detectSystemJava, resolveJavaPath, getDefaultJavaPaths, findJavaExecutableInDir } from './java.js';
-import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, getGraphicsInfo, listServerLogFiles, readServerLogFile } from './launcher.js';
+import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, clearServerLogFiles, getGraphicsInfo, listServerLogFiles, readServerLogFile } from './launcher.js';
 import type { UpdateInfo } from './updater.js';
 import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from './updater.js';
 import { createBackup, listBackups, restoreBackup } from './backup.js';
@@ -404,6 +404,18 @@ ipcMain.handle(IPC.GAME_READ_LOG_FILE, (_event, installationPath: string, relati
 ipcMain.handle(IPC.GAME_OPEN_LOG_LOCATION, (_event, installationPath: string) => {
   openLogLocation(installationPath);
   return { success: true };
+});
+
+ipcMain.handle(IPC.GAME_CLEAR_LOG_FILES, (_event, installationPath: string) => {
+  if (!installationPath) {
+    return { success: false, deletedCount: 0, error: 'Missing installation path.' };
+  }
+
+  const result = clearServerLogFiles(installationPath);
+  if (!result.success) {
+    console.warn('[logs] Failed to clear logs folder:', { installationPath, error: result.error });
+  }
+  return result;
 });
 
 ipcMain.handle(IPC.GAME_GET_GRAPHICS_INFO, (_event, installationPath: string) => {

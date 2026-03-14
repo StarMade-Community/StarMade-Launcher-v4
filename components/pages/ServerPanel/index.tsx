@@ -93,7 +93,11 @@ const LOG_BUFFER_CAP = 30000;
 const DASHBOARD_STORE_KEY = 'serverPanelDashboardLayoutsV2';
 const MIN_GROUP_HEIGHT = 260;
 const MAX_GROUP_HEIGHT = 1200;
-const FACTION_CONFIG_PATH_CANDIDATES = ['FactionConfig.xml', 'StarMade/FactionConfig.xml'] as const;
+const FACTION_CONFIG_PATH_CANDIDATES = [
+  'customFactionConfig/FactionConfigTemplate.xml',
+  'config/customConfigTemplate/FactionConfigTemplate.xml',
+  'FactionConfigTemplate.xml',
+] as const;
 
 const WIDGET_HEIGHT_WEIGHT: Record<DashboardWidgetId, number> = {
   status: 120,
@@ -1519,6 +1523,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [activeConfigTab, setActiveConfigTab] = useState<ConfigEditorTab>('server-cfg');
   const [activeLogFilters, setActiveLogFilters] = useState<LogFilter[]>([...LOG_FILTER_OPTIONS]);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [isLogWrapEnabled, setIsLogWrapEnabled] = useState(true);
+  const [isFileWrapEnabled, setIsFileWrapEnabled] = useState(true);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [lifecycleState, setLifecycleState] = useState<ServerLifecycleState>('stopped');
   const [runtimePid, setRuntimePid] = useState<number | undefined>(undefined);
@@ -1576,11 +1582,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [logPath, setLogPath] = useState<string | null>(null);
   const [logCategories, setLogCategories] = useState<LogCategory[]>([]);
   const [selectedLogRelativePath, setSelectedLogRelativePath] = useState<string | null>(null);
-  const [selectedLogPathByCategoryId, setSelectedLogPathByCategoryId] = useState<Record<string, string>>({});
   const [isLogListLoading, setIsLogListLoading] = useState(false);
   const [isLogFileLoading, setIsLogFileLoading] = useState(false);
   const [isLogFileTruncated, setIsLogFileTruncated] = useState(false);
   const [logLoadError, setLogLoadError] = useState<string | null>(null);
+  const [isClearingLogFiles, setIsClearingLogFiles] = useState(false);
   const [fileEntriesByDir, setFileEntriesByDir] = useState<Record<string, InstallationFileEntry[]>>({});
   const [expandedFileDirs, setExpandedFileDirs] = useState<string[]>(['']);
   const [openFileTabs, setOpenFileTabs] = useState<string[]>([]);
@@ -1591,6 +1597,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [isFileEditorLoading, setIsFileEditorLoading] = useState(false);
   const [isFileSaving, setIsFileSaving] = useState(false);
   const [fileTabError, setFileTabError] = useState<string | null>(null);
+  const [fileTabErrorPath, setFileTabErrorPath] = useState<string | null>(null);
   const [dashboardLayout, setDashboardLayout] = useState<DashboardLayout>(createDefaultDashboardLayout);
   const [dashboardLoaded, setDashboardLoaded] = useState(false);
   const [isLayoutEditMode, setIsLayoutEditMode] = useState(false);
@@ -1651,32 +1658,32 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const serverDownloadStatus = effectiveServer ? downloadStatuses[effectiveServer.id] : undefined;
   const isUpdating = serverDownloadStatus?.state === 'checksums' || serverDownloadStatus?.state === 'downloading';
 
-  const selectedLogCategoryId = useMemo(() => {
+  const allLogFiles = useMemo(() => {
+    return logCategories
+      .flatMap((category) => category.files)
+      .map((file, index) => ({ file, index }))
+      .sort((a, b) => {
+        if (b.file.modifiedMs !== a.file.modifiedMs) {
+          return b.file.modifiedMs - a.file.modifiedMs;
+        }
+        if (a.file.relativePath !== b.file.relativePath) {
+          return a.file.relativePath.localeCompare(b.file.relativePath);
+        }
+        return a.index - b.index;
+      })
+      .map(({ file }) => file);
+  }, [logCategories]);
+
+  const selectedLogFile = useMemo(() => {
     if (!selectedLogRelativePath) return null;
-    const category = logCategories.find((item) => item.files.some((file) => file.relativePath === selectedLogRelativePath));
-    return category?.id ?? null;
-  }, [logCategories, selectedLogRelativePath]);
-
-  const selectedLogCategoryFiles = useMemo(() => {
-    if (!selectedLogCategoryId) return [] as LogFileItem[];
-    return logCategories.find((category) => category.id === selectedLogCategoryId)?.files ?? [];
-  }, [logCategories, selectedLogCategoryId]);
-
-  const selectedLogCategory = useMemo(() => {
-    if (!selectedLogCategoryId) return null;
-    return logCategories.find((category) => category.id === selectedLogCategoryId) ?? null;
-  }, [logCategories, selectedLogCategoryId]);
+    return allLogFiles.find((file) => file.relativePath === selectedLogRelativePath) ?? null;
+  }, [allLogFiles, selectedLogRelativePath]);
 
   const selectedLogRelativePathRef = useRef<string | null>(null);
-  const selectedLogPathByCategoryRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
     selectedLogRelativePathRef.current = selectedLogRelativePath;
   }, [selectedLogRelativePath]);
-
-  useEffect(() => {
-    selectedLogPathByCategoryRef.current = selectedLogPathByCategoryId;
-  }, [selectedLogPathByCategoryId]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.launcher?.app?.getServerPanelSchema) return;
@@ -1780,7 +1787,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     if (!effectiveServer || !hasGameApi) {
       setLogCategories([]);
       setSelectedLogRelativePath(null);
-      setSelectedLogPathByCategoryId({});
       setLogPath(null);
       return;
     }
@@ -1797,17 +1803,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       const nextSelected = currentSelection && knownPaths.has(currentSelection)
         ? currentSelection
         : fallback;
-
-      const nextByCategory = { ...selectedLogPathByCategoryRef.current };
-      for (const category of catalog.categories) {
-        const currentForCategory = nextByCategory[category.id];
-        const inCategory = category.files.some((file) => file.relativePath === currentForCategory);
-        if (!inCategory && category.files[0]) {
-          nextByCategory[category.id] = category.files[0].relativePath;
-        }
-      }
-      setSelectedLogPathByCategoryId(nextByCategory);
-
       setSelectedLogRelativePath(nextSelected ?? null);
       setLogPath(nextSelected ? `logs/${nextSelected}` : null);
     } catch (error) {
@@ -1858,9 +1853,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setLogPath(null);
     setLogCategories([]);
     setSelectedLogRelativePath(null);
-    setSelectedLogPathByCategoryId({});
     setIsLogFileTruncated(false);
     setLogLoadError(null);
+    setIsClearingLogFiles(false);
     setActiveConfigTab('server-cfg');
     setGameConfigXmlText('');
     setGameConfigFields([]);
@@ -1913,7 +1908,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     return {
       content: '',
       relativePath: FACTION_CONFIG_PATH_CANDIDATES[0],
-      error: firstError ?? `Could not find ${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}.`,
+      error: firstError ?? `Could not find faction config template (${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}).`,
     };
   }, [effectiveServer, hasGameApi]);
 
@@ -1936,7 +1931,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       if (!firstError) firstError = result.error;
     }
 
-    return { success: false, error: firstError ?? `Could not write ${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}.` };
+    return {
+      success: false,
+      error: firstError ?? `Could not write faction config template (${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}).`,
+    };
   }, [effectiveServer, factionConfigRelativePath, hasGameApi]);
 
   useEffect(() => {
@@ -2087,7 +2085,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         if (cancelled) return;
 
         if (payload.error) {
-          setFactionConfigError(`Failed to load FactionConfig.xml: ${payload.error}`);
+          setFactionConfigError(`Failed to load faction config template: ${payload.error}`);
           setFactionConfigFields([]);
           setFactionConfigValues({});
           setFactionConfigSavedValues({});
@@ -2100,7 +2098,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         setFactionConfigLoadedServerId(effectiveServer.id);
       } catch (error) {
         if (cancelled) return;
-        setFactionConfigError(`Failed to load FactionConfig.xml: ${String(error)}`);
+        setFactionConfigError(`Failed to load faction config template: ${String(error)}`);
         setFactionConfigFields([]);
         setFactionConfigValues({});
         setFactionConfigSavedValues({});
@@ -2162,7 +2160,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     if (!effectiveServer || !hasGameApi) return;
 
     if (!entry.isEditableText) {
-      setFileTabError(entry.nonEditableReason ?? `Cannot open ${entry.relativePath}: binary files are not supported in the editor.`);
+      const errorPath = entry.relativePath;
+      setFileTabError(entry.nonEditableReason ?? `Cannot open ${errorPath}: binary files are not supported in the editor.`);
+      setFileTabErrorPath(errorPath);
+      setOpenFileTabs((prev) => (prev.includes(errorPath) ? prev : [...prev, errorPath]));
+      setActiveFileTabPath(errorPath);
       return;
     }
 
@@ -2175,10 +2177,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     setIsFileEditorLoading(true);
     setFileTabError(null);
+    setFileTabErrorPath(null);
     try {
       const payload = await window.launcher.game.readInstallationFile(effectiveServer.path, relativePath);
       if (payload.error) {
         setFileTabError(`Failed to open ${relativePath}: ${payload.error}`);
+        setFileTabErrorPath(relativePath);
         return;
       }
 
@@ -2186,6 +2190,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setSavedFileContentByPath((prev) => ({ ...prev, [relativePath]: payload.content }));
     } catch (error) {
       setFileTabError(`Failed to open ${relativePath}: ${String(error)}`);
+      setFileTabErrorPath(relativePath);
     } finally {
       setIsFileEditorLoading(false);
     }
@@ -2200,6 +2205,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       });
       return next;
     });
+    setFileTabErrorPath((current) => {
+      if (current === relativePath) {
+        setFileTabError(null);
+        return null;
+      }
+      return current;
+    });
   }, []);
 
   const reloadActiveFileTab = useCallback(async () => {
@@ -2207,16 +2219,19 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     setIsFileEditorLoading(true);
     setFileTabError(null);
+    setFileTabErrorPath(null);
     try {
       const payload = await window.launcher.game.readInstallationFile(effectiveServer.path, activeFileTabPath);
       if (payload.error) {
         setFileTabError(`Failed to reload ${activeFileTabPath}: ${payload.error}`);
+        setFileTabErrorPath(activeFileTabPath);
         return;
       }
       setFileContentByPath((prev) => ({ ...prev, [activeFileTabPath]: payload.content }));
       setSavedFileContentByPath((prev) => ({ ...prev, [activeFileTabPath]: payload.content }));
     } catch (error) {
       setFileTabError(`Failed to reload ${activeFileTabPath}: ${String(error)}`);
+      setFileTabErrorPath(activeFileTabPath);
     } finally {
       setIsFileEditorLoading(false);
     }
@@ -2227,17 +2242,20 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     setIsFileSaving(true);
     setFileTabError(null);
+    setFileTabErrorPath(null);
     try {
       const content = fileContentByPath[activeFileTabPath] ?? '';
       const result = await window.launcher.game.writeInstallationFile(effectiveServer.path, activeFileTabPath, content);
       if (!result.success) {
         setFileTabError(result.error ?? `Failed to save ${activeFileTabPath}.`);
+        setFileTabErrorPath(activeFileTabPath);
         return;
       }
 
       setSavedFileContentByPath((prev) => ({ ...prev, [activeFileTabPath]: content }));
     } catch (error) {
       setFileTabError(`Failed to save ${activeFileTabPath}: ${String(error)}`);
+      setFileTabErrorPath(activeFileTabPath);
     } finally {
       setIsFileSaving(false);
     }
@@ -2849,22 +2867,38 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     });
   }, [updateQuickActions]);
 
-  const handleClearLogs = () => setLogs([]);
+  const handleClearLogs = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || isClearingLogFiles) return;
 
-  const handleClearCategoryLogs = useCallback((categoryId: string) => {
-    if (selectedLogCategoryId === categoryId) {
+    const confirmed = window.confirm('Are you sure you want to delete all files in this server\'s logs folder? This cannot be undone.');
+    if (!confirmed) return;
+
+    setIsClearingLogFiles(true);
+    setLogLoadError(null);
+
+    try {
+      const result = await window.launcher.game.clearLogFiles(effectiveServer.path);
+      if (!result.success) {
+        setLogLoadError(result.error ?? 'Failed to clear logs folder.');
+        return;
+      }
+
       setLogs([]);
       setIsLogFileTruncated(false);
+      setSelectedLogRelativePath(null);
+      setLogPath(null);
+      await reloadLogCatalog();
+    } catch (error) {
+      setLogLoadError(`Failed to clear logs folder: ${String(error)}`);
+    } finally {
+      setIsClearingLogFiles(false);
     }
+  }, [effectiveServer, hasGameApi, isClearingLogFiles, reloadLogCatalog]);
 
-    // Forget prior per-category tab selection so reopening defaults to latest.
-    setSelectedLogPathByCategoryId((prev) => {
-      if (!(categoryId in prev)) return prev;
-      const next = { ...prev };
-      delete next[categoryId];
-      return next;
-    });
-  }, [selectedLogCategoryId]);
+  const handleClearBufferedLogs = useCallback(() => {
+    setLogs([]);
+    setIsLogFileTruncated(false);
+  }, []);
 
   const handleOpenLogFolder = async () => {
     if (!effectiveServer || !hasGameApi) return;
@@ -2914,7 +2948,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     try {
       const payload = await readFactionConfigXmlFromInstallation();
       if (payload.error) {
-        setFactionConfigError(`Failed to reload FactionConfig.xml: ${payload.error}`);
+        setFactionConfigError(`Failed to reload faction config template: ${payload.error}`);
         return;
       }
       const next = payload.content ?? '';
@@ -2922,7 +2956,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setFactionConfigRelativePath(payload.relativePath);
       setFactionConfigLoadedServerId(effectiveServer.id);
     } catch (error) {
-      setFactionConfigError(`Failed to reload FactionConfig.xml: ${String(error)}`);
+      setFactionConfigError(`Failed to reload faction config template: ${String(error)}`);
     } finally {
       setIsFactionConfigLoading(false);
     }
@@ -3064,7 +3098,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       const doc = parseGameConfigXmlDocument(factionConfigXmlText);
       const target = findElementByGameConfigPath(doc, field.path);
       if (!target) {
-        setFactionConfigError(`Could not locate ${field.path} in FactionConfig.xml.`);
+        setFactionConfigError(`Could not locate ${field.path} in the faction config template.`);
         return;
       }
 
@@ -3072,7 +3106,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       const serialized = new XMLSerializer().serializeToString(doc);
       const result = await writeFactionConfigXmlToInstallation(serialized);
       if (!result.success) {
-        setFactionConfigError(result.error ?? `Failed to save ${field.label} to FactionConfig.xml.`);
+        setFactionConfigError(result.error ?? `Failed to save ${field.label} to the faction config template.`);
         return;
       }
 
@@ -3375,7 +3409,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const renderServerInfoWidget = () => (
     <div className="space-y-3">
-      <label className="flex items-center gap-3 text-sm">
+      {/*<label className="flex items-center gap-3 text-sm">
         <span className="w-36 text-gray-300">Server Name:</span>
         <input
           value={serverNameInput}
@@ -3390,7 +3424,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           disabled={isSavingServerName}
           className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
         />
-      </label>
+      </label>*/}
       {renderDashboardConfigField('SERVER_LIST_NAME')}
       {renderDashboardConfigField('SERVER_LIST_DESCRIPTION')}
       {renderDashboardConfigField('HOST_NAME_TO_ANNOUNCE_TO_SERVER_LIST')}
@@ -4085,125 +4119,102 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               />
               Auto-scroll
             </label>
+
+            <button
+              onClick={() => setIsLogWrapEnabled((prev) => !prev)}
+              className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45"
+            >
+              {isLogWrapEnabled ? 'Wrap: On' : 'Wrap: Off'}
+            </button>
           </div>
         </div>
 
-        <div className="mt-3 rounded-md border border-white/10 bg-black/25 p-3">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-wider text-gray-300">Log Categories</p>
-            <button
-              onClick={() => { void reloadLogCatalog(); }}
-              disabled={isLogListLoading}
-              className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isLogListLoading ? 'Refreshing...' : 'Refresh List'}
-            </button>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+          <p className="px-2 py-1 text-xs text-gray-500">
+            {isLogListLoading
+              ? 'Scanning logs folder...'
+              : allLogFiles.length > 0
+                ? `${allLogFiles.length} log file${allLogFiles.length === 1 ? '' : 's'} available`
+                : 'No log files found in logs'}
+          </p>
+          <button
+            onClick={() => { void reloadLogCatalog(); }}
+            disabled={isLogListLoading}
+            className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isLogListLoading ? 'Refreshing...' : 'Refresh List'}
+          </button>
+        </div>
+
+        {selectedLogFile && (
+          <p className="mt-2 text-xs text-gray-400">
+            {selectedLogFile.fileName} - {formatLogFileSize(selectedLogFile.sizeBytes)} - modified {formatLogModifiedTime(selectedLogFile.modifiedMs)}
+          </p>
+        )}
+
+        {logLoadError && (
+          <p className="mt-2 text-sm text-red-300">{logLoadError}</p>
+        )}
+      </div>
+
+      <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[320px_1fr]">
+        <div className="flex min-h-0 flex-col border-b border-white/10 xl:border-b-0 xl:border-r xl:border-white/10">
+          <div className="border-b border-white/10 px-3 py-2">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-300">All Log Files</h4>
           </div>
-
-          {logCategories.length === 0 ? (
-            <p className="text-sm text-gray-400">{isLogListLoading ? 'Scanning logs folder...' : 'No log files found in logs'}</p>
-          ) : (
-            <>
-              <div className="mb-3 flex flex-wrap items-center gap-2">
-                {logCategories.map((category) => {
-                  const isSelectedCategory = selectedLogCategoryId === category.id;
-                  return (
-                    <div key={category.id} className="inline-flex items-center gap-1">
-                      <button
-                        onClick={() => {
-                          const remembered = selectedLogPathByCategoryId[category.id];
-                          const rememberedInCategory = category.files.find((file) => file.relativePath === remembered);
-                          const next = rememberedInCategory?.relativePath ?? category.files[0]?.relativePath ?? null;
-                          setSelectedLogRelativePath(next);
-                        }}
-                        className={`rounded border px-2 py-1 text-xs font-semibold uppercase tracking-wider transition-colors ${
-                          isSelectedCategory
-                            ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white'
-                            : 'border-white/15 bg-black/30 text-gray-300 hover:bg-black/45'
-                        }`}
-                      >
-                        {category.label} ({category.files.length})
-                      </button>
-                      <button
-                        onClick={() => handleClearCategoryLogs(category.id)}
-                        className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-300 hover:bg-black/45"
-                        title={`Clear ${category.label} view`}
-                      >
-                        Clear
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-                  {selectedLogCategory ? `${selectedLogCategory.label} Files` : 'Files'}
-                </span>
-                {selectedLogCategoryFiles.map((file) => {
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            {allLogFiles.length === 0 ? (
+              <p className="p-2 text-sm text-gray-500">No log files available.</p>
+            ) : (
+              <div className="space-y-1">
+                {allLogFiles.map((file) => {
                   const isActiveFile = selectedLogRelativePath === file.relativePath;
                   return (
                     <button
                       key={file.relativePath}
-                      onClick={() => {
-                        setSelectedLogRelativePath(file.relativePath);
-                        if (selectedLogCategoryId) {
-                          setSelectedLogPathByCategoryId((prev) => ({
-                            ...prev,
-                            [selectedLogCategoryId]: file.relativePath,
-                          }));
-                        }
-                      }}
-                      className={`rounded border px-2 py-1 text-xs font-semibold transition-colors ${
+                      onClick={() => setSelectedLogRelativePath(file.relativePath)}
+                      className={`w-full rounded border px-2 py-2 text-left transition-colors ${
                         isActiveFile
-                          ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white'
-                          : 'border-white/15 bg-black/30 text-gray-300 hover:bg-black/45'
+                          ? 'border-starmade-accent/40 bg-starmade-accent/20'
+                          : 'border-white/15 bg-black/25 hover:bg-black/35'
                       }`}
                     >
-                      {file.fileName}
+                      <p className="truncate text-xs font-semibold text-gray-200">{file.fileName}</p>
+                      <p className="truncate text-[11px] text-gray-500">
+                        {formatLogFileSize(file.sizeBytes)} - {formatLogModifiedTime(file.modifiedMs)}
+                      </p>
                     </button>
                   );
                 })}
               </div>
+            )}
+          </div>
+        </div>
 
-              {selectedLogRelativePath && (() => {
-                const selectedFile = selectedLogCategoryFiles.find((file) => file.relativePath === selectedLogRelativePath)
-                  ?? logCategories.flatMap((category) => category.files).find((file) => file.relativePath === selectedLogRelativePath);
-
-                if (!selectedFile) return null;
-
-                return (
-                  <p className="mt-2 text-xs text-gray-400">
-                    {selectedFile.fileName} - {formatLogFileSize(selectedFile.sizeBytes)} - modified {formatLogModifiedTime(selectedFile.modifiedMs)}
-                  </p>
-                );
-              })()}
-            </>
-          )}
-
-          {logLoadError && (
-            <p className="mt-2 text-sm text-red-300">{logLoadError}</p>
+        <div ref={logContainerRef} className="min-h-0 overflow-x-auto overflow-y-auto p-4 font-mono text-sm">
+          {isLogFileLoading ? (
+            <p className="text-gray-400">Loading log file...</p>
+          ) : (
+            <div className="space-y-1">
+              {selectedLogRelativePath == null && (
+                <p className="text-gray-500">Select a log file from the left to load it.</p>
+              )}
+              {selectedLogRelativePath != null && filteredLogs.length === 0 && (
+                <p className="text-gray-500">No log lines in this file yet.</p>
+              )}
+              {filteredLogs.map((log, index) => (
+                <div
+                  key={`${log.timestamp}-${index}`}
+                  className={`flex gap-3 rounded px-2 py-1 hover:bg-white/5 ${isLogWrapEnabled ? '' : 'min-w-max'}`}
+                >
+                  <span className="flex-shrink-0 text-gray-500">{log.timestamp}</span>
+                  <span className={`flex-shrink-0 font-semibold ${getLogLevelColor(log.level)}`}>[{log.level}]</span>
+                  <span className={`${isLogWrapEnabled ? 'break-all' : 'whitespace-pre'} text-gray-300`}>{log.message}</span>
+                </div>
+              ))}
+            </div>
           )}
         </div>
-      </div>
-
-      <div ref={logContainerRef} className="flex-1 overflow-y-auto p-4 font-mono text-sm">
-        {isLogFileLoading ? (
-          <p className="text-gray-400">Loading log file...</p>
-        ) : (
-          <div className="space-y-1">
-            {filteredLogs.length === 0 && (
-              <p className="text-gray-500">No log lines yet for this server.</p>
-            )}
-            {filteredLogs.map((log, index) => (
-              <div key={`${log.timestamp}-${index}`} className="flex gap-3 rounded px-2 py-1 hover:bg-white/5">
-                <span className="flex-shrink-0 text-gray-500">{log.timestamp}</span>
-                <span className={`flex-shrink-0 font-semibold ${getLogLevelColor(log.level)}`}>[{log.level}]</span>
-                <span className="break-all text-gray-300">{log.message}</span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
       <div className="flex items-center justify-between gap-3 border-t border-white/10 bg-black/20 px-4 py-3">
@@ -4212,8 +4223,19 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           {isLogFileTruncated ? ' (tail view)' : ''}
         </p>
         <div className="flex gap-2">
-          <button onClick={handleClearLogs} className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600">
-            Clear
+          <button
+            onClick={handleClearBufferedLogs}
+            disabled={logs.length === 0}
+            className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Clear Buffer
+          </button>
+          <button
+            onClick={() => { void handleClearLogs(); }}
+            disabled={!effectiveServer || !hasGameApi || isClearingLogFiles}
+            className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isClearingLogFiles ? 'Clearing...' : 'Delete Log Files'}
           </button>
           <button onClick={() => { void handleOpenLogFolder(); }} className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600">
             Open Folder
@@ -4229,7 +4251,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const renderServerCfgConfiguration = () => {
     const model: ConfigPanelModel = {
       title: 'Server Configuration',
-      subtitle: 'Values are read from and written to server.cfg in this installation.',
+      subtitle: 'Edit server settings.',
       loadingText: 'Loading configuration from server.cfg...',
       searchPlaceholder: 'Search key, label, or description',
       emptyMessage: 'No configuration keys match the current search/filter.',
@@ -4279,7 +4301,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     const model: ConfigPanelModel = {
       title: 'GameConfig.xml',
-      subtitle: 'Edit game settings using typed fields and save each value directly to GameConfig.xml.',
+      subtitle: 'Edit game settings.',
       loadingText: 'Loading GameConfig.xml...',
       searchPlaceholder: 'Search by key, label, description, or value',
       emptyMessage: 'No fields match the current search/filter.',
@@ -4330,8 +4352,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     const model: ConfigPanelModel = {
       title: 'FactionConfig.xml',
-      subtitle: 'Edit faction settings and save each value directly to FactionConfig.xml.',
-      loadingText: 'Loading FactionConfig.xml...',
+      subtitle: 'Edit faction settings from the generated template file.',
+      loadingText: 'Loading faction config template...',
       searchPlaceholder: 'Search by key, label, description, or value',
       emptyMessage: 'No fields match the current search/filter.',
       categoryOrder: factionConfigCategoryOrder,
@@ -4495,10 +4517,16 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
         <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
           <div>
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">Manual File Editor</h3>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">File Editor</h3>
             <p className="text-xs text-gray-500">Use Configuration tab for structured editing, or edit raw files here.</p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsFileWrapEnabled((prev) => !prev)}
+              className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45"
+            >
+              {isFileWrapEnabled ? 'Wrap: On' : 'Wrap: Off'}
+            </button>
             <button
               onClick={() => { void reloadActiveFileTab(); }}
               disabled={!activeFileTabPath || isFileEditorLoading || isFileSaving}
@@ -4572,8 +4600,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 const next = event.target.value;
                 setFileContentByPath((prev) => ({ ...prev, [activeFileTabPath]: next }));
               }}
+              wrap={isFileWrapEnabled ? 'soft' : 'off'}
               spellCheck={false}
-              className="h-full w-full resize-none rounded-md border border-white/15 bg-black/40 p-3 font-mono text-xs leading-5 text-gray-200 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+              className={`h-full w-full resize-none rounded-md border border-white/15 bg-black/40 p-3 font-mono text-xs leading-5 text-gray-200 focus:outline-none focus:ring-2 focus:ring-starmade-accent ${
+                isFileWrapEnabled ? 'overflow-x-hidden whitespace-pre-wrap' : 'overflow-x-auto whitespace-pre'
+              }`}
             />
           )}
         </div>

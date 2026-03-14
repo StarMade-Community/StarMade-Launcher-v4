@@ -140,6 +140,8 @@ declare global {
         }>;
         /** Open log directory in file manager. */
         openLogLocation: (installationPath: string) => Promise<{ success: boolean }>;
+        /** Delete all files/directories inside an installation's logs folder. */
+        clearLogFiles: (installationPath: string) => Promise<{ success: boolean; deletedCount: number; error?: string }>;
         /** Get GraphicsInfo.txt content if it exists. */
         getGraphicsInfo: (installationPath: string) => Promise<string | null>;
         /** Read a value from server.cfg by key (e.g. MAX_CLIENTS). */

@@ -178,6 +178,10 @@ const launcherApi = {
     openLogLocation: (installationPath: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke(IPC.GAME_OPEN_LOG_LOCATION, installationPath),
 
+    /** Delete all files in an installation's logs folder. */
+    clearLogFiles: (installationPath: string): Promise<{ success: boolean; deletedCount: number; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_CLEAR_LOG_FILES, installationPath),
+
     /** Get GraphicsInfo.txt content if it exists. */
     getGraphicsInfo: (installationPath: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.GAME_GET_GRAPHICS_INFO, installationPath),
