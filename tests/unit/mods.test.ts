@@ -90,7 +90,7 @@ describe('parseModpackManifest', () => {
 });
 
 describe('listSmdMods', () => {
-  it('returns only StarLoader-tagged mods and filters out the core StarLoader entry', async () => {
+  it('returns all mods from the category regardless of tags, filtered by search query', async () => {
     const mockResponse = {
       ok: true,
       json: async () => ({
@@ -117,7 +117,7 @@ describe('listSmdMods', () => {
             resource_id: 3,
             title: 'Not StarLoader Mod',
             username: 'Other',
-            tags: ['vanilla'],
+            tags: ['vanilla'],   // no starloader tag – must still be included
             download_count: 5,
             rating_avg: 3.0,
           },
@@ -127,6 +127,7 @@ describe('listSmdMods', () => {
 
     vi.stubGlobal('fetch', vi.fn(async () => mockResponse as unknown as Response));
 
+    // Search 'alpha' → only Alpha Weapons matches, tag presence is irrelevant
     const mods = await listSmdMods('alpha');
     expect(mods).toHaveLength(1);
     expect(mods[0].resourceId).toBe(2);
@@ -134,7 +135,7 @@ describe('listSmdMods', () => {
     expect(mods[0].gameVersion).toBe('0.205.1');
   });
 
-  it('accepts the newer plain "starloader" tag format', async () => {
+  it('includes mods with no tags when no search query is given', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(Number.MAX_SAFE_INTEGER - 1);
 
     const mockResponse = {
@@ -145,9 +146,16 @@ describe('listSmdMods', () => {
             resource_id: 42,
             title: 'BetterChambers',
             username: 'Author',
-            tags: ['chambers', 'starloader'],
+            tags: [],             // no tags at all – must still appear
             download_count: 12,
             rating_avg: 4.5,
+          },
+          {
+            resource_id: 99,
+            title: 'NoTagMod',
+            username: 'Dev',
+            download_count: 3,
+            rating_avg: 3.0,
           },
         ],
       }),
@@ -156,9 +164,36 @@ describe('listSmdMods', () => {
     vi.stubGlobal('fetch', vi.fn(async () => mockResponse as unknown as Response));
 
     const mods = await listSmdMods();
+    expect(mods).toHaveLength(2);
+    const ids = mods.map((m) => m.resourceId);
+    expect(ids).toContain(42);
+    expect(ids).toContain(99);
+  });
+
+  it('fallback /resources endpoint: excludes mods from a different category', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Number.MAX_SAFE_INTEGER - 2);
+
+    // First fetch (primary) → 403; second fetch (fallback) → mixed categories
+    let callCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return { ok: false, status: 403, text: async () => 'Forbidden' } as unknown as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          resources: [
+            { resource_id: 10, title: 'Mod In Category 6', username: 'A', category_id: 6, download_count: 10, rating_avg: 4 },
+            { resource_id: 11, title: 'Mod In Other Category', username: 'B', category_id: 99, download_count: 20, rating_avg: 5 },
+          ],
+        }),
+      } as unknown as Response;
+    }));
+
+    const mods = await listSmdMods();
     expect(mods).toHaveLength(1);
-    expect(mods[0].resourceId).toBe(42);
-    expect(mods[0].name).toBe('BetterChambers');
+    expect(mods[0].resourceId).toBe(10);
   });
 });
 
