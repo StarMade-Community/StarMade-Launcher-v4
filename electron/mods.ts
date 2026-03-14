@@ -256,8 +256,17 @@ async function smdFetchJson(apiPath: string): Promise<unknown> {
 }
 
 function getSmdApiKey(): string {
-  for (const envName of SMD_API_KEY_ENV_NAMES) {
-    const value = process.env[envName];
+  // Each process.env.X reference below is replaced with a literal string by
+  // build-electron.mjs when the corresponding variable is set at build time
+  // (e.g. in GitHub Actions via secrets.SMD_API_KEY).  At runtime the fallback
+  // chain still works for local development via dotenv / .env file.
+  const candidates = [
+    process.env.SMD_API_KEY,
+    process.env.SMD_XF_API_KEY,
+    process.env.XENFORO_API_KEY,
+  ];
+
+  for (const value of candidates) {
     if (typeof value === 'string' && value.trim().length > 0) {
       return value.trim();
     }
@@ -289,15 +298,6 @@ function extractStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === 'string');
 }
 
-function hasStarLoaderTag(tags: string[]): boolean {
-  return tags.some((tag) => {
-    const normalized = tag.trim().toLowerCase();
-    return normalized === 'api/starloader'
-      || normalized === 'starloader'
-      || normalized.endsWith('/starloader');
-  });
-}
-
 async function fetchSmdCategoryResources(): Promise<SmdModResource[]> {
   let raw: unknown;
   try {
@@ -327,8 +327,6 @@ async function fetchSmdCategoryResources(): Promise<SmdModResource[]> {
     if (typeof categoryId === 'number' && categoryId !== SMD_MOD_CATEGORY_ID) continue;
 
     const tags = extractStringArray(resource.tags);
-    const isStarLoaderMod = hasStarLoaderTag(tags);
-    if (!isStarLoaderMod || name === 'StarLoader') continue;
 
     const customFields = asObject(resource.custom_fields);
     const gameVersion = customFields ? getStringField(customFields, 'Gameversion') : undefined;
