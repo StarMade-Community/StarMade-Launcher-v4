@@ -246,6 +246,51 @@ const launcherApi = {
       ipcRenderer.on(IPC.GAME_LOG, listener);
       return () => ipcRenderer.removeListener(IPC.GAME_LOG, listener);
     },
+
+    /**
+     * Send a line of text to a running server's stdin (console input).
+     * Used to submit admin commands such as server_message_broadcast.
+     */
+    sendServerCommand: (installationId: string, line: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_SERVER_STDIN, installationId, line),
+
+    /** List chat log files from an installation's chatlogs directory. */
+    listChatFiles: (installationPath: string): Promise<Array<{
+      fileName: string;
+      channelId: string;
+      channelLabel: string;
+      channelType: 'general' | 'faction' | 'direct' | 'custom';
+      sizeBytes: number;
+      modifiedMs: number;
+    }>> => ipcRenderer.invoke(IPC.GAME_LIST_CHAT_FILES, installationPath),
+
+    /** Read the tail of a chat log file from the chatlogs directory. */
+    readChatFile: (installationPath: string, fileName: string, maxBytes?: number): Promise<{
+      content: string;
+      truncated: boolean;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.GAME_READ_CHAT_FILE, installationPath, fileName, maxBytes),
+
+    /** Subscribe to live chat message events from a running server. Returns a cleanup function. */
+    onChatMessage: (cb: (data: {
+      installationId: string;
+      sender: string;
+      receiverType: string;
+      receiver: string;
+      text: string;
+      timestamp: string;
+    }) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, data: {
+        installationId: string;
+        sender: string;
+        receiverType: string;
+        receiver: string;
+        text: string;
+        timestamp: string;
+      }) => cb(data);
+      ipcRenderer.on(IPC.GAME_CHAT_MESSAGE, listener);
+      return () => ipcRenderer.removeListener(IPC.GAME_CHAT_MESSAGE, listener);
+    },
   },
 
   /** Dialog APIs (folder picker, etc.) */
