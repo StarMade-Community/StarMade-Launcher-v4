@@ -10,7 +10,7 @@ interface ServerPanelProps {
   serverName?: string;
 }
 
-type ServerPanelTab = 'control' | 'actions' | 'logs' | 'configuration' | 'files' | 'database';
+type ServerPanelTab = 'control' | 'actions' | 'logs' | 'chat' | 'configuration' | 'files' | 'database';
 const CONFIG_EDITOR_TABS = [
   { id: 'server-cfg', label: 'server.cfg' },
   { id: 'game-config-xml', label: 'GameConfig.xml' },
@@ -55,6 +55,101 @@ interface LogCategory {
   files: LogFileItem[];
 }
 
+// ─── Chat types ───────────────────────────────────────────────────────────────
+
+interface ChatMessage {
+  /** ISO timestamp (live events) or parsed from file line */
+  timestamp: string;
+  sender: string;
+  /** CHANNEL | DIRECT | SYSTEM */
+  receiverType: string;
+  /** channel name or empty for system */
+  receiver: string;
+  text: string;
+}
+
+interface ChatChannelInfo {
+  fileName: string;
+  channelId: string;
+  channelLabel: string;
+  channelType: 'general' | 'faction' | 'direct' | 'custom';
+  sizeBytes: number;
+  modifiedMs: number;
+}
+
+const GENERAL_CHANNEL_ID = 'all';
+
+const createVirtualGeneralChannel = (): ChatChannelInfo => ({
+  fileName: '',
+  channelId: GENERAL_CHANNEL_ID,
+  channelLabel: 'General',
+  channelType: 'general',
+  sizeBytes: 0,
+  modifiedMs: 0,
+});
+
+const normalizeLiveChatChannelId = (receiverType: string, receiver: string): string => {
+  if (receiverType.toUpperCase() !== 'CHANNEL') return receiver;
+  const lowered = receiver.trim().toLowerCase();
+  if (!lowered || lowered === 'general' || lowered === 'public') return GENERAL_CHANNEL_ID;
+  return receiver;
+};
+
+const buildLiveChannelInfo = (channelId: string, receiverType: string): ChatChannelInfo => {
+  if (channelId === GENERAL_CHANNEL_ID) return createVirtualGeneralChannel();
+  if (receiverType.toUpperCase() === 'DIRECT' || channelId.startsWith('##')) {
+    return {
+      fileName: '',
+      channelId,
+      channelLabel: channelId.startsWith('##') ? `DM: ${channelId.slice(2)}` : `DM: ${channelId}`,
+      channelType: 'direct',
+      sizeBytes: 0,
+      modifiedMs: 0,
+    };
+  }
+  if (/^Faction\d+$/i.test(channelId)) {
+    return {
+      fileName: '',
+      channelId,
+      channelLabel: channelId,
+      channelType: 'faction',
+      sizeBytes: 0,
+      modifiedMs: 0,
+    };
+  }
+  return {
+    fileName: '',
+    channelId,
+    channelLabel: channelId,
+    channelType: 'custom',
+    sizeBytes: 0,
+    modifiedMs: 0,
+  };
+};
+
+const mergeFetchedChatChannels = (fetched: ChatChannelInfo[], existing: ChatChannelInfo[]): ChatChannelInfo[] => {
+  const byId = new Map<string, ChatChannelInfo>();
+  for (const channel of fetched) {
+    byId.set(channel.channelId, channel);
+  }
+
+  // Preserve virtual/live-only channels discovered from console output.
+  for (const channel of existing) {
+    if (channel.fileName || byId.has(channel.channelId)) continue;
+    byId.set(channel.channelId, channel);
+  }
+
+  if (!byId.has(GENERAL_CHANNEL_ID)) {
+    byId.set(GENERAL_CHANNEL_ID, createVirtualGeneralChannel());
+  }
+
+  return Array.from(byId.values()).sort((a, b) => {
+    if (a.channelId === GENERAL_CHANNEL_ID) return -1;
+    if (b.channelId === GENERAL_CHANNEL_ID) return 1;
+    return b.modifiedMs - a.modifiedMs || a.channelLabel.localeCompare(b.channelLabel);
+  });
+};
+
 interface InstallationFileEntry {
   name: string;
   relativePath: string;
@@ -93,11 +188,22 @@ const LOG_BUFFER_CAP = 30000;
 const DASHBOARD_STORE_KEY = 'serverPanelDashboardLayoutsV2';
 const MIN_GROUP_HEIGHT = 260;
 const MAX_GROUP_HEIGHT = 1200;
+const STOP_SHUTDOWN_SECONDS = 15;
+const RESTART_SHUTDOWN_SECONDS = 20;
+const UPDATE_SHUTDOWN_SECONDS = 25;
+const SHUTDOWN_POLL_INTERVAL_MS = 1000;
+const SHUTDOWN_EXTRA_GRACE_MS = 60000;
+const PLAYER_LIST_SETTLE_MS = 1400;
+const PLAYER_LIST_POLL_MS = 30000;
 const FACTION_CONFIG_PATH_CANDIDATES = [
   'customFactionConfig/FactionConfigTemplate.xml',
   'config/customConfigTemplate/FactionConfigTemplate.xml',
   'FactionConfigTemplate.xml',
 ] as const;
+
+function quoteServerCommandArg(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
 
 const WIDGET_HEIGHT_WEIGHT: Record<DashboardWidgetId, number> = {
   status: 120,
@@ -119,6 +225,7 @@ const tabItems: { id: ServerPanelTab; label: string }[] = [
   { id: 'control', label: 'Dashboard' },
   { id: 'actions', label: 'Actions' },
   { id: 'logs', label: 'Logs' },
+  { id: 'chat', label: 'Chat' },
   { id: 'configuration', label: 'Configuration' },
   { id: 'files', label: 'Files' },
   { id: 'database', label: 'Database' },
@@ -299,6 +406,43 @@ const formatLogFileSize = (bytes: number): string => {
 const formatLogModifiedTime = (modifiedMs: number): string => {
   if (!Number.isFinite(modifiedMs) || modifiedMs <= 0) return 'Unknown';
   return new Date(modifiedMs).toLocaleString();
+};
+
+/**
+ * Parse a line from a StarMade chatlogs/*.txt file.
+ *
+ * Channel format: "yyyy/MM/dd - HH:mm:ss [sender]: text"
+ * Direct format:  "yyyy/MM/dd - HH:mm:ss [sender -> receiver]: text"
+ */
+const parseChatLogLine = (rawLine: string, channelId: string): ChatMessage | null => {
+  const trimmed = rawLine.trim();
+  if (!trimmed) return null;
+
+  // Direct message: [sender -> receiver]
+  const dmMatch = trimmed.match(/^([\d/]+ - [\d:]+)\s+\[([^\]]+)\s+->\s+([^\]]+)\]:\s*(.*)$/);
+  if (dmMatch) {
+    return {
+      timestamp: dmMatch[1],
+      sender: dmMatch[2].trim(),
+      receiverType: 'DIRECT',
+      receiver: dmMatch[3].trim(),
+      text: dmMatch[4],
+    };
+  }
+
+  // Channel message: [sender]: text
+  const channelMatch = trimmed.match(/^([\d/]+ - [\d:]+)\s+\[([^\]]+)\]:\s*(.*)$/);
+  if (channelMatch) {
+    return {
+      timestamp: channelMatch[1],
+      sender: channelMatch[2].trim(),
+      receiverType: 'CHANNEL',
+      receiver: channelId,
+      text: channelMatch[3],
+    };
+  }
+
+  return null;
 };
 
 const formatUptime = (uptimeMs?: number): string => {
@@ -1509,11 +1653,20 @@ const getConfigFieldValidation = (field: ServerConfigField, rawValue: string): C
 interface ServerActionDefinition {
   id: ServerActionId;
   label: string;
+  buttonLabel?: string;
   description: string;
   detail: string;
   enabled: boolean;
+  isLoading?: boolean;
+  allowClickWhileLoading?: boolean;
   emphasis?: 'default' | 'accent' | 'danger';
   onClick: () => void;
+}
+
+interface PlayersListCollection {
+  token: number;
+  names: Set<string>;
+  timeoutId: number;
 }
 
 const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
@@ -1577,6 +1730,15 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [gameConfigError, setGameConfigError] = useState<string | null>(null);
   const [savingConfigKey, setSavingConfigKey] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingServerAction, setPendingServerAction] = useState<ServerActionId | null>(null);
+  const [onlinePlayers, setOnlinePlayers] = useState<string[]>([]);
+  const [isPlayersRefreshing, setIsPlayersRefreshing] = useState(false);
+  const [playersError, setPlayersError] = useState<string | null>(null);
+  const [isPlayersBroadcasting, setIsPlayersBroadcasting] = useState(false);
+  const [playerMessageTarget, setPlayerMessageTarget] = useState<string | null>(null);
+  const [playerMessageText, setPlayerMessageText] = useState('');
+  const [isPlayerMessageSending, setIsPlayerMessageSending] = useState(false);
+  const [kickingPlayerName, setKickingPlayerName] = useState<string | null>(null);
   const [logPath, setLogPath] = useState<string | null>(null);
   const [logCategories, setLogCategories] = useState<LogCategory[]>([]);
   const [selectedLogRelativePath, setSelectedLogRelativePath] = useState<string | null>(null);
@@ -1585,6 +1747,21 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [isLogFileTruncated, setIsLogFileTruncated] = useState(false);
   const [logLoadError, setLogLoadError] = useState<string | null>(null);
   const [isClearingLogFiles, setIsClearingLogFiles] = useState(false);
+
+  // ─── Chat state ─────────────────────────────────────────────────────────────
+  const [chatChannels, setChatChannels] = useState<ChatChannelInfo[]>([]);
+  const [selectedChatChannelId, setSelectedChatChannelId] = useState<string | null>(null);
+  const [chatMessagesByChannel, setChatMessagesByChannel] = useState<Record<string, ChatMessage[]>>({});
+  const [chatInput, setChatInput] = useState('');
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const [isChatListLoading, setIsChatListLoading] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [chatAutoScroll, setChatAutoScroll] = useState(true);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLInputElement>(null);
+  const playerMessageInputRef = useRef<HTMLInputElement>(null);
+  const chatChannelsRef = useRef<ChatChannelInfo[]>([]);
+  const playersListCollectionRef = useRef<PlayersListCollection | null>(null);
   const [fileEntriesByDir, setFileEntriesByDir] = useState<Record<string, InstallationFileEntry[]>>({});
   const [expandedFileDirs, setExpandedFileDirs] = useState<string[]>(['']);
   const [openFileTabs, setOpenFileTabs] = useState<string[]>([]);
@@ -1684,6 +1861,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   useEffect(() => {
     selectedLogRelativePathRef.current = selectedLogRelativePath;
   }, [selectedLogRelativePath]);
+
+  useEffect(() => {
+    chatChannelsRef.current = chatChannels;
+  }, [chatChannels]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.launcher?.app?.getServerPanelSchema) return;
@@ -1815,6 +1996,161 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
   }, [effectiveServer, hasGameApi]);
 
+  // ─── Chat callbacks ──────────────────────────────────────────────────────────
+
+  const reloadChatChannels = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi) {
+      setChatChannels([]);
+      setSelectedChatChannelId(null);
+      return;
+    }
+    setIsChatListLoading(true);
+    try {
+      const files = await window.launcher.game.listChatFiles(effectiveServer.path);
+      const mergedChannels = mergeFetchedChatChannels(files, chatChannelsRef.current);
+      setChatChannels(mergedChannels);
+      // Auto-select the "all" (General) channel if nothing selected
+      setSelectedChatChannelId((prev) => {
+        if (prev && mergedChannels.some((f) => f.channelId === prev)) return prev;
+        const general = mergedChannels.find((f) => f.channelType === 'general');
+        return general?.channelId ?? mergedChannels[0]?.channelId ?? null;
+      });
+    } catch (error) {
+      console.warn('[ServerPanel] Failed to list chat files:', error);
+      setChatChannels((prev) => mergeFetchedChatChannels([], prev));
+    } finally {
+      setIsChatListLoading(false);
+    }
+  }, [effectiveServer, hasGameApi]);
+
+  const loadChatMessagesForChannel = useCallback(async (channelId: string | null) => {
+    if (!channelId || !effectiveServer || !hasGameApi) return;
+    const channel = chatChannels.find((c) => c.channelId === channelId);
+    if (!channel) return;
+
+    if (!channel.fileName) {
+      setIsChatLoading(false);
+      setChatError(null);
+      return;
+    }
+
+    setIsChatLoading(true);
+    setChatError(null);
+    try {
+      const result = await window.launcher.game.readChatFile(effectiveServer.path, channel.fileName);
+      if (result.error) {
+        setChatError(result.error);
+        return;
+      }
+      const lines = result.content.split('\n');
+      const messages: ChatMessage[] = [];
+      for (const line of lines) {
+        const msg = parseChatLogLine(line, channelId);
+        if (msg) messages.push(msg);
+      }
+      setChatMessagesByChannel((prev) => ({ ...prev, [channelId]: messages }));
+    } catch (error) {
+      setChatError(`Failed to load chat messages: ${String(error)}`);
+    } finally {
+      setIsChatLoading(false);
+    }
+  }, [chatChannels, effectiveServer, hasGameApi]);
+
+  const handleSendChatMessage = useCallback(async () => {
+    const text = chatInput.trim();
+    if (!text || !effectiveServer || !hasGameApi || !selectedChatChannelId) return;
+
+    setChatInput('');
+    setChatError(null);
+
+    const channel = chatChannels.find((c) => c.channelId === selectedChatChannelId);
+    let command: string;
+
+    if (channel?.channelType === 'direct') {
+      // For DMs, extract recipient name from channel label "DM: <combined>"
+      // We can't easily reverse the combined name, so prompt the user to use broadcast
+      // and show the DM label. For now, we use the combined part as-is after ##
+      const dmTarget = channel.channelId.slice(2); // strip ##
+      command = `/server_message_to plain "${dmTarget}" "${text}"`;
+    } else {
+      command = `/server_message_broadcast plain "${text}"`;
+    }
+
+    const result = await window.launcher.game.sendServerCommand(effectiveServer.id, command);
+    if (!result.success) {
+      setChatError(result.error ?? 'Failed to send message.');
+    } else {
+      // Optimistically add the message to the local buffer as a system message
+      const optimistic: ChatMessage = {
+        timestamp: new Date().toISOString().replace('T', ' - ').replace(/\.\d+Z$/, ''),
+        sender: '[SERVER]',
+        receiverType: channel?.channelType === 'direct' ? 'DIRECT' : 'CHANNEL',
+        receiver: selectedChatChannelId,
+        text,
+      };
+      setChatMessagesByChannel((prev) => {
+        const existing = prev[selectedChatChannelId] ?? [];
+        return { ...prev, [selectedChatChannelId]: [...existing, optimistic] };
+      });
+    }
+  }, [chatChannels, chatInput, effectiveServer, hasGameApi, selectedChatChannelId]);
+
+  // Load chat channels when chat tab is active
+  useEffect(() => {
+    if (activeTab !== 'chat') return;
+    void reloadChatChannels();
+  }, [activeTab, reloadChatChannels]);
+
+  // Load messages when channel selection changes
+  useEffect(() => {
+    if (activeTab !== 'chat') return;
+    void loadChatMessagesForChannel(selectedChatChannelId);
+  }, [activeTab, selectedChatChannelId, loadChatMessagesForChannel]);
+
+  // Subscribe to live chat messages from the server process
+  useEffect(() => {
+    if (!effectiveServer || typeof window === 'undefined' || !window.launcher?.game?.onChatMessage) return;
+
+    const unsubscribe = window.launcher.game.onChatMessage((data) => {
+      if (data.installationId !== effectiveServer.id) return;
+
+      const msg: ChatMessage = {
+        timestamp: new Date(data.timestamp).toLocaleString(),
+        sender: data.sender,
+        receiverType: data.receiverType,
+        receiver: data.receiver,
+        text: data.text,
+      };
+
+      // Map the receiver to a channelId
+      // For CHANNEL messages, receiver is the channel name (e.g. "all", "Faction1001")
+      // For DIRECT messages, receiver is the recipient name, not the channel ##name
+      // We use the receiver as-is; the channel sidebar is keyed by channelId from chat files
+      const channelId = normalizeLiveChatChannelId(data.receiverType, data.receiver);
+
+      setChatMessagesByChannel((prev) => {
+        const existing = prev[channelId] ?? [];
+        return { ...prev, [channelId]: [...existing, msg] };
+      });
+
+      setChatChannels((prev) => {
+        if (prev.some((c) => c.channelId === channelId)) return prev;
+        return [buildLiveChannelInfo(channelId, data.receiverType), ...prev];
+      });
+
+      // Auto-focus the first discovered live channel when no selection exists yet.
+      setSelectedChatChannelId((prev) => prev ?? channelId);
+    });
+
+    return unsubscribe;
+  }, [effectiveServer]);
+
+  // Auto-scroll the chat container
+  useEffect(() => {
+    if (!chatAutoScroll || !chatContainerRef.current) return;
+    chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+  }, [chatMessagesByChannel, selectedChatChannelId, chatAutoScroll]);
+
   const refreshRuntimeStatus = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) {
       setLifecycleState('stopped');
@@ -1827,11 +2163,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       const status = await window.launcher.game.status(effectiveServer.id);
       setRuntimePid(status.pid);
       setRuntimeUptimeMs(status.uptime);
-      setLifecycleState((prev) => {
-        if (status.running) return 'running';
-        if (prev === 'starting' || prev === 'stopping') return prev;
-        return 'stopped';
-      });
+      setLifecycleState(status.running ? 'running' : 'stopped');
     } catch (error) {
       console.error('[ServerPanel] Failed to refresh server status:', error);
       setLifecycleState('error');
@@ -1850,6 +2182,19 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   useEffect(() => {
     setLogs([]);
     setActionError(null);
+    setPendingServerAction(null);
+    setOnlinePlayers([]);
+    setIsPlayersRefreshing(false);
+    setPlayersError(null);
+    setIsPlayersBroadcasting(false);
+    setPlayerMessageTarget(null);
+    setPlayerMessageText('');
+    setIsPlayerMessageSending(false);
+    setKickingPlayerName(null);
+    if (playersListCollectionRef.current) {
+      window.clearTimeout(playersListCollectionRef.current.timeoutId);
+      playersListCollectionRef.current = null;
+    }
     setLogPath(null);
     setLogCategories([]);
     setSelectedLogRelativePath(null);
@@ -1889,6 +2234,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setFileTabError(null);
     setServerNameInput(effectiveServer?.name ?? '');
     setServerPortInput(effectiveServer?.port?.trim() || '4242');
+    // Reset chat state on server change
+    setChatChannels([]);
+    setSelectedChatChannelId(null);
+    setChatMessagesByChannel({});
+    setChatInput('');
+    setChatError(null);
   }, [effectiveServer?.id]);
 
   const readFactionConfigXmlFromInstallation = useCallback(async (): Promise<{ content: string; relativePath: string; error?: string }> => {
@@ -2457,28 +2808,272 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     void refreshRuntimeStatus();
   }, [effectiveServer, hasGameApi, activeAccount?.id, refreshRuntimeStatus]);
 
+  const sendServerCommandOrThrow = useCallback(async (command: string) => {
+    if (!effectiveServer || !hasGameApi) {
+      throw new Error('Server context unavailable.');
+    }
+
+    const result = await window.launcher.game.sendServerCommand(effectiveServer.id, command);
+    if (!result.success) {
+      throw new Error(result.error ?? `Failed to execute command: ${command}`);
+    }
+  }, [effectiveServer, hasGameApi]);
+
+  const refreshPlayers = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') {
+      setOnlinePlayers([]);
+      setIsPlayersRefreshing(false);
+      return;
+    }
+
+    const existing = playersListCollectionRef.current;
+    if (existing) {
+      window.clearTimeout(existing.timeoutId);
+      playersListCollectionRef.current = null;
+    }
+
+    setPlayersError(null);
+    setIsPlayersRefreshing(true);
+
+    const token = Date.now();
+    const names = new Set<string>();
+    const timeoutId = window.setTimeout(() => {
+      const active = playersListCollectionRef.current;
+      if (!active || active.token !== token) return;
+      setOnlinePlayers(Array.from(active.names).sort((a, b) => a.localeCompare(b)));
+      setIsPlayersRefreshing(false);
+      playersListCollectionRef.current = null;
+    }, PLAYER_LIST_SETTLE_MS);
+
+    playersListCollectionRef.current = { token, names, timeoutId };
+
+    const result = await window.launcher.game.sendServerCommand(effectiveServer.id, '/player_list');
+    if (!result.success) {
+      window.clearTimeout(timeoutId);
+      playersListCollectionRef.current = null;
+      setIsPlayersRefreshing(false);
+      setPlayersError(result.error ?? 'Failed to request player list.');
+    }
+  }, [effectiveServer, hasGameApi, lifecycleState]);
+
+  const handleKickPlayer = useCallback(async (playerName: string) => {
+    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') return;
+    if (kickingPlayerName || isPlayerMessageSending || isPlayersBroadcasting) return;
+
+    const confirmed = typeof window !== 'undefined'
+      ? window.confirm(`Kick player \"${playerName}\" from the server?`)
+      : true;
+    if (!confirmed) return;
+
+    const reasonRaw = typeof window !== 'undefined'
+      ? window.prompt(`Optional kick reason for ${playerName} (leave empty for no reason):`, '')
+      : '';
+    if (reasonRaw === null) return;
+    const reason = reasonRaw.trim();
+
+    setPlayersError(null);
+    setKickingPlayerName(playerName);
+    try {
+      if (reason) {
+        await sendServerCommandOrThrow(`/kick_reason ${quoteServerCommandArg(playerName)} ${quoteServerCommandArg(reason)}`);
+      } else {
+        await sendServerCommandOrThrow(`/kick ${quoteServerCommandArg(playerName)}`);
+      }
+      if (playerMessageTarget === playerName) {
+        setPlayerMessageTarget(null);
+        setPlayerMessageText('');
+      }
+      void refreshPlayers();
+    } catch (error) {
+      setPlayersError(`Failed to kick ${playerName}: ${String(error)}`);
+    } finally {
+      setKickingPlayerName(null);
+    }
+  }, [
+    effectiveServer,
+    hasGameApi,
+    isPlayerMessageSending,
+    isPlayersBroadcasting,
+    kickingPlayerName,
+    lifecycleState,
+    playerMessageTarget,
+    refreshPlayers,
+    sendServerCommandOrThrow,
+  ]);
+
+  const sendPlayerMessage = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') return;
+    if (!playerMessageTarget || isPlayerMessageSending || kickingPlayerName || isPlayersBroadcasting) return;
+
+    const text = playerMessageText.trim();
+    if (!text) {
+      setPlayersError('Enter a message before sending.');
+      return;
+    }
+
+    setPlayersError(null);
+    setIsPlayerMessageSending(true);
+    try {
+      const command = `/server_message_to plain ${quoteServerCommandArg(playerMessageTarget)} ${quoteServerCommandArg(text)}`;
+      await sendServerCommandOrThrow(command);
+      setPlayerMessageText('');
+      setPlayerMessageTarget(null);
+    } catch (error) {
+      setPlayersError(`Failed to send message to ${playerMessageTarget}: ${String(error)}`);
+    } finally {
+      setIsPlayerMessageSending(false);
+    }
+  }, [
+    effectiveServer,
+    hasGameApi,
+    kickingPlayerName,
+    lifecycleState,
+    isPlayersBroadcasting,
+    playerMessageTarget,
+    playerMessageText,
+    isPlayerMessageSending,
+    sendServerCommandOrThrow,
+  ]);
+
+  const messageAllOnlinePlayers = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') return;
+    if (isPlayersBroadcasting || isPlayerMessageSending || kickingPlayerName) return;
+
+    const messageRaw = typeof window !== 'undefined'
+      ? window.prompt('Message all online players:', '')
+      : '';
+    if (messageRaw === null) return;
+
+    const message = messageRaw.trim();
+    if (!message) return;
+
+    setPlayersError(null);
+    setIsPlayersBroadcasting(true);
+    try {
+      await sendServerCommandOrThrow(`/server_message_broadcast plain ${quoteServerCommandArg(message)}`);
+    } catch (error) {
+      setPlayersError(`Failed to message all players: ${String(error)}`);
+    } finally {
+      setIsPlayersBroadcasting(false);
+    }
+  }, [
+    effectiveServer,
+    hasGameApi,
+    lifecycleState,
+    isPlayersBroadcasting,
+    isPlayerMessageSending,
+    kickingPlayerName,
+    sendServerCommandOrThrow,
+  ]);
+
+  useEffect(() => {
+    if (!playerMessageTarget) return;
+    if (onlinePlayers.includes(playerMessageTarget)) return;
+    setPlayerMessageTarget(null);
+    setPlayerMessageText('');
+  }, [onlinePlayers, playerMessageTarget]);
+
+  useEffect(() => {
+    if (!playerMessageTarget || !playerMessageInputRef.current) return;
+    playerMessageInputRef.current.focus();
+  }, [playerMessageTarget]);
+
+  const scheduleTimedShutdown = useCallback(async (seconds: number) => {
+    await sendServerCommandOrThrow(`/shutdown ${seconds}`);
+  }, [sendServerCommandOrThrow]);
+
+  const sendBroadcastNotice = useCallback(async (message: string, type: 'plain' | 'info' | 'warning' | 'error' = 'warning') => {
+    await sendServerCommandOrThrow(`/server_message_broadcast ${type} ${quoteServerCommandArg(message)}`);
+  }, [sendServerCommandOrThrow]);
+
+  const waitForServerToStop = useCallback(async (timeoutMs: number): Promise<boolean> => {
+    if (!effectiveServer || !hasGameApi) return false;
+
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const status = await window.launcher.game.status(effectiveServer.id);
+      if (!status.running) {
+        return true;
+      }
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, SHUTDOWN_POLL_INTERVAL_MS);
+      });
+    }
+
+    return false;
+  }, [effectiveServer, hasGameApi]);
+
   const stopServer = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) return;
 
     setActionError(null);
+    setPendingServerAction('stop');
     setLifecycleState('stopping');
-    const result = await window.launcher.game.stop(effectiveServer.id);
+    try {
+      await scheduleTimedShutdown(STOP_SHUTDOWN_SECONDS);
+      const stopped = await waitForServerToStop((STOP_SHUTDOWN_SECONDS * 1000) + SHUTDOWN_EXTRA_GRACE_MS);
+      if (!stopped) {
+        setLifecycleState('error');
+        setActionError('Timed shutdown was scheduled, but the server did not stop in time.');
+        return;
+      }
 
-    if (!result.success) {
+      setLifecycleState('stopped');
+      setRuntimePid(undefined);
+      setRuntimeUptimeMs(undefined);
+    } catch (error) {
       setLifecycleState('error');
-      setActionError('Failed to stop server.');
+      setActionError(`Failed to schedule server shutdown: ${String(error)}`);
+    } finally {
+      setPendingServerAction(null);
+    }
+  }, [effectiveServer, hasGameApi, scheduleTimedShutdown, waitForServerToStop]);
+
+  const forceStopServer = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || pendingServerAction !== 'stop') return;
+
+    setActionError(null);
+    const result = await window.launcher.game.stop(effectiveServer.id);
+    if (!result.success) {
+      setActionError('Failed to force stop server.');
       return;
     }
 
+    setPendingServerAction(null);
     setLifecycleState('stopped');
     setRuntimePid(undefined);
     setRuntimeUptimeMs(undefined);
-  }, [effectiveServer, hasGameApi]);
+  }, [effectiveServer, hasGameApi, pendingServerAction]);
 
   const restartServer = useCallback(async () => {
-    await stopServer();
-    await startServer();
-  }, [startServer, stopServer]);
+    if (!effectiveServer || !hasGameApi) return;
+
+    setActionError(null);
+    setPendingServerAction('restart');
+    setLifecycleState('stopping');
+
+    try {
+      await sendBroadcastNotice(`Server restart in ${RESTART_SHUTDOWN_SECONDS} seconds.`);
+      await scheduleTimedShutdown(RESTART_SHUTDOWN_SECONDS);
+
+      const stopped = await waitForServerToStop((RESTART_SHUTDOWN_SECONDS * 1000) + SHUTDOWN_EXTRA_GRACE_MS);
+      if (!stopped) {
+        setLifecycleState('error');
+        setActionError('Restart timed out while waiting for server shutdown.');
+        return;
+      }
+
+      setLifecycleState('stopped');
+      setRuntimePid(undefined);
+      setRuntimeUptimeMs(undefined);
+      await startServer();
+    } catch (error) {
+      setLifecycleState('error');
+      setActionError(`Failed to restart server: ${String(error)}`);
+    } finally {
+      setPendingServerAction(null);
+    }
+  }, [effectiveServer, hasGameApi, scheduleTimedShutdown, sendBroadcastNotice, startServer, waitForServerToStop]);
 
   const updateServer = useCallback(async () => {
     if (!effectiveServer || !hasDownloadApi) return;
@@ -2490,12 +3085,90 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
 
     setActionError(null);
+    setPendingServerAction('update');
     try {
+      if (hasGameApi) {
+        const status = await window.launcher.game.status(effectiveServer.id);
+        if (status.running) {
+          setLifecycleState('stopping');
+          await sendBroadcastNotice(`Server update scheduled. Restarting in ${UPDATE_SHUTDOWN_SECONDS} seconds.`);
+          await scheduleTimedShutdown(UPDATE_SHUTDOWN_SECONDS);
+
+          const stopped = await waitForServerToStop((UPDATE_SHUTDOWN_SECONDS * 1000) + SHUTDOWN_EXTRA_GRACE_MS);
+          if (!stopped) {
+            setLifecycleState('error');
+            setActionError('Update timed out while waiting for server shutdown.');
+            return;
+          }
+
+          setLifecycleState('stopped');
+          setRuntimePid(undefined);
+          setRuntimeUptimeMs(undefined);
+        }
+      }
+
       await window.launcher.download.start(effectiveServer.id, buildPath, effectiveServer.path);
     } catch (error) {
       setActionError(`Failed to start update: ${String(error)}`);
+    } finally {
+      setPendingServerAction(null);
     }
-  }, [effectiveServer, hasDownloadApi, resolveBuildPath]);
+  }, [
+    effectiveServer,
+    hasDownloadApi,
+    hasGameApi,
+    resolveBuildPath,
+    scheduleTimedShutdown,
+    sendBroadcastNotice,
+    waitForServerToStop,
+  ]);
+
+  useEffect(() => {
+    if (!effectiveServer || typeof window === 'undefined' || !window.launcher?.game?.onLog) return;
+
+    const cleanup = window.launcher.game.onLog((data) => {
+      if (data.installationId !== effectiveServer.id) return;
+
+      const playerNameMatch = data.message.match(/\[PL\]\s+Name:\s*(.+)$/i);
+      if (!playerNameMatch) return;
+
+      const playerName = playerNameMatch[1].trim();
+      if (!playerName) return;
+
+      const active = playersListCollectionRef.current;
+      if (active) {
+        active.names.add(playerName);
+      }
+    });
+
+    return cleanup;
+  }, [effectiveServer]);
+
+  useEffect(() => {
+    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') {
+      setOnlinePlayers([]);
+      setIsPlayersRefreshing(false);
+      setPlayersError(null);
+      if (playersListCollectionRef.current) {
+        window.clearTimeout(playersListCollectionRef.current.timeoutId);
+        playersListCollectionRef.current = null;
+      }
+      return;
+    }
+
+    void refreshPlayers();
+    const interval = window.setInterval(() => {
+      void refreshPlayers();
+    }, PLAYER_LIST_POLL_MS);
+
+    return () => {
+      window.clearInterval(interval);
+      if (playersListCollectionRef.current) {
+        window.clearTimeout(playersListCollectionRef.current.timeoutId);
+        playersListCollectionRef.current = null;
+      }
+    };
+  }, [effectiveServer?.id, hasGameApi, lifecycleState, refreshPlayers]);
 
   const filteredLogs = logs.filter((log) => {
     if (activeLogFilters.length === 0) return false;
@@ -2543,7 +3216,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const canStart = !!effectiveServer && !isUpdating && lifecycleState !== 'running' && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
   const canStop = !!effectiveServer && !isUpdating && (lifecycleState === 'running' || lifecycleState === 'starting');
   const canRestart = !!effectiveServer && !isUpdating && lifecycleState === 'running';
-  const canUpdate = !!effectiveServer && !isUpdating && lifecycleState !== 'running' && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
+  const canUpdate = !!effectiveServer && !isUpdating && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
 
   const getLogLevelColor = (level: LogEntry['level']) => {
     switch (level) {
@@ -2752,9 +3425,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     {
       id: 'start',
       label: 'Start Server',
+      buttonLabel: lifecycleState === 'starting' ? 'Starting...' : 'Start Server',
       description: 'Launch the selected StarMade server using its current install and Java settings.',
       detail: lifecycleState === 'running' ? 'Server is already online.' : 'Starts the dedicated server process.',
       enabled: canStart,
+      isLoading: lifecycleState === 'starting',
       emphasis: 'accent',
       onClick: () => { void startServer(); },
     },
@@ -2762,27 +3437,50 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       id: 'stop',
       label: 'Stop Server',
       description: 'Gracefully stop the currently running dedicated server process.',
-      detail: lifecycleState === 'stopped' ? 'Server is currently offline.' : 'Sends a termination request to the server process.',
-      enabled: canStop,
+      buttonLabel: pendingServerAction === 'stop' ? 'Force Stop' : 'Stop Server',
+      detail: pendingServerAction === 'stop'
+        ? 'Timed shutdown is in progress. Click Force Stop to kill the process immediately.'
+        : lifecycleState === 'stopped'
+          ? 'Server is currently offline.'
+          : 'Schedules a timed shutdown and waits for the process to stop.',
+      enabled: pendingServerAction === 'stop' ? true : canStop,
+      isLoading: pendingServerAction === 'stop',
+      allowClickWhileLoading: pendingServerAction === 'stop',
       emphasis: 'danger',
-      onClick: () => { void stopServer(); },
+      onClick: () => {
+        if (pendingServerAction === 'stop') {
+          void forceStopServer();
+          return;
+        }
+        void stopServer();
+      },
     },
     {
       id: 'restart',
       label: 'Restart Server',
+      buttonLabel: pendingServerAction === 'restart' ? 'Restarting...' : 'Restart Server',
       description: 'Stop and then start the server again with the current configuration.',
       detail: 'Useful after config changes or when you want a clean runtime reset.',
       enabled: canRestart,
+      isLoading: pendingServerAction === 'restart',
       onClick: () => { void restartServer(); },
     },
     {
       id: 'update',
-      label: isUpdating ? `Updating (${serverDownloadStatus?.percent ?? 0}%)` : 'Update Server',
+      label: 'Update Server',
+      buttonLabel: isUpdating
+        ? `Updating (${serverDownloadStatus?.percent ?? 0}%)`
+        : pendingServerAction === 'update'
+          ? 'Scheduling Update...'
+          : 'Update Server',
       description: 'Download and verify the selected StarMade server version into this server path.',
       detail: isUpdating
         ? `Download state: ${serverDownloadStatus?.state ?? 'downloading'}`
+        : pendingServerAction === 'update'
+          ? 'Broadcasting update notice and waiting for timed shutdown.'
         : 'Checks the current version manifest and updates local files.',
       enabled: canUpdate,
+      isLoading: isUpdating || pendingServerAction === 'update',
       onClick: () => { void updateServer(); },
     },
   ]), [
@@ -2792,6 +3490,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     canUpdate,
     isUpdating,
     lifecycleState,
+    pendingServerAction,
+    forceStopServer,
     restartServer,
     serverDownloadStatus?.percent,
     serverDownloadStatus?.state,
@@ -3505,13 +4205,137 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   );
 
   const renderPlayersWidget = () => (
-    <div className="min-h-[220px] overflow-y-auto rounded-md border border-white/10 bg-black/20 p-3 font-mono text-sm text-blue-300">
-      Player listing will appear here when server player-state events are wired.
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+          Online: <span className="text-gray-200">{onlinePlayers.length}</span>
+        </p>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => { void messageAllOnlinePlayers(); }}
+            disabled={lifecycleState !== 'running' || !hasGameApi || isPlayersBroadcasting || isPlayersRefreshing || !!kickingPlayerName || isPlayerMessageSending || onlinePlayers.length === 0}
+            className="rounded border border-cyan-500/35 bg-cyan-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <span className="inline-flex items-center gap-1.5">
+              {isPlayersBroadcasting && (
+                <span
+                  aria-hidden="true"
+                  className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent"
+                />
+              )}
+              <span>{isPlayersBroadcasting ? 'Sending...' : 'Message All'}</span>
+            </span>
+          </button>
+          <button
+            onClick={() => { void refreshPlayers(); }}
+            disabled={lifecycleState !== 'running' || isPlayersRefreshing || !hasGameApi || !!kickingPlayerName || isPlayerMessageSending || isPlayersBroadcasting}
+            className="rounded border border-white/15 bg-black/25 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-200 transition-colors hover:bg-black/40 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <span className="inline-flex items-center gap-1.5">
+              {isPlayersRefreshing && (
+                <span
+                  aria-hidden="true"
+                  className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent"
+                />
+              )}
+              <span>{isPlayersRefreshing ? 'Refreshing...' : 'Refresh'}</span>
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <div className="min-h-[220px] overflow-y-auto rounded-md border border-white/10 bg-black/20 p-3 font-mono text-sm text-blue-300">
+        {playersError && (
+          <p className="mb-2 text-red-300">{playersError}</p>
+        )}
+        {lifecycleState !== 'running' ? (
+          <p className="text-gray-500">Server is offline. Start the server to view connected players.</p>
+        ) : onlinePlayers.length === 0 ? (
+          <p className="text-gray-500">No players online.</p>
+        ) : (
+          <div className="space-y-1">
+            {onlinePlayers.map((playerName) => (
+              <div
+                key={playerName}
+                className="rounded border border-white/10 bg-black/25 px-2 py-1.5 text-cyan-200"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate">{playerName}</span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => {
+                        setPlayersError(null);
+                        setPlayerMessageTarget(playerName);
+                        if (playerMessageTarget !== playerName) {
+                          setPlayerMessageText('');
+                        }
+                      }}
+                      disabled={isPlayerMessageSending || !!kickingPlayerName || isPlayersBroadcasting}
+                      className="rounded border border-cyan-400/40 bg-cyan-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-cyan-200 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Message
+                    </button>
+                    <button
+                      onClick={() => { void handleKickPlayer(playerName); }}
+                      disabled={isPlayerMessageSending || !!kickingPlayerName || isPlayersBroadcasting}
+                      className="rounded border border-red-400/40 bg-red-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-red-200 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {kickingPlayerName === playerName ? 'Kicking...' : 'Kick'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {playerMessageTarget && (
+        <div className="space-y-2 rounded-md border border-cyan-500/25 bg-cyan-900/10 p-2">
+          <p className="text-xs text-cyan-200">
+            Direct message to <span className="font-semibold">{playerMessageTarget}</span>
+          </p>
+          <div className="flex gap-2">
+            <input
+              ref={playerMessageInputRef}
+              type="text"
+              value={playerMessageText}
+              onChange={(event) => setPlayerMessageText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  void sendPlayerMessage();
+                }
+              }}
+              placeholder="Type a direct server message..."
+              disabled={isPlayerMessageSending || !!kickingPlayerName || lifecycleState !== 'running'}
+              className="flex-1 rounded border border-white/15 bg-black/25 px-2 py-1.5 text-xs text-gray-100 placeholder-gray-500"
+            />
+            <button
+              onClick={() => { void sendPlayerMessage(); }}
+              disabled={!playerMessageText.trim() || isPlayerMessageSending || !!kickingPlayerName || isPlayersBroadcasting || lifecycleState !== 'running'}
+              className="rounded border border-cyan-400/40 bg-cyan-500/10 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-cyan-200 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isPlayerMessageSending ? 'Sending...' : 'Send'}
+            </button>
+            <button
+              onClick={() => {
+                setPlayerMessageTarget(null);
+                setPlayerMessageText('');
+              }}
+              disabled={isPlayerMessageSending}
+              className="rounded border border-white/20 bg-black/30 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-300 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 
   const getActionButtonClassName = (action: ServerActionDefinition) => {
-    if (!action.enabled) {
+    if (!action.enabled || (action.isLoading && !action.allowClickWhileLoading)) {
       return 'border-white/5 bg-black/15 text-gray-500 cursor-not-allowed';
     }
     if (action.emphasis === 'danger') {
@@ -3601,10 +4425,18 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
               <button
                 onClick={action.onClick}
-                disabled={!action.enabled}
+                disabled={!action.enabled || (!!action.isLoading && !action.allowClickWhileLoading)}
                 className={`mt-auto w-full rounded-md border px-4 py-3 text-sm font-semibold transition-colors ${getActionButtonClassName(action)}`}
               >
-                {action.label}
+                <span className="inline-flex items-center justify-center gap-2">
+                  {action.isLoading && (
+                    <span
+                      aria-hidden="true"
+                      className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+                    />
+                  )}
+                  <span>{action.buttonLabel ?? action.label}</span>
+                </span>
               </button>
               </div>
               {options?.enableQuickDrag && isLayoutEditMode && renderQuickActionDropZone((isPinned ? quickActionIndex : dashboardLayout.quickActionIds.length) + 1, 'col-span-full')}
@@ -4192,9 +5024,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
       <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[320px_1fr]">
         <div className="flex min-h-0 flex-col border-b border-white/10 xl:border-b-0 xl:border-r xl:border-white/10">
-          <div className="border-b border-white/10 px-3 py-2">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-300">All Log Files</h4>
-          </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
             {allLogFiles.length === 0 ? (
               <p className="p-2 text-sm text-gray-500">No log files available.</p>
@@ -4700,6 +5529,219 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     </div>
   );
 
+  const renderChat = () => {
+    const currentMessages = selectedChatChannelId ? (chatMessagesByChannel[selectedChatChannelId] ?? []) : [];
+    const selectedChannel = chatChannels.find((c) => c.channelId === selectedChatChannelId);
+
+    const getChannelTypeColor = (type: ChatChannelInfo['channelType']) => {
+      if (type === 'general') return 'text-blue-300';
+      if (type === 'faction') return 'text-green-300';
+      if (type === 'direct') return 'text-purple-300';
+      return 'text-yellow-300';
+    };
+
+    const getChannelTypeIcon = (type: ChatChannelInfo['channelType']) => {
+      if (type === 'general') return '#';
+      if (type === 'faction') return '⚑';
+      if (type === 'direct') return '@';
+      return '⊕';
+    };
+
+    const getSenderColor = (sender: string, receiverType: string) => {
+      if (receiverType === 'SYSTEM' || sender === '[SERVER]' || sender === '') return 'text-amber-300';
+      if (receiverType === 'DIRECT') return 'text-purple-300';
+      return 'text-cyan-300';
+    };
+
+    return (
+      <div className="flex h-full min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
+        {/* Header */}
+        <div className="border-b border-white/10 px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="font-display text-lg font-bold uppercase tracking-wider text-white">Server Chat</h3>
+              <p className="text-sm text-gray-400">
+                {selectedChannel ? `${selectedChannel.channelLabel}` : 'Select a channel'}
+                {lifecycleState !== 'running' && (
+                  <span className="ml-2 text-amber-400">(server not running — showing saved logs)</span>
+                )}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="flex items-center gap-2 text-sm text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={chatAutoScroll}
+                  onChange={(e) => setChatAutoScroll(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-600 bg-slate-700"
+                />
+                Auto-scroll
+              </label>
+              <button
+                onClick={() => { void reloadChatChannels(); void loadChatMessagesForChannel(selectedChatChannelId); }}
+                disabled={isChatListLoading || isChatLoading}
+                className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isChatListLoading ? 'Refreshing...' : 'Refresh'}
+              </button>
+            </div>
+          </div>
+          {chatError && (
+            <p className="mt-2 text-sm text-red-300">{chatError}</p>
+          )}
+        </div>
+
+        {/* Body: left channel pane + right message pane */}
+        <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[260px_1fr]">
+          {/* Channel list */}
+          <div className="flex min-h-0 flex-col border-b border-white/10 xl:border-b-0 xl:border-r xl:border-white/10">
+            <div className="border-b border-white/10 px-3 py-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-300">Channels</h4>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+              {chatChannels.length === 0 ? (
+                <div className="p-2">
+                  {isChatListLoading ? (
+                    <p className="text-sm text-gray-500">Loading channels...</p>
+                  ) : (
+                    <p className="text-sm text-gray-500">
+                      No chat logs found. Chat logs are created in{' '}
+                      <code className="text-xs text-gray-400">chatlogs/</code> when
+                      players chat on the server.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {chatChannels.map((ch) => {
+                    const isActive = selectedChatChannelId === ch.channelId;
+                    const isLiveOnly = !ch.fileName;
+                    const unread = false; // future: track unread count
+                    return (
+                      <button
+                        key={ch.channelId}
+                        onClick={() => setSelectedChatChannelId(ch.channelId)}
+                        className={`w-full rounded border px-2 py-2 text-left transition-colors ${
+                          isActive
+                            ? 'border-starmade-accent/40 bg-starmade-accent/20'
+                            : 'border-white/15 bg-black/25 hover:bg-black/35'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span className={`flex-shrink-0 text-sm font-bold ${getChannelTypeColor(ch.channelType)}`}>
+                            {getChannelTypeIcon(ch.channelType)}
+                          </span>
+                          <p className={`truncate text-xs font-semibold ${isActive ? 'text-white' : 'text-gray-200'} ${unread ? 'text-white' : ''}`}>
+                            {ch.channelLabel}
+                          </p>
+                          {isLiveOnly && (
+                            <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                              isActive
+                                ? 'border-cyan-300/40 bg-cyan-400/15 text-cyan-100'
+                                : 'border-cyan-400/30 bg-cyan-500/10 text-cyan-300'
+                            }`}>
+                              Live-only
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 truncate pl-5 text-[11px] text-gray-500">
+                          {formatLogFileSize(ch.sizeBytes)}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Message area */}
+          <div className="flex min-h-0 flex-col">
+            <div
+              ref={chatContainerRef}
+              className="min-h-0 flex-1 overflow-y-auto p-4 font-mono text-sm"
+            >
+              {!selectedChatChannelId ? (
+                <p className="text-gray-500">Select a channel from the left to view messages.</p>
+              ) : isChatLoading ? (
+                <p className="text-gray-400">Loading messages...</p>
+              ) : currentMessages.length === 0 ? (
+                <p className="text-gray-500">No messages in this channel yet.</p>
+              ) : (
+                <div className="space-y-1">
+                  {currentMessages.map((msg, index) => (
+                    <div
+                      key={`${msg.timestamp}-${index}`}
+                      className="flex min-w-0 gap-2 rounded px-2 py-0.5 hover:bg-white/5"
+                    >
+                      <span className="flex-shrink-0 text-[11px] text-gray-600">{msg.timestamp}</span>
+                      {msg.receiverType === 'DIRECT' && (
+                        <span className="flex-shrink-0 text-[11px] text-purple-400">[DM]</span>
+                      )}
+                      <span className={`flex-shrink-0 font-semibold ${getSenderColor(msg.sender, msg.receiverType)}`}>
+                        {msg.sender || '[System]'}:
+                      </span>
+                      <span className="min-w-0 break-words text-gray-200">{msg.text}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Message input */}
+            <div className="border-t border-white/10 bg-black/20 px-3 py-2">
+              {lifecycleState !== 'running' && (
+                <p className="mb-2 text-xs text-amber-400">
+                  ⚠ Server is not running. Messages will not be sent.
+                </p>
+              )}
+              {selectedChannel?.channelType === 'direct' && (
+                <p className="mb-2 text-xs text-purple-400">
+                  ℹ Direct messages are sent via /server_message_to — the recipient is derived from the channel name.
+                </p>
+              )}
+              <div className="flex gap-2">
+                <input
+                  ref={chatInputRef}
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      void handleSendChatMessage();
+                    }
+                  }}
+                  placeholder={
+                    !selectedChatChannelId
+                      ? 'Select a channel first...'
+                      : lifecycleState !== 'running'
+                        ? 'Server not running...'
+                        : `Message ${selectedChannel?.channelLabel ?? selectedChatChannelId}...`
+                  }
+                  disabled={!selectedChatChannelId || lifecycleState !== 'running'}
+                  className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-starmade-accent disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <button
+                  onClick={() => { void handleSendChatMessage(); }}
+                  disabled={!chatInput.trim() || !selectedChatChannelId || lifecycleState !== 'running'}
+                  className="rounded-md bg-starmade-accent px-4 py-2 text-sm font-semibold uppercase tracking-wider text-white hover:bg-starmade-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Send
+                </button>
+              </div>
+              <p className="mt-1.5 text-[11px] text-gray-600">
+                Messages are sent as server broadcasts using{' '}
+                <code className="text-gray-500">/server_message_broadcast plain</code>{' '}
+                (or <code className="text-gray-500">/server_message_to</code> for DMs).
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderPlaceholderTab = (title: string, description: string) => (
     <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-white/20 bg-black/20 p-6 text-center">
       <div>
@@ -4713,6 +5755,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     if (activeTab === 'control') return renderControlPanel();
     if (activeTab === 'actions') return renderActionsPanel();
     if (activeTab === 'logs') return renderLogs();
+    if (activeTab === 'chat') return renderChat();
     if (activeTab === 'configuration') return renderConfiguration();
     if (activeTab === 'files') return renderFilesTab();
     return renderPlaceholderTab(
@@ -4741,12 +5784,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             ))}
           </div>
 
-          <button
+          {/*<button
             onClick={isPoppedOutPanel ? handleDockServerPanel : () => { void handlePopOutServerPanel(); }}
             className="rounded-md border border-white/15 bg-black/20 px-3 py-1.5 text-sm font-semibold text-gray-200 transition-colors hover:bg-black/35"
           >
             {isPoppedOutPanel ? 'Dock Back' : 'Pop Out'}
-          </button>
+          </button>*/}
         </div>
 
         <div className="min-h-0 flex-1">{renderActiveTab()}</div>
