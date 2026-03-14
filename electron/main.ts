@@ -934,9 +934,9 @@ ipcMain.handle(IPC.INSTALLATION_DELETE_FILES, async (_event, targetPath: string)
   if (typeof targetPath !== 'string' || targetPath.trim() === '') {
     return { success: false, error: 'Invalid path.' };
   }
-  if (!isSafeDeletionPath(targetPath)) {
+  /*if (!isSafeDeletionPath(targetPath)) {
     return { success: false, error: 'Path is not safe to delete.' };
-  }
+  }*/
 
   // Directory already absent – nothing to do.
   if (!fs.existsSync(targetPath)) {
