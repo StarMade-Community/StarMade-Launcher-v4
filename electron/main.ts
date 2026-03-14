@@ -32,7 +32,8 @@ import { parseVersionTxt } from './legacy.js';
 import { getManagedPathCandidates } from './install-paths.js';
 import {
   listModsForInstallation,
-  downloadModForInstallation,
+  listSmdMods,
+  installOrUpdateSmdModForInstallation,
   removeModForInstallation,
   setModEnabledForInstallation,
   createModpackManifest,
@@ -1858,23 +1859,24 @@ ipcMain.handle(IPC.MODS_LIST, async (_event, installationPath: string) => {
   }
 });
 
+ipcMain.handle(IPC.MODS_SMD_LIST, async (_event, searchQuery?: string) => {
+  try {
+    const mods = await listSmdMods(searchQuery);
+    return { success: true, mods };
+  } catch (error) {
+    return { success: false, mods: [], error: String(error) };
+  }
+});
+
 ipcMain.handle(
-  IPC.MODS_DOWNLOAD,
-  async (
-    _event,
-    installationPath: string,
-    downloadUrl: string,
-    preferredFileName?: string,
-    enabled = true,
-  ) => {
+  IPC.MODS_SMD_INSTALL_OR_UPDATE,
+  async (_event, installationPath: string, resourceId: number, enabled = true) => {
     try {
-      const mod = await downloadModForInstallation({
+      const mod = await installOrUpdateSmdModForInstallation({
         installationPath,
         launcherDir: getLauncherDir(),
-        downloadUrl,
-        preferredFileName,
+        resourceId,
         enabled,
-        source: 'manual-url',
         metadataStore: modMetadataStore,
       });
       return { success: true, mod };

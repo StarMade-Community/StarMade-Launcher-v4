@@ -1,4 +1,4 @@
-import type { Version, DownloadProgress, ModRecord, ModpackManifest } from './index';
+import type { Version, DownloadProgress, ModRecord, ModpackManifest, SmdModResource } from './index';
 
 declare global {
   interface Window {
@@ -325,11 +325,16 @@ declare global {
           disabledModsDir: string;
           mods: ModRecord[];
         }>;
-        /** Download a mod jar from URL into an installation. */
-        download: (
+        /** Browse StarMade Dock StarLoader mods. */
+        listSmdMods: (searchQuery?: string) => Promise<{
+          success: boolean;
+          mods: SmdModResource[];
+          error?: string;
+        }>;
+        /** Install or update a StarMade Dock mod by resource id. */
+        installOrUpdateFromSmd: (
           installationPath: string,
-          downloadUrl: string,
-          preferredFileName?: string,
+          resourceId: number,
           enabled?: boolean,
         ) => Promise<{ success: boolean; mod?: ModRecord; error?: string }>;
         /** Delete a mod jar from an installation. */

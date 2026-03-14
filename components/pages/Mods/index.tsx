@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import PageContainer from '../../common/PageContainer';
 import CustomDropdown from '../../common/CustomDropdown';
 import { useData } from '../../../contexts/DataContext';
-import type { ManagedItem, ModRecord } from '../../../types';
+import type { ManagedItem, ModRecord, SmdModResource } from '../../../types';
 
 interface ModsListResult {
   modsDir: string;
@@ -12,7 +12,8 @@ interface ModsListResult {
 
 interface ModsBridge {
   list: (installationPath: string) => Promise<ModsListResult>;
-  download: (installationPath: string, downloadUrl: string, preferredFileName?: string, enabled?: boolean) => Promise<{ success: boolean; mod?: ModRecord; error?: string }>;
+  listSmdMods: (searchQuery?: string) => Promise<{ success: boolean; mods: SmdModResource[]; error?: string }>;
+  installOrUpdateFromSmd: (installationPath: string, resourceId: number, enabled?: boolean) => Promise<{ success: boolean; mod?: ModRecord; error?: string }>;
   remove: (installationPath: string, relativePath: string) => Promise<{ success: boolean; error?: string }>;
   setEnabled: (installationPath: string, relativePath: string, enabled: boolean) => Promise<{ success: boolean; relativePath?: string; error?: string }>;
   exportModpack: (
@@ -33,14 +34,6 @@ const formatBytes = (value: number): string => {
   return `${(kb / 1024).toFixed(2)} MB`;
 };
 
-const makeSafeFileName = (raw: string): string => {
-  const trimmed = raw.trim();
-  if (!trimmed) return '';
-  const sanitized = trimmed.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
-  if (!sanitized) return '';
-  return sanitized.toLowerCase().endsWith('.jar') ? sanitized : `${sanitized}.jar`;
-};
-
 const makeTimestamp = (): string => {
   const now = new Date();
   const yyyy = String(now.getFullYear());
@@ -57,10 +50,11 @@ const Mods: React.FC = () => {
   const [modsDir, setModsDir] = useState('');
   const [disabledModsDir, setDisabledModsDir] = useState('');
   const [mods, setMods] = useState<ModRecord[]>([]);
-  const [downloadUrl, setDownloadUrl] = useState('');
-  const [downloadFileName, setDownloadFileName] = useState('');
+  const [smdMods, setSmdMods] = useState<SmdModResource[]>([]);
+  const [smdSearch, setSmdSearch] = useState('');
   const [isBusy, setIsBusy] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingSmd, setIsLoadingSmd] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -93,6 +87,11 @@ const Mods: React.FC = () => {
   const sortedMods = useMemo(
     () => [...mods].sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.fileName.localeCompare(b.fileName)),
     [mods],
+  );
+
+  const sortedSmdMods = useMemo(
+    () => [...smdMods].sort((a, b) => b.downloadCount - a.downloadCount || a.name.localeCompare(b.name)),
+    [smdMods],
   );
 
   const loadMods = useCallback(async () => {
@@ -130,6 +129,33 @@ const Mods: React.FC = () => {
     void loadMods();
   }, [loadMods]);
 
+  const loadSmdMods = useCallback(async () => {
+    if (!launcher?.mods?.listSmdMods) {
+      setError('SMD browsing is unavailable in this environment.');
+      setSmdMods([]);
+      return;
+    }
+
+    setIsLoadingSmd(true);
+
+    try {
+      const result = await launcher.mods.listSmdMods(smdSearch);
+      if (!result.success) {
+        throw new Error(result.error ?? 'Failed to load SMD mods.');
+      }
+      setSmdMods(result.mods);
+    } catch (err) {
+      setError(String(err));
+      setSmdMods([]);
+    } finally {
+      setIsLoadingSmd(false);
+    }
+  }, [launcher, smdSearch]);
+
+  useEffect(() => {
+    void loadSmdMods();
+  }, [loadSmdMods]);
+
   const withBusyAction = useCallback(async (fn: () => Promise<void>) => {
     setStatus(null);
     setError(null);
@@ -143,27 +169,19 @@ const Mods: React.FC = () => {
     }
   }, []);
 
-  const onDownloadMod = useCallback(async () => {
-    if (!selectedInstance || !launcher?.mods?.download) return;
-
-    const url = downloadUrl.trim();
-    if (!url) {
-      setError('Enter a mod download URL first.');
-      return;
-    }
+  const onInstallOrUpdateSmdMod = useCallback(async (resource: SmdModResource) => {
+    if (!selectedInstance || !launcher?.mods?.installOrUpdateFromSmd) return;
 
     await withBusyAction(async () => {
-      const preferredFileName = makeSafeFileName(downloadFileName);
-      const result = await launcher.mods.download(selectedInstance.path, url, preferredFileName || undefined, true);
+      const result = await launcher.mods.installOrUpdateFromSmd(selectedInstance.path, resource.resourceId, true);
       if (!result.success) {
-        throw new Error(result.error ?? 'Download failed.');
+        throw new Error(result.error ?? 'SMD download failed.');
       }
-      setStatus(`Downloaded ${result.mod?.fileName ?? 'mod'} to ${selectedInstance.name}.`);
-      setDownloadUrl('');
-      setDownloadFileName('');
+
+      setStatus(`Installed/updated ${resource.name} for ${selectedInstance.name}.`);
       await loadMods();
     });
-  }, [downloadFileName, downloadUrl, launcher, loadMods, selectedInstance, withBusyAction]);
+  }, [launcher, loadMods, selectedInstance, withBusyAction]);
 
   const onToggleMod = useCallback(async (mod: ModRecord) => {
     if (!selectedInstance || !launcher?.mods?.setEnabled) return;
@@ -293,37 +311,73 @@ const Mods: React.FC = () => {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr_auto] gap-3 items-end">
-          <div>
-            <p className="text-xs uppercase tracking-wider text-gray-400 mb-1">Mod Download URL</p>
-            <input
-              type="text"
-              value={downloadUrl}
-              onChange={(event) => setDownloadUrl(event.target.value)}
-              placeholder="https://.../my-mod.jar"
-              className="w-full rounded-md border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm"
-              disabled={isBusy}
-            />
+        <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex-1 min-w-[280px]">
+              <p className="text-xs uppercase tracking-wider text-gray-400 mb-1">Search SMD StarLoader Mods</p>
+              <input
+                type="text"
+                value={smdSearch}
+                onChange={(event) => setSmdSearch(event.target.value)}
+                placeholder="Search by name, author, or description"
+                className="w-full rounded-md border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm"
+                disabled={isBusy}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadSmdMods()}
+              className="px-3 py-2 rounded-md border border-slate-700 bg-slate-900/70 hover:bg-slate-800/80 text-sm"
+              disabled={isBusy || isLoadingSmd}
+            >
+              {isLoadingSmd ? 'Loading SMD Mods…' : 'Refresh SMD Mods'}
+            </button>
           </div>
-          <div>
-            <p className="text-xs uppercase tracking-wider text-gray-400 mb-1">File Name (optional)</p>
-            <input
-              type="text"
-              value={downloadFileName}
-              onChange={(event) => setDownloadFileName(event.target.value)}
-              placeholder="my-mod.jar"
-              className="w-full rounded-md border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm"
-              disabled={isBusy}
-            />
+
+          <div className="mt-3 max-h-56 overflow-auto rounded border border-white/10">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-slate-900/90">
+                <tr className="text-left text-xs uppercase tracking-wider text-gray-400">
+                  <th className="px-3 py-2">Mod</th>
+                  <th className="px-3 py-2">Author</th>
+                  <th className="px-3 py-2">Downloads</th>
+                  <th className="px-3 py-2">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedSmdMods.map((resource) => {
+                  const installed = sortedMods.find((mod) => mod.resourceId === resource.resourceId);
+                  return (
+                    <tr key={resource.resourceId} className="border-b border-white/5 last:border-b-0">
+                      <td className="px-3 py-2">
+                        <p className="text-gray-100">{resource.name}</p>
+                        {resource.tagLine && <p className="text-xs text-gray-400 line-clamp-1">{resource.tagLine}</p>}
+                      </td>
+                      <td className="px-3 py-2 text-gray-300">{resource.author}</td>
+                      <td className="px-3 py-2 text-gray-300">{resource.downloadCount.toLocaleString()}</td>
+                      <td className="px-3 py-2">
+                        <button
+                          type="button"
+                          onClick={() => void onInstallOrUpdateSmdMod(resource)}
+                          className="px-2 py-1 rounded bg-emerald-800/80 hover:bg-emerald-700 text-xs"
+                          disabled={isBusy || !selectedInstance}
+                        >
+                          {installed ? 'Update' : 'Download'} Mod
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {sortedSmdMods.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-3 py-6 text-center text-gray-400">
+                      {isLoadingSmd ? 'Loading SMD mods…' : 'No SMD mods matched your query.'}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
-          <button
-            type="button"
-            onClick={() => void onDownloadMod()}
-            className="px-4 py-2 rounded-md bg-emerald-800/80 hover:bg-emerald-700 text-sm"
-            disabled={isBusy || !selectedInstance}
-          >
-            Download
-          </button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -355,6 +409,7 @@ const Mods: React.FC = () => {
               <tr className="text-left text-xs uppercase tracking-wider text-gray-400">
                 <th className="px-3 py-2">Name</th>
                 <th className="px-3 py-2">State</th>
+                <th className="px-3 py-2">SMD</th>
                 <th className="px-3 py-2">Size</th>
                 <th className="px-3 py-2">Modified</th>
                 <th className="px-3 py-2">Source Link</th>
@@ -366,6 +421,7 @@ const Mods: React.FC = () => {
                 <tr key={`${mod.relativePath}-${mod.modifiedMs}`} className="border-b border-white/5 last:border-b-0">
                   <td className="px-3 py-2 text-gray-200 break-all">{mod.fileName}</td>
                   <td className="px-3 py-2">{mod.enabled ? 'Enabled' : 'Disabled'}</td>
+                  <td className="px-3 py-2 text-gray-300">{mod.resourceId ? `#${mod.resourceId}${mod.smdVersion ? ` (${mod.smdVersion})` : ''}` : 'Manual/Unknown'}</td>
                   <td className="px-3 py-2 text-gray-300">{formatBytes(mod.sizeBytes)}</td>
                   <td className="px-3 py-2 text-gray-300">{new Date(mod.modifiedMs).toLocaleString()}</td>
                   <td className="px-3 py-2 text-gray-300">
@@ -405,7 +461,7 @@ const Mods: React.FC = () => {
               ))}
               {sortedMods.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-gray-400">
+                  <td colSpan={7} className="px-3 py-6 text-center text-gray-400">
                     {isLoading ? 'Loading mods…' : 'No mods found for this installation.'}
                   </td>
                 </tr>

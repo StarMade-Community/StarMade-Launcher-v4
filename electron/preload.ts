@@ -454,11 +454,26 @@ const launcherApi = {
       }>;
     }> => ipcRenderer.invoke(IPC.MODS_LIST, installationPath),
 
-    /** Download a mod jar from URL into an installation. */
-    download: (
+    /** Browse StarMade Dock StarLoader mods. */
+    listSmdMods: (searchQuery?: string): Promise<{
+      success: boolean;
+      mods: Array<{
+        resourceId: number;
+        name: string;
+        author: string;
+        tagLine?: string;
+        gameVersion?: string;
+        downloadCount: number;
+        ratingAverage: number;
+        latestVersion?: string;
+      }>;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.MODS_SMD_LIST, searchQuery),
+
+    /** Install or update an SMD mod by resource id. */
+    installOrUpdateFromSmd: (
       installationPath: string,
-      downloadUrl: string,
-      preferredFileName?: string,
+      resourceId: number,
       enabled = true,
     ): Promise<{
       success: boolean;
@@ -470,9 +485,11 @@ const launcherApi = {
         modifiedMs: number;
         enabled: boolean;
         downloadUrl?: string;
+        resourceId?: number;
+        smdVersion?: string;
       };
       error?: string;
-    }> => ipcRenderer.invoke(IPC.MODS_DOWNLOAD, installationPath, downloadUrl, preferredFileName, enabled),
+    }> => ipcRenderer.invoke(IPC.MODS_SMD_INSTALL_OR_UPDATE, installationPath, resourceId, enabled),
 
     /** Remove a mod jar from an installation. */
     remove: (installationPath: string, relativePath: string): Promise<{ success: boolean; error?: string }> =>
