@@ -3,6 +3,7 @@ import Header from './components/layout/Header';
 import Footer from './components/layout/Footer';
 import News from './components/pages/News';
 import Screenshots from './components/pages/Screenshots';
+import Mods from './components/pages/Mods';
 import Installations from './components/pages/Installations';
 import Play from './components/pages/Play';
 import Settings from './components/pages/Settings';
@@ -128,6 +129,8 @@ const App: React.FC = () => {
         return <News />;
       case 'Screenshots':
         return <Screenshots />;
+      case 'Mods':
+        return <Mods />;
       case 'Settings': {
         const settingsProps = 'initialSection' in pageProps ? pageProps : {};
         return <Settings {...settingsProps} />;

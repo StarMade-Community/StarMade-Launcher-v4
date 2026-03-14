@@ -316,7 +316,7 @@ const launcherApi = {
     openFolder: (defaultPath?: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.DIALOG_OPEN_FOLDER, defaultPath),
     /** Open file picker dialog. Returns selected path or null if canceled. */
-    openFile: (defaultPath?: string, type?: 'image'): Promise<string | null> =>
+    openFile: (defaultPath?: string, type?: 'image' | 'java' | 'modpack'): Promise<string | null> =>
       ipcRenderer.invoke(IPC.DIALOG_OPEN_FILE, defaultPath, type),
   },
 
@@ -435,6 +435,108 @@ const launcherApi = {
         screenshotPath,
         targetInstallationPath,
       ),
+  },
+
+  /** Mods management APIs */
+  mods: {
+    /** List mod jars from the installation's mods directory. */
+    list: (installationPath: string): Promise<{
+      modsDir: string;
+      mods: Array<{
+        fileName: string;
+        absolutePath: string;
+        relativePath: string;
+        sizeBytes: number;
+        modifiedMs: number;
+        enabled: boolean;
+        downloadUrl?: string;
+        resourceId?: number;
+        smdVersion?: string;
+      }>;
+    }> => ipcRenderer.invoke(IPC.MODS_LIST, installationPath),
+
+    /** Browse StarMade Dock StarLoader mods. */
+    listSmdMods: (searchQuery?: string): Promise<{
+      success: boolean;
+      mods: Array<{
+        resourceId: number;
+        name: string;
+        author: string;
+        tagLine?: string;
+        gameVersion?: string;
+        downloadCount: number;
+        ratingAverage: number;
+        latestVersion?: string;
+      }>;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.MODS_SMD_LIST, searchQuery),
+
+    /** Install or update an SMD mod by resource id. */
+    installOrUpdateFromSmd: (
+      installationPath: string,
+      resourceId: number,
+      enabled = true,
+    ): Promise<{
+      success: boolean;
+      mod?: {
+        fileName: string;
+        absolutePath: string;
+        relativePath: string;
+        sizeBytes: number;
+        modifiedMs: number;
+        enabled: boolean;
+        downloadUrl?: string;
+        resourceId?: number;
+        smdVersion?: string;
+      };
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.MODS_SMD_INSTALL_OR_UPDATE, installationPath, resourceId, enabled),
+
+    /** Check installed SMD mods for newer versions. */
+    checkSmdUpdates: (installed: Array<{ resourceId: number; smdVersion: string }>): Promise<{
+      success: boolean;
+      updates: Array<{
+        resourceId: number;
+        currentVersion: string;
+        latestVersion?: string;
+        hasUpdate: boolean;
+        error?: string;
+      }>;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.MODS_SMD_CHECK_UPDATES, installed),
+
+    /** Remove a mod jar from an installation. */
+    remove: (installationPath: string, relativePath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.MODS_REMOVE, installationPath, relativePath),
+
+    /** Deprecated: StarMade manages mod enable/disable state in-game. */
+    setEnabled: (
+      installationPath: string,
+      relativePath: string,
+      enabled: boolean,
+    ): Promise<{ success: boolean; relativePath?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.MODS_SET_ENABLED, installationPath, relativePath, enabled),
+
+    /** Export a link-only modpack manifest JSON. */
+    exportModpack: (
+      installationPath: string,
+      outputPath: string,
+      options?: { name?: string; sourceInstallation?: { id?: string; name?: string; version?: string } },
+    ): Promise<{ success: boolean; outputPath?: string; exportedCount?: number; skippedCount?: number; error?: string }> =>
+      ipcRenderer.invoke(IPC.MODS_EXPORT_MODPACK, installationPath, outputPath, options),
+
+    /** Import a modpack manifest and download all listed mods. */
+    importModpack: (
+      installationPath: string,
+      manifestPath: string,
+    ): Promise<{
+      success: boolean;
+      downloadedCount?: number;
+      skippedCount?: number;
+      failedCount?: number;
+      failures?: string[];
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.MODS_IMPORT_MODPACK, installationPath, manifestPath),
   },
 
   /** Legacy installation detection APIs */

@@ -1,4 +1,4 @@
-import type { Version, DownloadProgress } from './index';
+import type { Version, DownloadProgress, ModRecord, ModpackManifest, SmdModResource, SmdInstalledUpdateStatus } from './index';
 
 declare global {
   interface Window {
@@ -234,7 +234,7 @@ declare global {
         /** Open folder picker dialog. Returns selected path or null if canceled. */
         openFolder: (defaultPath?: string) => Promise<string | null>;
         /** Open file picker dialog. Returns selected path or null if canceled. */
-        openFile: (defaultPath?: string, type?: 'image') => Promise<string | null>;
+        openFile: (defaultPath?: string, type?: 'image' | 'java' | 'modpack') => Promise<string | null>;
       };
 
       /** Shell APIs */
@@ -315,6 +315,57 @@ declare global {
           screenshotPath: string,
           targetInstallationPath?: string,
         ) => Promise<{ success: boolean; destinationPath?: string; error?: string }>;
+      };
+
+      /** Mods management APIs */
+      mods: {
+        /** List mod jars from an installation's mods folder. */
+        list: (installationPath: string) => Promise<{
+          modsDir: string;
+          mods: ModRecord[];
+        }>;
+        /** Browse StarMade Dock StarLoader mods. */
+        listSmdMods: (searchQuery?: string) => Promise<{
+          success: boolean;
+          mods: SmdModResource[];
+          error?: string;
+        }>;
+        /** Install or update a StarMade Dock mod by resource id. */
+        installOrUpdateFromSmd: (
+          installationPath: string,
+          resourceId: number,
+          enabled?: boolean,
+        ) => Promise<{ success: boolean; mod?: ModRecord; error?: string }>;
+        /** Check installed SMD mods for available updates. */
+        checkSmdUpdates: (
+          installed: Array<{ resourceId: number; smdVersion: string }>,
+        ) => Promise<{ success: boolean; updates: SmdInstalledUpdateStatus[]; error?: string }>;
+        /** Delete a mod jar from an installation. */
+        remove: (installationPath: string, relativePath: string) => Promise<{ success: boolean; error?: string }>;
+        /** Deprecated: StarMade manages mod enable/disable state in-game. */
+        setEnabled: (
+          installationPath: string,
+          relativePath: string,
+          enabled: boolean,
+        ) => Promise<{ success: boolean; relativePath?: string; error?: string }>;
+        /** Export a link-only modpack manifest JSON. */
+        exportModpack: (
+          installationPath: string,
+          outputPath: string,
+          options?: { name?: string; sourceInstallation?: ModpackManifest['sourceInstallation'] },
+        ) => Promise<{ success: boolean; outputPath?: string; exportedCount?: number; skippedCount?: number; error?: string }>;
+        /** Import a modpack manifest and download listed mods. */
+        importModpack: (
+          installationPath: string,
+          manifestPath: string,
+        ) => Promise<{
+          success: boolean;
+          downloadedCount?: number;
+          skippedCount?: number;
+          failedCount?: number;
+          failures?: string[];
+          error?: string;
+        }>;
       };
 
       /** Icon image APIs */

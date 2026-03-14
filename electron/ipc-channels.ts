@@ -229,6 +229,25 @@ export const IPC = {
   /** Renderer → Main (invoke): copy screenshot to installation loading-screens folder. */
   SCREENSHOTS_SET_AS_LOADING_SCREEN: 'screenshots:set-as-loading-screen',
 
+  // ─── Mods ───────────────────────────────────────────────────────────────────
+
+  /** Renderer → Main (invoke): list mod JARs for an installation. */
+  MODS_LIST: 'mods:list',
+  /** Renderer → Main (invoke): browse StarMade Dock StarLoader mods. */
+  MODS_SMD_LIST: 'mods:smd-list',
+  /** Renderer → Main (invoke): install/update latest SMD mod by resource id. */
+  MODS_SMD_INSTALL_OR_UPDATE: 'mods:smd-install-or-update',
+  /** Renderer → Main (invoke): check installed SMD mods for newer versions. */
+  MODS_SMD_CHECK_UPDATES: 'mods:smd-check-updates',
+  /** Renderer → Main (invoke): remove a mod JAR from an installation. */
+  MODS_REMOVE: 'mods:remove',
+  /** Renderer → Main (invoke): enable/disable a mod by moving between folders. */
+  MODS_SET_ENABLED: 'mods:set-enabled',
+  /** Renderer → Main (invoke): export link-only modpack manifest JSON. */
+  MODS_EXPORT_MODPACK: 'mods:export-modpack',
+  /** Renderer → Main (invoke): import modpack manifest and download listed mods. */
+  MODS_IMPORT_MODPACK: 'mods:import-modpack',
+
   // ─── Legacy installation detection ──────────────────────────────────────────
 
   /** Renderer → Main (invoke): scan current and sub-directories for legacy StarMade installs (StarMade.jar). */

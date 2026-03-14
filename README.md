@@ -14,6 +14,7 @@ A modern, immersive launcher for [StarMade](https://www.star-made.org/) — the 
 
 - **Installation Management** — Create, edit, and delete game instances with per-instance Java settings
 - **Server Management** — Manage local StarMade server instances
+- **Mod Manager** — Browse StarMade mods and modpacks, install/update them per installation, and manage enabled/disabled `.jar` mods
 - **Account Switching** — Support for multiple accounts
 - **Version Selection** — Switch between latest release, dev builds, and archived versions
 - **Live Downloads** — Fetch and download StarMade versions directly from the official CDN
@@ -49,8 +50,26 @@ Download the latest release for your platform:
 
 ### Prerequisites
 
-- **Node.js** 20+ (LTS recommended)
+- **Node.js** 22+ (LTS recommended)
 - **npm** 10+
+
+### SMD API Key (Required for SMD mod browsing/install)
+
+The launcher reads the XenForo API key from environment variables in this order:
+
+1. `SMD_API_KEY`
+2. `SMD_XF_API_KEY`
+3. `XENFORO_API_KEY`
+
+For local development, set one of these in your shell before running Electron.
+
+A template is included at `.env.example`. You can copy it to `.env` and fill in your key.
+
+When running in Electron, the launcher will auto-load `.env.local` or `.env` (first match) if present.
+
+For GitHub Actions builds, set a repository secret named `SMD_API_KEY`.
+
+Do not commit API keys to this repository.
 
 ### Run Locally (Web Mode)
 
@@ -117,6 +136,9 @@ See **[RELEASE.md](RELEASE.md)** for the full release process.
    - ✅ Builds for Windows, macOS, and Linux
    - ✅ Creates a draft release with all artifacts
    - ✅ Generates SHA-256 checksums
+
+   Required repository secrets for release builds:
+   - `SMD_API_KEY` (XenForo API key used for SMD API access)
 
 5. Review, test, and publish the draft release
 
