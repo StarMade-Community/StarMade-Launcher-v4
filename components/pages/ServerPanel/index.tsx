@@ -160,6 +160,34 @@ interface InstallationFileEntry {
   nonEditableReason?: string;
 }
 
+// ─── Database tab types ───────────────────────────────────────────────────────
+
+type DatabaseSqlMode = 'query' | 'update' | 'insertKeys';
+type DatabaseSortKey = 'name-asc' | 'name-desc' | 'mass-asc' | 'mass-desc';
+
+interface DatabaseSqlTable {
+  columns: string[];
+  rows: string[][];
+}
+
+interface DatabaseEntityRow {
+  id: string;
+  uid: string;
+  name: string;
+  typeValue: string;
+  factionValue: string;
+  x: number;
+  y: number;
+  z: number;
+  massEstimate: number | null;
+}
+
+interface PendingDatabaseSqlRequest {
+  mode: DatabaseSqlMode;
+  awaitingRequestId: boolean;
+  requestId: number | null;
+}
+
 interface DashboardGroup {
   id: string;
   title: string;
@@ -406,6 +434,123 @@ const formatLogFileSize = (bytes: number): string => {
 const formatLogModifiedTime = (modifiedMs: number): string => {
   if (!Number.isFinite(modifiedMs) || modifiedMs <= 0) return 'Unknown';
   return new Date(modifiedMs).toLocaleString();
+};
+
+// ─── Database SQL helpers ─────────────────────────────────────────────────────
+
+/** Parse a single CSV-with-quotes-and-semicolons row produced by DatabaseIndex.resultSetToStringBuffer */
+const parseQuotedSemicolonLine = (line: string): string[] => {
+  const cells: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    const next = i + 1 < line.length ? line[i + 1] : '';
+
+    if (ch === '"') {
+      if (inQuotes && next === '"') { // escaped quote
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (ch === ';' && !inQuotes) {
+      cells.push(current);
+      current = '';
+      continue;
+    }
+
+    current += ch;
+  }
+
+  cells.push(current);
+  return cells;
+};
+
+/** Convert raw SQL output lines (from SQL#id: … rows) into a column/row table */
+const parseDatabaseSqlTable = (lines: string[]): DatabaseSqlTable => {
+  const cleaned = lines.map((l) => l.trim()).filter((l) => l.length > 0);
+  if (cleaned.length === 0) return { columns: [], rows: [] };
+
+  const columns = parseQuotedSemicolonLine(cleaned[0]).map((c) => c.trim());
+  const rows = cleaned.slice(1).map((line) => {
+    const row = parseQuotedSemicolonLine(line);
+    if (row.length >= columns.length) return row.slice(0, columns.length);
+    return [...row, ...Array.from<string>({ length: columns.length - row.length }).fill('')];
+  });
+
+  return { columns, rows };
+};
+
+const getDbColIdx = (columns: string[], ...candidates: string[]): number => {
+  const norm = columns.map((c) => c.trim().toUpperCase());
+  for (const candidate of candidates) {
+    const idx = norm.indexOf(candidate.toUpperCase());
+    if (idx !== -1) return idx;
+  }
+  return -1;
+};
+
+/** Estimate mass from the 6-element DIM array column (min/max block coords). */
+const parseDimMassEstimate = (raw: string): number | null => {
+  const nums = raw.match(/-?\d+/g);
+  if (!nums || nums.length < 6) return null;
+  const v = nums.slice(0, 6).map((n) => Number.parseInt(n, 10));
+  if (v.some((n) => !Number.isFinite(n))) return null;
+  const w = Math.max(1, (v[3] - v[0]) + 1);
+  const h = Math.max(1, (v[4] - v[1]) + 1);
+  const d = Math.max(1, (v[5] - v[2]) + 1);
+  return w * h * d;
+};
+
+const parseDatabaseEntities = (table: DatabaseSqlTable): DatabaseEntityRow[] => {
+  const idIdx  = getDbColIdx(table.columns, 'ID');
+  const uidIdx = getDbColIdx(table.columns, 'UID');
+  const nmIdx  = getDbColIdx(table.columns, 'NAME', 'REAL_NAME');
+  const tyIdx  = getDbColIdx(table.columns, 'TYPE');
+  const faIdx  = getDbColIdx(table.columns, 'FACTION');
+  const xIdx   = getDbColIdx(table.columns, 'X');
+  const yIdx   = getDbColIdx(table.columns, 'Y');
+  const zIdx   = getDbColIdx(table.columns, 'Z');
+  const dimIdx = getDbColIdx(table.columns, 'DIM');
+
+  if ([idIdx, uidIdx, nmIdx, tyIdx, faIdx, xIdx, yIdx, zIdx].some((i) => i < 0)) return [];
+
+  const result: DatabaseEntityRow[] = [];
+  for (const row of table.rows) {
+    const x = Number.parseInt(row[xIdx] ?? '', 10);
+    const y = Number.parseInt(row[yIdx] ?? '', 10);
+    const z = Number.parseInt(row[zIdx] ?? '', 10);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    result.push({
+      id: row[idIdx] ?? '',
+      uid: row[uidIdx] ?? '',
+      name: row[nmIdx] ?? '(Unnamed)',
+      typeValue: row[tyIdx] ?? 'Unknown',
+      factionValue: row[faIdx] ?? '0',
+      x, y, z,
+      massEstimate: dimIdx >= 0 ? parseDimMassEstimate(row[dimIdx] ?? '') : null,
+    });
+  }
+  return result;
+};
+
+/** The default entity-browser query — joins on SECTORS to only show non-transient (loaded) sectors */
+const DATABASE_ENTITY_LIST_SQL =
+  'SELECT e.ID, e.UID, e.NAME, e.TYPE, e.FACTION, e.X, e.Y, e.Z, e.DIM ' +
+  'FROM ENTITIES e ' +
+  'JOIN SECTORS s ON s.X = e.X AND s.Y = e.Y AND s.Z = e.Z ' +
+  'WHERE s.TRANSIENT = FALSE ' +
+  'ORDER BY e.X, e.Y, e.Z, e.NAME';
+
+const DATABASE_CMD_BY_MODE: Record<DatabaseSqlMode, string> = {
+  query:      'sql_query',
+  update:     'sql_update',
+  insertKeys: 'sql_insert_return_generated_keys',
 };
 
 /**
@@ -1785,8 +1930,27 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [groupDropTarget, setGroupDropTarget] = useState<number | null>(null);
   const [quickActionDropTarget, setQuickActionDropTarget] = useState<number | null>(null);
   const [groupResizeDraft, setGroupResizeDraft] = useState<{ groupId: string; startY: number; startHeight: number } | null>(null);
+
+  // ─── Database tab state ─────────────────────────────────────────────────────
+  const [databaseSqlInput, setDatabaseSqlInput] = useState<string>(DATABASE_ENTITY_LIST_SQL);
+  const [databaseSqlMode, setDatabaseSqlMode] = useState<DatabaseSqlMode>('query');
+  const [databaseSqlOutput, setDatabaseSqlOutput] = useState<DatabaseSqlTable>({ columns: [], rows: [] });
+  const [databaseSqlRawLines, setDatabaseSqlRawLines] = useState<string[]>([]);
+  const [databaseSqlStatus, setDatabaseSqlStatus] = useState<string>('Run a query to inspect data.');
+  const [databaseSqlError, setDatabaseSqlError] = useState<string | null>(null);
+  const [databaseIsExecuting, setDatabaseIsExecuting] = useState(false);
+  const [databaseLastRequestId, setDatabaseLastRequestId] = useState<number | null>(null);
+  const [databaseEntities, setDatabaseEntities] = useState<DatabaseEntityRow[]>([]);
+  const [databaseEntityTypeFilter, setDatabaseEntityTypeFilter] = useState<string>('all');
+  const [databaseFactionFilter, setDatabaseFactionFilter] = useState<string>('all');
+  const [databaseSortKey, setDatabaseSortKey] = useState<DatabaseSortKey>('name-asc');
+  const [databaseClipboardMsg, setDatabaseClipboardMsg] = useState<string | null>(null);
+
   const logContainerRef = useRef<HTMLDivElement>(null);
   const groupContainerRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const pendingDbRequestRef = useRef<PendingDatabaseSqlRequest | null>(null);
+  const dbLinesByRequestRef = useRef<Map<number, string[]>>(new Map());
+  const dbTimeoutRef = useRef<number | null>(null);
 
   const { navigate } = useApp();
   const {
@@ -2240,6 +2404,26 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setChatMessagesByChannel({});
     setChatInput('');
     setChatError(null);
+    // Reset database state on server change
+    setDatabaseSqlInput(DATABASE_ENTITY_LIST_SQL);
+    setDatabaseSqlMode('query');
+    setDatabaseSqlOutput({ columns: [], rows: [] });
+    setDatabaseSqlRawLines([]);
+    setDatabaseSqlStatus('Run a query to inspect data.');
+    setDatabaseSqlError(null);
+    setDatabaseIsExecuting(false);
+    setDatabaseLastRequestId(null);
+    setDatabaseEntities([]);
+    setDatabaseEntityTypeFilter('all');
+    setDatabaseFactionFilter('all');
+    setDatabaseSortKey('name-asc');
+    setDatabaseClipboardMsg(null);
+    pendingDbRequestRef.current = null;
+    dbLinesByRequestRef.current.clear();
+    if (dbTimeoutRef.current !== null) {
+      window.clearTimeout(dbTimeoutRef.current);
+      dbTimeoutRef.current = null;
+    }
   }, [effectiveServer?.id]);
 
   const readFactionConfigXmlFromInstallation = useCallback(async (): Promise<{ content: string; relativePath: string; error?: string }> => {
@@ -3045,6 +3229,67 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setRuntimeUptimeMs(undefined);
   }, [effectiveServer, hasGameApi, pendingServerAction]);
 
+  // ─── Database callbacks ─────────────────────────────────────────────────────
+
+  const clearPendingDatabaseSql = useCallback(() => {
+    if (dbTimeoutRef.current !== null) {
+      window.clearTimeout(dbTimeoutRef.current);
+      dbTimeoutRef.current = null;
+    }
+    pendingDbRequestRef.current = null;
+    setDatabaseIsExecuting(false);
+  }, []);
+
+  const executeDatabaseSql = useCallback(async (query: string, mode: DatabaseSqlMode) => {
+    const trimmed = query.trim();
+    if (!trimmed || !effectiveServer || !hasGameApi) return;
+    if (lifecycleState !== 'running') {
+      setDatabaseSqlError('Server must be running to execute SQL admin commands.');
+      return;
+    }
+
+    clearPendingDatabaseSql();
+    setDatabaseSqlError(null);
+    setDatabaseSqlStatus('Command sent — waiting for SQL output in server log…');
+    setDatabaseClipboardMsg(null);
+
+    pendingDbRequestRef.current = { mode, awaitingRequestId: true, requestId: null };
+    setDatabaseIsExecuting(true);
+
+    const command = `/${DATABASE_CMD_BY_MODE[mode]} ${quoteServerCommandArg(trimmed)}`;
+    const result = await window.launcher.game.sendServerCommand(effectiveServer.id, command);
+    if (!result.success) {
+      clearPendingDatabaseSql();
+      setDatabaseSqlError(result.error ?? 'Failed to submit SQL command.');
+      return;
+    }
+
+    dbTimeoutRef.current = window.setTimeout(() => {
+      if (!pendingDbRequestRef.current) return;
+      clearPendingDatabaseSql();
+      setDatabaseSqlError('Timed out (15 s) waiting for SQL response in server log.');
+    }, 15_000);
+  }, [clearPendingDatabaseSql, effectiveServer, hasGameApi, lifecycleState]);
+
+  const loadDatabaseEntities = useCallback(async () => {
+    setDatabaseSqlInput(DATABASE_ENTITY_LIST_SQL);
+    setDatabaseSqlMode('query');
+    await executeDatabaseSql(DATABASE_ENTITY_LIST_SQL, 'query');
+  }, [executeDatabaseSql]);
+
+  const copyToClipboard = useCallback(async (text: string, label: string) => {
+    if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+      setDatabaseClipboardMsg('Clipboard API unavailable.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setDatabaseClipboardMsg(`${label} copied.`);
+    } catch (err) {
+      setDatabaseClipboardMsg(`Copy failed: ${String(err)}`);
+    }
+  }, []);
+
   const restartServer = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) return;
 
@@ -3129,20 +3374,79 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     const cleanup = window.launcher.game.onLog((data) => {
       if (data.installationId !== effectiveServer.id) return;
 
+      // ── Player-list parsing ────────────────────────────────────────────────
       const playerNameMatch = data.message.match(/\[PL\]\s+Name:\s*(.+)$/i);
-      if (!playerNameMatch) return;
+      if (playerNameMatch) {
+        const playerName = playerNameMatch[1].trim();
+        if (playerName) {
+          const active = playersListCollectionRef.current;
+          if (active) active.names.add(playerName);
+        }
+      }
 
-      const playerName = playerNameMatch[1].trim();
-      if (!playerName) return;
+      // ── Database SQL output parsing ────────────────────────────────────────
+      const pending = pendingDbRequestRef.current;
+      if (!pending) return;
 
-      const active = playersListCollectionRef.current;
-      if (active) {
-        active.names.add(playerName);
+      // Permission error
+      if (data.message.includes('YOU DO NOT HAVE PERMISSIONS TO DO SQL QUERIES')) {
+        clearPendingDatabaseSql();
+        setDatabaseSqlError('Permission denied. Add your name to SQL_PERMISSION in server.cfg.');
+        return;
+      }
+
+      // "---------- SQL QUERY N BEGIN ----------"
+      const beginMatch = data.message.match(/SQL QUERY\s+(\d+)\s+BEGIN/i);
+      if (beginMatch) {
+        const rid = Number.parseInt(beginMatch[1], 10);
+        dbLinesByRequestRef.current.set(rid, []);
+        if (pending.awaitingRequestId) {
+          pending.awaitingRequestId = false;
+          pending.requestId = rid;
+          setDatabaseLastRequestId(rid);
+        }
+        return;
+      }
+
+      // "SQL#N: <csv-row>"
+      const rowMatch = data.message.match(/^SQL#(\d+):\s*(.*)$/);
+      if (rowMatch) {
+        const rid = Number.parseInt(rowMatch[1], 10);
+        const lines = dbLinesByRequestRef.current.get(rid) ?? [];
+        lines.push(rowMatch[2]);
+        dbLinesByRequestRef.current.set(rid, lines);
+        return;
+      }
+
+      // "---------- SQL QUERY N END ----------"
+      const endMatch = data.message.match(/SQL QUERY\s+(\d+)\s+END/i);
+      if (endMatch) {
+        const rid = Number.parseInt(endMatch[1], 10);
+        const lines = dbLinesByRequestRef.current.get(rid) ?? [];
+        dbLinesByRequestRef.current.delete(rid);
+        if (pending.requestId !== rid) return;
+
+        const savedMode = pending.mode;
+        clearPendingDatabaseSql();
+
+        setDatabaseSqlRawLines(lines);
+        const table = parseDatabaseSqlTable(lines);
+        setDatabaseSqlOutput(table);
+
+        if (savedMode === 'query') {
+          const entities = parseDatabaseEntities(table);
+          setDatabaseEntities(entities);
+          setDatabaseSqlStatus(`Query completed — ${table.rows.length} row${table.rows.length === 1 ? '' : 's'} returned.`);
+        } else if (savedMode === 'update') {
+          setDatabaseSqlStatus('Update completed. SQL_UPDATE does not return row data.');
+        } else {
+          setDatabaseSqlStatus(`Insert completed — ${table.rows.length} generated key row${table.rows.length === 1 ? '' : 's'} returned.`);
+        }
       }
     });
 
     return cleanup;
-  }, [effectiveServer]);
+  }, [clearPendingDatabaseSql, effectiveServer]);
 
   useEffect(() => {
     if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') {
@@ -3170,6 +3474,20 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     };
   }, [effectiveServer?.id, hasGameApi, lifecycleState, refreshPlayers]);
 
+  // Auto-load entity list when switching to the database tab (only if no data yet)
+  useEffect(() => {
+    if (activeTab !== 'database') return;
+    if (databaseEntities.length > 0 || databaseIsExecuting) return;
+    void loadDatabaseEntities();
+  }, [activeTab, databaseEntities.length, databaseIsExecuting, loadDatabaseEntities]);
+
+  // Cleanup pending DB request timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (dbTimeoutRef.current !== null) window.clearTimeout(dbTimeoutRef.current);
+    };
+  }, []);
+
   const filteredLogs = logs.filter((log) => {
     if (activeLogFilters.length === 0) return false;
 
@@ -3196,6 +3514,47 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     : false;
 
   const areAllLogFiltersEnabled = activeLogFilters.length === LOG_FILTER_OPTIONS.length;
+
+  // ─── Database derived state ─────────────────────────────────────────────────
+  const databaseEntityTypeOptions = useMemo(
+    () => Array.from(new Set(databaseEntities.map((e) => e.typeValue))).sort((a, b) => a.localeCompare(b)),
+    [databaseEntities],
+  );
+
+  const databaseFactionOptions = useMemo(
+    () => Array.from(new Set(databaseEntities.map((e) => e.factionValue))).sort((a, b) => a.localeCompare(b)),
+    [databaseEntities],
+  );
+
+  const filteredSortedDatabaseEntities = useMemo(() => {
+    const filtered = databaseEntities.filter((e) => {
+      if (databaseEntityTypeFilter !== 'all' && e.typeValue !== databaseEntityTypeFilter) return false;
+      if (databaseFactionFilter !== 'all' && e.factionValue !== databaseFactionFilter) return false;
+      return true;
+    });
+
+    filtered.sort((a, b) => {
+      if (databaseSortKey === 'name-asc') return a.name.localeCompare(b.name);
+      if (databaseSortKey === 'name-desc') return b.name.localeCompare(a.name);
+      const am = a.massEstimate ?? -1;
+      const bm = b.massEstimate ?? -1;
+      if (databaseSortKey === 'mass-asc') return am !== bm ? am - bm : a.name.localeCompare(b.name);
+      return am !== bm ? bm - am : a.name.localeCompare(b.name);
+    });
+
+    return filtered;
+  }, [databaseEntities, databaseEntityTypeFilter, databaseFactionFilter, databaseSortKey]);
+
+  const databaseSectorGroups = useMemo(() => {
+    const bySector = new Map<string, DatabaseEntityRow[]>();
+    for (const entity of filteredSortedDatabaseEntities) {
+      const key = `${entity.x}, ${entity.y}, ${entity.z}`;
+      const arr = bySector.get(key);
+      if (arr) arr.push(entity);
+      else bySector.set(key, [entity]);
+    }
+    return Array.from(bySector.entries()).map(([sector, entities]) => ({ sector, entities }));
+  }, [filteredSortedDatabaseEntities]);
 
   const toggleLogFilter = useCallback((filter: LogFilter) => {
     setActiveLogFilters((prev) => {
@@ -5751,6 +6110,248 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     </div>
   );
 
+  const renderDatabaseTab = () => (
+    <div className="grid h-full min-h-0 grid-cols-1 gap-3 xl:grid-cols-[420px_1fr]">
+
+      {/* ── Left pane: SQL Console ── */}
+      <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
+        <div className="border-b border-white/10 px-3 py-2">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">SQL Console</h3>
+          <p className="text-xs text-gray-500">
+            Executes admin commands <code className="text-gray-400">/sql_query</code>,{' '}
+            <code className="text-gray-400">/sql_update</code>, and{' '}
+            <code className="text-gray-400">/sql_insert_return_generated_keys</code>.
+            Requires your name in <code className="text-gray-400">SQL_PERMISSION</code> in server.cfg.
+          </p>
+        </div>
+
+        <div className="space-y-3 overflow-y-auto p-3">
+          {/* Mode selector + buttons */}
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={databaseSqlMode}
+              onChange={(e) => setDatabaseSqlMode(e.target.value as DatabaseSqlMode)}
+              className="rounded border border-white/15 bg-black/30 px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-starmade-accent"
+            >
+              <option value="query">Query (SELECT)</option>
+              <option value="update">Update (UPDATE / DELETE)</option>
+              <option value="insertKeys">Insert + return generated keys</option>
+            </select>
+            <button
+              onClick={() => { void executeDatabaseSql(databaseSqlInput, databaseSqlMode); }}
+              disabled={databaseIsExecuting || lifecycleState !== 'running'}
+              className="rounded bg-starmade-accent px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-white hover:bg-starmade-accent/80 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {databaseIsExecuting ? 'Running…' : 'Execute'}
+            </button>
+            <button
+              onClick={() => { void loadDatabaseEntities(); }}
+              disabled={databaseIsExecuting || lifecycleState !== 'running'}
+              className="rounded border border-white/15 bg-black/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Reload Entities
+            </button>
+          </div>
+
+          {/* Query input */}
+          <textarea
+            value={databaseSqlInput}
+            onChange={(e) => setDatabaseSqlInput(e.target.value)}
+            spellCheck={false}
+            rows={10}
+            className="w-full resize-y rounded-md border border-white/15 bg-black/40 p-3 font-mono text-xs leading-5 text-gray-200 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+          />
+
+          {/* Status area */}
+          <div className="space-y-1 rounded-md border border-white/10 bg-black/20 px-3 py-2 text-xs">
+            <p className="text-gray-400">{databaseSqlStatus}</p>
+            {databaseLastRequestId !== null && (
+              <p className="text-gray-500">Last request id: <span className="font-mono">#{databaseLastRequestId}</span></p>
+            )}
+            {databaseSqlError && <p className="text-red-300">{databaseSqlError}</p>}
+            {databaseClipboardMsg && <p className="text-cyan-300">{databaseClipboardMsg}</p>}
+            {lifecycleState !== 'running' && (
+              <p className="text-amber-300">⚠ Server must be running to execute SQL commands.</p>
+            )}
+          </div>
+
+          {/* Last result table */}
+          {databaseSqlOutput.columns.length > 0 && (
+            <div>
+              <h4 className="mb-1 text-xs font-semibold uppercase tracking-wider text-gray-400">Last SQL Result</h4>
+              <div className="overflow-x-auto rounded border border-white/10 bg-black/20">
+                <table className="min-w-full border-collapse text-left text-xs">
+                  <thead>
+                    <tr>
+                      {databaseSqlOutput.columns.map((col) => (
+                        <th key={col} className="border-b border-white/10 px-2 py-1.5 font-semibold uppercase tracking-wider text-gray-300 whitespace-nowrap">{col}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {databaseSqlOutput.rows.slice(0, 100).map((row, ri) => (
+                      <tr key={`row-${ri}`} className="border-b border-white/5 hover:bg-white/5">
+                        {row.map((cell, ci) => (
+                          <td key={`cell-${ri}-${ci}`} className="px-2 py-1 text-gray-200 max-w-[200px] truncate" title={cell}>{cell}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {databaseSqlOutput.rows.length > 100 && (
+                <p className="mt-1 text-[11px] text-gray-500">Showing first 100 of {databaseSqlOutput.rows.length} rows.</p>
+              )}
+            </div>
+          )}
+
+          {/* Raw lines toggle */}
+          {databaseSqlRawLines.length > 0 && (
+            <details className="text-xs">
+              <summary className="cursor-pointer text-gray-400 hover:text-gray-200">
+                Raw SQL output ({databaseSqlRawLines.length} lines)
+              </summary>
+              <pre className="mt-1 max-h-48 overflow-auto rounded border border-white/10 bg-black/30 p-2 font-mono text-[11px] text-gray-300">
+                {databaseSqlRawLines.join('\n')}
+              </pre>
+            </details>
+          )}
+        </div>
+      </div>
+
+      {/* ── Right pane: Entity Browser ── */}
+      <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
+        <div className="border-b border-white/10 px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">Entities by Loaded Sector</h3>
+            <span className="rounded border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wider text-gray-400">
+              {filteredSortedDatabaseEntities.length} visible
+            </span>
+          </div>
+          <p className="text-xs text-gray-500">
+            Grouped by sector coords. Only sectors with <code className="text-gray-400">TRANSIENT = FALSE</code> are shown.
+            Mass is estimated from entity DIM column (block bounding box volume).
+          </p>
+        </div>
+
+        {/* Filters + sort */}
+        <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-3 py-2">
+          <select
+            value={databaseEntityTypeFilter}
+            onChange={(e) => setDatabaseEntityTypeFilter(e.target.value)}
+            className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-starmade-accent"
+          >
+            <option value="all">All types</option>
+            {databaseEntityTypeOptions.map((t) => (
+              <option key={t} value={t}>Type {t}</option>
+            ))}
+          </select>
+          <select
+            value={databaseFactionFilter}
+            onChange={(e) => setDatabaseFactionFilter(e.target.value)}
+            className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-starmade-accent"
+          >
+            <option value="all">All factions</option>
+            {databaseFactionOptions.map((f) => (
+              <option key={f} value={f}>Faction {f}</option>
+            ))}
+          </select>
+          <select
+            value={databaseSortKey}
+            onChange={(e) => setDatabaseSortKey(e.target.value as DatabaseSortKey)}
+            className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-starmade-accent"
+          >
+            <option value="name-asc">Sort: Name A→Z</option>
+            <option value="name-desc">Sort: Name Z→A</option>
+            <option value="mass-desc">Sort: Mass High→Low</option>
+            <option value="mass-asc">Sort: Mass Low→High</option>
+          </select>
+        </div>
+
+        {/* Entity list */}
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+          {databaseIsExecuting && databaseEntities.length === 0 ? (
+            <p className="text-sm text-gray-400">Loading entities…</p>
+          ) : databaseSectorGroups.length === 0 ? (
+            <div className="rounded border border-dashed border-white/15 bg-black/20 p-4 text-center text-sm text-gray-400">
+              {databaseEntities.length === 0
+                ? 'No entities loaded. Click "Reload Entities" while the server is running.'
+                : 'No entities match the current filters.'}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {databaseSectorGroups.map((group) => (
+                <div key={group.sector} className="rounded border border-white/10 bg-black/20">
+                  <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+                    <h4 className="font-mono text-xs font-semibold text-gray-200">
+                      Sector <span className="text-starmade-accent/80">{group.sector}</span>
+                    </h4>
+                    <span className="text-[11px] text-gray-500">{group.entities.length} {group.entities.length === 1 ? 'entity' : 'entities'}</span>
+                  </div>
+
+                  <div className="divide-y divide-white/5">
+                    {group.entities.map((entity) => (
+                      <div
+                        key={`${group.sector}|${entity.id}|${entity.uid}`}
+                        className="grid grid-cols-1 gap-2 px-3 py-2 md:grid-cols-[1fr_auto] md:items-start"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-gray-100" title={entity.name}>
+                            {entity.name || '(Unnamed entity)'}
+                          </p>
+                          <p className="mt-0.5 font-mono text-[11px] text-gray-400">
+                            ID&nbsp;<span className="text-gray-300">{entity.id}</span>
+                            &ensp;|&ensp;Type&nbsp;<span className="text-gray-300">{entity.typeValue}</span>
+                            &ensp;|&ensp;Faction&nbsp;<span className="text-gray-300">{entity.factionValue}</span>
+                            &ensp;|&ensp;Mass&nbsp;<span className="text-gray-300">{entity.massEstimate != null ? entity.massEstimate.toLocaleString() : 'n/a'}</span>
+                          </p>
+                          <p className="mt-0.5 font-mono text-[11px] text-gray-500 truncate" title={entity.uid}>
+                            UID: {entity.uid}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            onClick={() => {
+                              const q = `SELECT * FROM ENTITIES WHERE ID = ${entity.id};`;
+                              setDatabaseSqlInput(q);
+                              setDatabaseSqlMode('query');
+                              void executeDatabaseSql(q, 'query');
+                            }}
+                            disabled={databaseIsExecuting || lifecycleState !== 'running'}
+                            className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            Inspect
+                          </button>
+                          <button
+                            onClick={() => {
+                              const q = `DELETE FROM ENTITIES WHERE ID = ${entity.id};`;
+                              setDatabaseSqlMode('update');
+                              setDatabaseSqlInput(q);
+                              setDatabaseSqlStatus('Delete query drafted — review and click Execute to run.');
+                            }}
+                            className="rounded border border-red-400/30 bg-red-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-red-200 hover:bg-red-500/20"
+                          >
+                            Draft Delete
+                          </button>
+                          <button
+                            onClick={() => { void copyToClipboard(entity.uid, 'UID'); }}
+                            className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45"
+                          >
+                            Copy UID
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
   const renderActiveTab = () => {
     if (activeTab === 'control') return renderControlPanel();
     if (activeTab === 'actions') return renderActionsPanel();
@@ -5758,6 +6359,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     if (activeTab === 'chat') return renderChat();
     if (activeTab === 'configuration') return renderConfiguration();
     if (activeTab === 'files') return renderFilesTab();
+    if (activeTab === 'database') return renderDatabaseTab();
     return renderPlaceholderTab(
       'Database',
       'Database tools placeholder. This area is reserved for universe/player data operations later.'
