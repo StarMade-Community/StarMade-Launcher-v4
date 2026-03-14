@@ -89,7 +89,7 @@ interface DraggedQuickAction {
   actionId: ServerActionId;
 }
 
-const LOG_BUFFER_CAP = 1200;
+const LOG_BUFFER_CAP = 30000;
 const DASHBOARD_STORE_KEY = 'serverPanelDashboardLayoutsV2';
 const MIN_GROUP_HEIGHT = 260;
 const MAX_GROUP_HEIGHT = 1200;
@@ -3376,7 +3376,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const renderServerInfoWidget = () => (
     <div className="space-y-3">
       <label className="flex items-center gap-3 text-sm">
-        <span className="w-36 text-gray-300">Launcher Name:</span>
+        <span className="w-36 text-gray-300">Server Name:</span>
         <input
           value={serverNameInput}
           onChange={(event) => setServerNameInput(event.target.value)}
@@ -4101,7 +4101,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           </div>
 
           {logCategories.length === 0 ? (
-            <p className="text-sm text-gray-400">{isLogListLoading ? 'Scanning logs folder...' : 'No log files found in logs/.'}</p>
+            <p className="text-sm text-gray-400">{isLogListLoading ? 'Scanning logs folder...' : 'No log files found in logs'}</p>
           ) : (
             <>
               <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -4276,194 +4276,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     const hasUnsavedChanges = Object.keys(gameConfigValues).some(
       (path) => gameConfigValues[path] !== (gameConfigSavedValues[path] ?? ''),
     );
-    const needle = gameConfigSearchTerm.trim().toLowerCase();
-    const enabledTogglePaths = new Set(
-      gameConfigCommentToggleEntries
-        .filter((entry) => gameConfigCommentToggleStates[entry.id])
-        .map((entry) => entry.path),
-    );
-
-    const filteredGameConfigListSections = gameConfigListSections
-      .filter((section) => {
-        for (const enabledPath of enabledTogglePaths) {
-          if (section.key.startsWith(enabledPath)) return false;
-        }
-        if (gameConfigCategoryFilter.size > 0 && !gameConfigCategoryFilter.has(section.category)) return false;
-        if (!needle) return true;
-        if (section.key.toLowerCase().includes(needle) || section.label.toLowerCase().includes(needle)) return true;
-        return section.columns.some((column) => column.label.toLowerCase().includes(needle) || column.key.toLowerCase().includes(needle));
-      })
-      .map((section) => {
-        if (!needle) return section;
-        const rows = section.rows.filter((row) => section.columns.some((column) => {
-          const path = row.fieldPaths[column.key];
-          const value = (gameConfigValues[path] ?? gameConfigSavedValues[path] ?? '').toLowerCase();
-          return value.includes(needle) || path.toLowerCase().includes(needle);
-        }));
-        return { ...section, rows };
-      })
-      .filter((section) => section.rows.length > 0);
-
-    const visibleCommentToggleEntries = gameConfigCommentToggleEntries.filter((entry) => {
-      if (gameConfigCategoryFilter.size > 0 && !gameConfigCategoryFilter.has(entry.category)) return false;
-      if (!needle) return true;
-      return (
-        entry.label.toLowerCase().includes(needle)
-        || entry.description.toLowerCase().includes(needle)
-        || entry.path.toLowerCase().includes(needle)
-      );
-    });
-
-    const bodyExtras = (
-      <section className="space-y-3">
-        <div className="rounded-md border border-white/10 bg-black/20 p-3">
-          <p className="text-sm font-semibold text-white">Optional Commented Entries</p>
-          <p className="mt-1 text-xs text-gray-400">
-            Toggle these to comment/uncomment optional top-level blocks in GameConfig.xml.
-          </p>
-
-          {visibleCommentToggleEntries.length === 0 ? (
-            <p className="mt-3 text-sm text-gray-400">No optional entries match the current search/filter.</p>
-          ) : (
-            <div className="mt-3 space-y-2">
-              {visibleCommentToggleEntries.map((entry) => {
-                const checked = gameConfigCommentToggleStates[entry.id] ?? false;
-                const isSaving = savingGameConfigToggleId === entry.id;
-                return (
-                  <label key={entry.id} className="flex items-start gap-2 rounded border border-white/10 bg-black/20 px-3 py-2 text-sm text-gray-300">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={(event) => {
-                        void setGameConfigCommentToggle(entry, event.target.checked);
-                      }}
-                      disabled={!!savingGameConfigPath || !!savingGameConfigToggleId}
-                      className="mt-0.5 h-4 w-4 rounded"
-                    />
-                    <span className="flex-1">
-                      <span className="font-semibold text-white">{entry.label}</span>
-                      <span className="mt-0.5 block text-xs text-gray-400">{entry.description}</span>
-                      <span className="mt-1 block font-mono text-[11px] text-gray-500">{entry.path}</span>
-                    </span>
-                    {isSaving && <span className="text-xs uppercase tracking-wider text-gray-500">Saving...</span>}
-                  </label>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {filteredGameConfigListSections.length > 0 && (
-          <div className="space-y-4">
-            {filteredGameConfigListSections.map((section) => (
-              <div key={section.key} className="rounded-md border border-white/10 bg-black/20 p-3">
-                <div className="mb-2">
-                  <p className="text-sm font-semibold text-white">{section.label}</p>
-                  <p className="text-xs text-gray-400">{section.description}</p>
-                  <p className="mt-1 text-[11px] font-mono text-gray-500">{section.key}</p>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="min-w-full border-collapse text-sm">
-                    <thead>
-                      <tr>
-                        <th className="border-b border-white/10 px-2 py-2 text-left text-xs uppercase tracking-wider text-gray-400">#</th>
-                        {section.columns.map((column) => (
-                          <th key={`${section.key}-${column.key}`} className="border-b border-white/10 px-2 py-2 text-left text-xs uppercase tracking-wider text-gray-400">
-                            {column.label}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {section.rows.map((row) => (
-                        <tr key={`${section.key}-row-${row.index}`}>
-                          <td className="border-b border-white/5 px-2 py-2 align-top text-xs text-gray-500">{row.index}</td>
-                          {section.columns.map((column) => {
-                            const fieldPath = row.fieldPaths[column.key];
-                            const rawValue = gameConfigValues[fieldPath] ?? '';
-                            const explicitMeta = getGameConfigMetaForPath(gameConfigFieldMetaByPath, fieldPath);
-                            const pseudoField: GameConfigField = {
-                              path: fieldPath,
-                              label: explicitMeta?.label ?? `${section.label} ${column.label}`,
-                              description: explicitMeta?.description ?? `${section.key} row ${row.index}`,
-                              category: explicitMeta?.category ?? section.category,
-                              type: explicitMeta?.type ?? column.type,
-                              defaultValue: gameConfigSavedValues[fieldPath] ?? rawValue,
-                              min: explicitMeta?.min,
-                              max: explicitMeta?.max,
-                              guidance: explicitMeta?.guidance,
-                              validation: explicitMeta?.validation,
-                            };
-                            const validation = getGameConfigFieldValidation(pseudoField, rawValue);
-                            const isSavingThisField = savingGameConfigPath === fieldPath;
-
-                            return (
-                              <td key={fieldPath} className="border-b border-white/5 px-2 py-2 align-top">
-                                <div className="flex min-w-[180px] items-center gap-2">
-                                  {column.type === 'boolean' ? (
-                                    <label className="inline-flex items-center gap-2 text-xs text-gray-300">
-                                      <input
-                                        type="checkbox"
-                                        checked={parseCfgBoolean(rawValue, false)}
-                                        onChange={(event) => {
-                                          const next = String(event.target.checked);
-                                          setGameConfigValues((prev) => ({ ...prev, [fieldPath]: next }));
-                                          void saveGameConfigField(pseudoField, next);
-                                        }}
-                                        disabled={!!savingGameConfigPath || !!validation.error}
-                                        className="h-4 w-4 rounded"
-                                      />
-                                      Enabled
-                                    </label>
-                                  ) : (
-                                    <>
-                                      <input
-                                        type={column.type === 'number' ? 'number' : 'text'}
-                                        value={rawValue}
-                                        onChange={(event) => {
-                                          const next = event.target.value;
-                                          setGameConfigValues((prev) => ({ ...prev, [fieldPath]: next }));
-                                        }}
-                                        onBlur={() => { void saveGameConfigField(pseudoField); }}
-                                        onKeyDown={(event) => {
-                                          if (event.key === 'Enter') {
-                                            event.preventDefault();
-                                            void saveGameConfigField(pseudoField);
-                                          }
-                                        }}
-                                        disabled={!!savingGameConfigPath}
-                                        className="w-full rounded-md border border-white/15 bg-black/30 px-2 py-1.5 text-xs text-gray-200"
-                                      />
-                                      <button
-                                        onClick={() => { void saveGameConfigField(pseudoField); }}
-                                        disabled={!!savingGameConfigPath || !!validation.error}
-                                        className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
-                                      >
-                                        {isSavingThisField ? 'Saving...' : 'Save'}
-                                      </button>
-                                    </>
-                                  )}
-                                </div>
-                                {(validation.error || validation.warning) && (
-                                  <p className={`mt-1 text-[10px] ${validation.error ? 'text-red-300' : 'text-amber-300'}`}>
-                                    {validation.error ?? validation.warning}
-                                  </p>
-                                )}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-    );
 
     const model: ConfigPanelModel = {
       title: 'GameConfig.xml',
@@ -4505,8 +4317,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       },
       reloadLabel: 'Reload',
       onReload: reloadGameConfigXml,
-      reloadDisabled: !effectiveServer || !hasGameApi || isGameConfigLoading || !!savingGameConfigPath || !!savingGameConfigToggleId,
-      bodyExtras,
+      reloadDisabled: !effectiveServer || !hasGameApi || isGameConfigLoading || !!savingGameConfigPath || !!savingGameConfigToggleId
     };
 
     return <ConfigPanel model={model} />;

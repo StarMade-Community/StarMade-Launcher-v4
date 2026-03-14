@@ -730,7 +730,6 @@ const LauncherSettings: React.FC = () => {
                         </SettingRow>
                     </div>
                 </div>
-
                 <div className="mt-8">
                     <h2 className="font-display text-xl font-bold uppercase tracking-wider text-white mb-1 pb-2 border-b-2 border-white/10">
                         Legacy Installations
