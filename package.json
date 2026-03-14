@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "adm-zip": "^0.5.16",
+    "image-size": "^2.0.2",
     "lucide-react": "^0.577.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
@@ -99,7 +100,10 @@
       "icon": "build/icon.png"
     },
     "extraResources": [
-      { "from": "build/icon.png", "to": "icon.png" }
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
     ],
     "portable": {
       "requestExecutionLevel": "user"

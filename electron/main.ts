@@ -1688,7 +1688,7 @@ function listPngScreenshots(installationPath: string): {
     .map(fileName => {
       const absolutePath = path.join(screenshotsDir, fileName);
       const stats = fs.statSync(absolutePath);
-      const dimensions = sizeOf(absolutePath);
+      const dimensions = sizeOf(fs.readFileSync(absolutePath));
       const width = dimensions.width ?? 0;
       const height = dimensions.height ?? 0;
 
