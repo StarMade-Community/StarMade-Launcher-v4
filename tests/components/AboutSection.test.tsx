@@ -70,8 +70,8 @@ describe('AboutSection', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Third-Party Licenses' }));
 
-    expect(await screen.findByText('Third-Party Licenses')).toBeInTheDocument();
-    expect(await screen.findByText('LWJGL License.txt')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Third-Party Licenses' })).toBeInTheDocument();
+    expect(await screen.findAllByText('LWJGL License.txt')).toHaveLength(2);
     expect(await screen.findByText('Test license content')).toBeInTheDocument();
   });
 });
