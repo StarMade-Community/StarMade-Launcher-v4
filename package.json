@@ -1,7 +1,7 @@
 {
   "name": "starmade-launcher",
   "private": true,
-  "version": "4.1.0",
+  "version": "4.0.17",
   "description": "StarMade Launcher",
   "author": "StarMade Community",
   "type": "module",

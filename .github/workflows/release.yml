@@ -3,11 +3,6 @@ name: Build and Release
 on:
   # Allow manual triggering from the Actions tab
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version Number'
-        required: true
-        default: '4.0.0'
 
 # Required for creating releases
 permissions:
@@ -39,9 +34,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Set version
-        run: node -e "try{const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${{ github.event.inputs.version }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');}catch(e){console.error(e);process.exit(1);}"
 
       - name: Build Electron app
         run: npm run electron:build
@@ -77,9 +69,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Set version
-        run: node -e "try{const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${{ github.event.inputs.version }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');}catch(e){console.error(e);process.exit(1);}"
 
       - name: Build Electron app
         run: npm run electron:build
@@ -120,9 +109,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Set version
-        run: node -e "try{const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${{ github.event.inputs.version }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');}catch(e){console.error(e);process.exit(1);}"
 
       - name: Build Electron app
         run: npm run electron:build
@@ -166,18 +152,29 @@ jobs:
           name: linux-builds
           path: artifacts/linux
 
-      # Extract version from tag or workflow input
+      # Extract version from package.json
       - name: Set version
         id: version
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-            echo "TAG=v${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-          else
-            VERSION="${GITHUB_REF#refs/tags/v}"
-            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-            echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          fi
+          node <<'NODE'
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const version = String(pkg.version || '').trim();
+          if (!version) {
+            console.error('package.json version is missing');
+            process.exit(1);
+          }
+
+          // SemVer: MAJOR.MINOR.PATCH with optional -prerelease and +build metadata.
+          const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+          if (!semverPattern.test(version)) {
+            console.error(`Invalid package.json version: "${version}". Expected SemVer (e.g. 4.1.0 or 4.1.0-beta.1).`);
+            process.exit(1);
+          }
+
+          const tag = `v${version}`;
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `VERSION=${version}\nTAG=${tag}\n`);
+          NODE
 
       # Read changelog from CHANGELOG.md or generate release notes
       - name: Generate release notes

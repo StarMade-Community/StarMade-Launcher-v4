@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react';
+ import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import PageContainer from '../../common/PageContainer';
 import ConfigPanel, { type ConfigPanelModel } from '../../common/ConfigPanel';
 import { useData } from '../../../contexts/DataContext';
@@ -4560,7 +4560,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               {isPlayersBroadcasting && (
                 <span
                   aria-hidden="true"
-                  className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent"
+                  className="h-2.5 w-2.5 animate-pulse rounded-full bg-current"
                 />
               )}
               <span>{isPlayersBroadcasting ? 'Sending...' : 'Message All'}</span>
@@ -4575,7 +4575,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               {isPlayersRefreshing && (
                 <span
                   aria-hidden="true"
-                  className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent"
+                  className="h-2.5 w-2.5 animate-pulse rounded-full bg-current"
                 />
               )}
               <span>{isPlayersRefreshing ? 'Refreshing...' : 'Refresh'}</span>
@@ -4772,7 +4772,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   {action.isLoading && (
                     <span
                       aria-hidden="true"
-                      className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+                      className="h-2.5 w-2.5 animate-pulse rounded-full bg-current"
                     />
                   )}
                   <span>{action.buttonLabel ?? action.label}</span>

@@ -1,28 +1,36 @@
 import { describe, expect, it } from 'vitest'
+import path from 'path'
 import { getManagedPathCandidates } from '../../electron/install-paths.js'
+
+const LAUNCHER_DIR = path.resolve('launcher-root')
+const WORKSPACE_DIR = path.resolve('workspace-root')
 
 describe('getManagedPathCandidates', () => {
   it('returns the absolute path unchanged', () => {
-    expect(getManagedPathCandidates('/games/StarMade/Test', '/launcher', '/workspace')).toEqual([
-      '/games/StarMade/Test',
+    const absoluteTarget = path.resolve('games', 'StarMade', 'Test')
+    expect(getManagedPathCandidates(absoluteTarget, LAUNCHER_DIR, WORKSPACE_DIR)).toEqual([
+      path.normalize(absoluteTarget),
     ])
   })
 
   it('resolves relative paths against launcherDir first and also includes cwd fallback', () => {
-    expect(getManagedPathCandidates('./StarMade/Installations/Test', '/opt/starmade-launcher', '/home/garret')).toEqual([
-      '/opt/starmade-launcher/StarMade/Installations/Test',
-      '/home/garret/StarMade/Installations/Test',
+    const relativeTarget = path.join('StarMade', 'Installations', 'Test')
+    expect(getManagedPathCandidates(relativeTarget, LAUNCHER_DIR, WORKSPACE_DIR)).toEqual([
+      path.resolve(LAUNCHER_DIR, relativeTarget),
+      path.resolve(WORKSPACE_DIR, relativeTarget),
     ])
   })
 
   it('deduplicates identical launcherDir and cwd resolutions', () => {
-    expect(getManagedPathCandidates('./StarMade/Servers/Test', '/home/garret', '/home/garret')).toEqual([
-      '/home/garret/StarMade/Servers/Test',
+    const sharedBase = path.resolve('shared-root')
+    const relativeTarget = path.join('StarMade', 'Servers', 'Test')
+    expect(getManagedPathCandidates(relativeTarget, sharedBase, sharedBase)).toEqual([
+      path.resolve(sharedBase, relativeTarget),
     ])
   })
 
   it('returns an empty array for blank paths', () => {
-    expect(getManagedPathCandidates('   ', '/launcher', '/workspace')).toEqual([])
+    expect(getManagedPathCandidates('   ', LAUNCHER_DIR, WORKSPACE_DIR)).toEqual([])
   })
 })
 

@@ -142,10 +142,7 @@ const RestoreBackupModal: React.FC<RestoreBackupModalProps> = ({
                     <div className="mt-6">
                         {loading ? (
                             <div className="flex items-center justify-center gap-2 text-gray-400 py-6">
-                                <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                                </svg>
+                                <span aria-hidden="true" className="h-2.5 w-2.5 animate-pulse rounded-full bg-current" />
                                 <span className="text-sm">Loading backups…</span>
                             </div>
                         ) : backups.length === 0 ? (
@@ -233,10 +230,7 @@ const RestoreBackupModal: React.FC<RestoreBackupModalProps> = ({
                 {phase === 'restoring' && (
                     <div className="mt-6 bg-starmade-accent/10 border border-starmade-accent/30 rounded-lg p-4 text-center">
                         <div className="flex items-center justify-center gap-2 text-starmade-accent">
-                            <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                            </svg>
+                            <span aria-hidden="true" className="h-2.5 w-2.5 animate-pulse rounded-full bg-current" />
                             <span className="text-sm font-semibold">Restoring…</span>
                         </div>
                         <p className="text-xs text-gray-400 mt-1">
