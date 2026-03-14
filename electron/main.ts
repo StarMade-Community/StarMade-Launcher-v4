@@ -6,9 +6,11 @@ import {
   Menu,
   shell,
   dialog,
+  clipboard,
+  nativeImage,
 } from 'electron';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import fs from 'fs';
 import os from 'os';
 import { Worker } from 'worker_threads';
@@ -1036,6 +1038,108 @@ ipcMain.handle(IPC.APP_GET_USER_DATA, () => app.getPath('userData'));
 ipcMain.handle(IPC.APP_GET_SYSTEM_MEMORY, () => Math.floor(os.totalmem() / (1024 * 1024)));
 ipcMain.handle(IPC.APP_GET_SERVER_PANEL_SCHEMA, () => readServerPanelSchema());
 
+const LICENSES_DIR_NAMES = ['licenses'];
+
+function resolveBundledLicensesDir(): string | null {
+  for (const dirName of LICENSES_DIR_NAMES) {
+    const candidate = path.join(__dirname, '..', 'presets', dirName);
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function listBundledLicenseFiles(): Array<{ fileName: string; sizeBytes: number; modifiedMs: number }> {
+  const sourceDir = resolveBundledLicensesDir();
+  if (!sourceDir) return [];
+
+  return fs.readdirSync(sourceDir)
+    .map((fileName) => {
+      const absolutePath = path.join(sourceDir, fileName);
+      if (!fs.existsSync(absolutePath)) return null;
+      const stat = fs.statSync(absolutePath);
+      if (!stat.isFile()) return null;
+      return {
+        fileName,
+        sizeBytes: stat.size,
+        modifiedMs: stat.mtimeMs,
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .sort((a, b) => a.fileName.localeCompare(b.fileName));
+}
+
+function resolveBundledLicensePath(fileName: string): string {
+  if (typeof fileName !== 'string' || fileName.trim().length === 0) {
+    throw new Error('File name is required.');
+  }
+  if (fileName.includes('/') || fileName.includes('\\')) {
+    throw new Error('Invalid file name.');
+  }
+
+  const sourceDir = resolveBundledLicensesDir();
+  if (!sourceDir) {
+    throw new Error('Bundled licenses directory was not found.');
+  }
+
+  const absolutePath = path.resolve(path.join(sourceDir, fileName));
+  if (!absolutePath.startsWith(path.resolve(sourceDir) + path.sep)) {
+    throw new Error('Invalid file path.');
+  }
+
+  if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) {
+    throw new Error('License file does not exist.');
+  }
+
+  return absolutePath;
+}
+
+ipcMain.handle(IPC.LICENSES_LIST, () => {
+  try {
+    return listBundledLicenseFiles();
+  } catch (error) {
+    console.warn('[licenses] Failed to list bundled licenses:', error);
+    return [];
+  }
+});
+
+ipcMain.handle(IPC.LICENSES_READ, (_event, fileName: string) => {
+  try {
+    const licensePath = resolveBundledLicensePath(fileName);
+    const content = fs.readFileSync(licensePath, 'utf8');
+    return { content, error: undefined as string | undefined };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { content: '', error: message };
+  }
+});
+
+ipcMain.handle(IPC.LICENSES_COPY_TO_USER_DATA, () => {
+  try {
+    const sourceDir = resolveBundledLicensesDir();
+    if (!sourceDir) {
+      return { success: false, copiedCount: 0, error: 'Bundled licenses directory was not found.' };
+    }
+
+    const destinationDir = path.join(app.getPath('userData'), 'licences');
+    fs.mkdirSync(destinationDir, { recursive: true });
+
+    const files = listBundledLicenseFiles();
+    let copiedCount = 0;
+    for (const file of files) {
+      const sourcePath = path.join(sourceDir, file.fileName);
+      const destinationPath = path.join(destinationDir, file.fileName);
+      fs.copyFileSync(sourcePath, destinationPath);
+      copiedCount += 1;
+    }
+
+    return { success: true, copiedCount, destinationDir };
+  } catch (error) {
+    return { success: false, copiedCount: 0, error: String(error) };
+  }
+});
+
 // ─── Installation file management handlers ───────────────────────────────────
 
 /**
@@ -1418,15 +1522,47 @@ ipcMain.handle(IPC.SHELL_OPEN_EXTERNAL, async (_event, url: string) => {
 // ─── Backgrounds handler ─────────────────────────────────────────────────────
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
+const SCREENSHOT_EXTS = new Set(['.png']);
+const LAUNCHER_BACKGROUND_KEY = 'launcherBackgroundUrl';
 
 function listImagesInDir(dir: string): string[] {
   try {
     if (!fs.existsSync(dir)) return [];
+
+    const toFileHref = (absolutePath: string): string => pathToFileURL(absolutePath).href;
+
     return fs.readdirSync(dir)
       .filter(f => IMAGE_EXTS.has(path.extname(f).toLowerCase()))
-      .map(f => `file://${path.join(dir, f)}`);
+      .map(f => toFileHref(path.join(dir, f)));
   } catch {
     return [];
+  }
+}
+
+function normalizeStoredFileUrl(maybeUrl: string): string | null {
+  if (typeof maybeUrl !== 'string' || maybeUrl.trim().length === 0) return null;
+
+  // For plain paths accidentally persisted as a URL, normalize to file:// URL.
+  if (!maybeUrl.startsWith('file://')) {
+    return fs.existsSync(maybeUrl) ? pathToFileURL(maybeUrl).href : null;
+  }
+
+  // Legacy values may look like file://C:\path\to\image.png
+  if (maybeUrl.includes('\\')) {
+    const withoutScheme = maybeUrl.replace(/^file:\/\//i, '').replace(/\\/g, '/');
+    const normalizedPath = /^[a-zA-Z]:\//.test(withoutScheme)
+      ? withoutScheme
+      : withoutScheme.replace(/^\/+/, '/');
+    const decodedPath = decodeURIComponent(normalizedPath);
+    return pathToFileURL(decodedPath).href;
+  }
+
+  try {
+    const parsed = new URL(maybeUrl);
+    if (parsed.protocol !== 'file:') return null;
+    return parsed.href;
+  } catch {
+    return null;
   }
 }
 
@@ -1459,10 +1595,110 @@ function importImageToDir(sourcePath: string, targetDir: string): { success: boo
     }
 
     fs.copyFileSync(sourcePath, destPath);
-    return { success: true, path: `file://${destPath}` };
+    return { success: true, path: pathToFileURL(destPath).href };
   } catch (error) {
     return { success: false, error: String(error) };
   }
+}
+
+function copyImageToDir(sourcePath: string, targetDir: string, fallbackBaseName: string): { success: boolean; path?: string; error?: string } {
+  try {
+    if (typeof sourcePath !== 'string' || sourcePath.trim().length === 0) {
+      return { success: false, error: 'Invalid source path.' };
+    }
+    if (!fs.existsSync(sourcePath)) {
+      return { success: false, error: 'Selected file does not exist.' };
+    }
+
+    const ext = path.extname(sourcePath).toLowerCase();
+    if (!IMAGE_EXTS.has(ext)) {
+      return { success: false, error: 'Unsupported image format.' };
+    }
+
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    const baseNameRaw = path.basename(sourcePath, ext);
+    const baseName = baseNameRaw.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || fallbackBaseName;
+
+    let counter = 0;
+    let destFileName = `${baseName}${ext}`;
+    let destPath = path.join(targetDir, destFileName);
+    while (fs.existsSync(destPath)) {
+      counter += 1;
+      destFileName = `${baseName}-${counter}${ext}`;
+      destPath = path.join(targetDir, destFileName);
+    }
+
+    fs.copyFileSync(sourcePath, destPath);
+    return { success: true, path: destPath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+function resolveInstallationRoot(installationPath: string): string | null {
+  if (typeof installationPath !== 'string' || installationPath.trim().length === 0) return null;
+  const candidates = getManagedPathCandidates(installationPath, getLauncherDir());
+  return candidates.find(candidate => fs.existsSync(candidate)) ?? null;
+}
+
+function resolveScreenshotFilePath(installationPath: string, screenshotPath: string): string {
+  const installationRoot = resolveInstallationRoot(installationPath);
+  if (!installationRoot) {
+    throw new Error('Installation path does not exist.');
+  }
+
+  const screenshotsDir = path.resolve(path.join(installationRoot, 'screenshots'));
+  const normalizedScreenshotPath = path.resolve(screenshotPath);
+  if (!normalizedScreenshotPath.startsWith(`${screenshotsDir}${path.sep}`)) {
+    throw new Error('Screenshot path is outside the installation screenshots directory.');
+  }
+
+  if (!fs.existsSync(normalizedScreenshotPath) || !fs.statSync(normalizedScreenshotPath).isFile()) {
+    throw new Error('Screenshot file does not exist.');
+  }
+
+  if (!SCREENSHOT_EXTS.has(path.extname(normalizedScreenshotPath).toLowerCase())) {
+    throw new Error('Only PNG screenshots are supported.');
+  }
+
+  return normalizedScreenshotPath;
+}
+
+function listPngScreenshots(installationPath: string): {
+  screenshotsDir: string;
+  screenshots: Array<{ name: string; path: string; fileUrl: string; sizeBytes: number; modifiedMs: number; width: number; height: number }>;
+} {
+  const installationRoot = resolveInstallationRoot(installationPath);
+  const screenshotsDir = installationRoot
+    ? path.join(installationRoot, 'screenshots')
+    : path.join(path.resolve(installationPath || '.'), 'screenshots');
+
+  if (!installationRoot || !fs.existsSync(screenshotsDir)) {
+    return { screenshotsDir, screenshots: [] };
+  }
+
+  const screenshots = fs.readdirSync(screenshotsDir)
+    .filter(fileName => SCREENSHOT_EXTS.has(path.extname(fileName).toLowerCase()))
+    .map(fileName => {
+      const absolutePath = path.join(screenshotsDir, fileName);
+      const stats = fs.statSync(absolutePath);
+      const img = nativeImage.createFromPath(absolutePath);
+      const { width, height } = img.getSize();
+
+      return {
+        name: fileName,
+        path: absolutePath,
+        fileUrl: pathToFileURL(absolutePath).href,
+        sizeBytes: stats.size,
+        modifiedMs: stats.mtimeMs,
+        width,
+        height,
+      };
+    })
+    .sort((a, b) => b.modifiedMs - a.modifiedMs);
+
+  return { screenshotsDir, screenshots };
 }
 
 ipcMain.handle(IPC.BACKGROUNDS_LIST, async () => {
@@ -1472,6 +1708,21 @@ ipcMain.handle(IPC.BACKGROUNDS_LIST, async () => {
   try { fs.mkdirSync(userDir, { recursive: true }); } catch { /* ignore */ }
 
   return [...listImagesInDir(bundledDir), ...listImagesInDir(userDir)];
+});
+
+ipcMain.handle(IPC.BACKGROUNDS_GET_PREFERRED, async () => {
+  const raw = storeGet(LAUNCHER_BACKGROUND_KEY);
+  if (typeof raw !== 'string' || raw.trim().length === 0) return null;
+
+  const normalized = normalizeStoredFileUrl(raw);
+  if (!normalized) return null;
+
+  // Auto-heal old malformed values so future launches are stable.
+  if (normalized !== raw) {
+    storeSet(LAUNCHER_BACKGROUND_KEY, normalized);
+  }
+
+  return normalized;
 });
 
 ipcMain.handle(IPC.ICONS_LIST, async () => {
@@ -1487,6 +1738,89 @@ ipcMain.handle(IPC.ICONS_LIST, async () => {
 ipcMain.handle(IPC.ICONS_IMPORT, async (_event, sourcePath: string) => {
   const userDir = path.join(app.getPath('userData'), 'icons');
   return importImageToDir(sourcePath, userDir);
+});
+
+ipcMain.handle(IPC.SCREENSHOTS_LIST, async (_event, installationPath: string) => {
+  try {
+    return listPngScreenshots(installationPath);
+  } catch (error) {
+    console.warn('[screenshots] Failed to list screenshots:', { installationPath, error });
+    return { screenshotsDir: path.join(installationPath || '', 'screenshots'), screenshots: [] };
+  }
+});
+
+ipcMain.handle(IPC.SCREENSHOTS_COPY_TO_CLIPBOARD, async (_event, installationPath: string, screenshotPath: string) => {
+  try {
+    const resolvedScreenshotPath = resolveScreenshotFilePath(installationPath, screenshotPath);
+    const image = nativeImage.createFromPath(resolvedScreenshotPath);
+    if (image.isEmpty()) {
+      return { success: false, error: 'Could not decode screenshot image.' };
+    }
+    clipboard.writeImage(image);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SCREENSHOTS_OPEN_CONTAINING_FOLDER, async (_event, installationPath: string, screenshotPath: string) => {
+  try {
+    const resolvedScreenshotPath = resolveScreenshotFilePath(installationPath, screenshotPath);
+    shell.showItemInFolder(resolvedScreenshotPath);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SCREENSHOTS_DELETE, async (_event, installationPath: string, screenshotPath: string) => {
+  try {
+    const resolvedScreenshotPath = resolveScreenshotFilePath(installationPath, screenshotPath);
+    fs.unlinkSync(resolvedScreenshotPath);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SCREENSHOTS_SET_AS_LAUNCHER_BACKGROUND, async (_event, installationPath: string, screenshotPath: string) => {
+  try {
+    const resolvedScreenshotPath = resolveScreenshotFilePath(installationPath, screenshotPath);
+    const userBackgroundDir = path.join(app.getPath('userData'), 'backgrounds');
+    const imported = copyImageToDir(resolvedScreenshotPath, userBackgroundDir, 'screenshot-background');
+    if (!imported.success || !imported.path) {
+      return { success: false, error: imported.error ?? 'Failed to copy screenshot to launcher backgrounds.' };
+    }
+
+    const url = pathToFileURL(imported.path).href;
+    storeSet(LAUNCHER_BACKGROUND_KEY, url);
+    return { success: true, url };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(
+  IPC.SCREENSHOTS_SET_AS_LOADING_SCREEN,
+  async (_event, sourceInstallationPath: string, screenshotPath: string, targetInstallationPath?: string) => {
+  try {
+    const resolvedScreenshotPath = resolveScreenshotFilePath(sourceInstallationPath, screenshotPath);
+    const destinationInstallationPath = targetInstallationPath ?? sourceInstallationPath;
+    const installationRoot = resolveInstallationRoot(destinationInstallationPath);
+    if (!installationRoot) {
+      return { success: false, error: 'Installation path does not exist.' };
+    }
+
+    const loadingScreensDir = path.join(installationRoot, 'data', 'image-resource', 'loading-screens');
+    const copied = copyImageToDir(resolvedScreenshotPath, loadingScreensDir, 'loading-screen');
+    if (!copied.success || !copied.path) {
+      return { success: false, error: copied.error ?? 'Failed to copy screenshot to loading-screens folder.' };
+    }
+
+    return { success: true, destinationPath: copied.path };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
 });
 
 // ─── Preset assets initialisation ───────────────────────────────────────────

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Header from './components/layout/Header';
 import Footer from './components/layout/Footer';
 import News from './components/pages/News';
+import Screenshots from './components/pages/Screenshots';
 import Installations from './components/pages/Installations';
 import Play from './components/pages/Play';
 import Settings from './components/pages/Settings';
@@ -125,6 +126,8 @@ const App: React.FC = () => {
       }
       case 'News':
         return <News />;
+      case 'Screenshots':
+        return <Screenshots />;
       case 'Settings': {
         const settingsProps = 'initialSection' in pageProps ? pageProps : {};
         return <Settings {...settingsProps} />;

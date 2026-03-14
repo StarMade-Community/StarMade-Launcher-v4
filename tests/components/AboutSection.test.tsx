@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 
 import AboutSection from '../../components/pages/Settings/AboutSection';
 
@@ -10,6 +10,13 @@ describe('AboutSection', () => {
     (window as unknown as Record<string, unknown>).launcher = {
       updater: {
         getVersion: vi.fn().mockResolvedValue('4.0.0'),
+      },
+      licenses: {
+        list: vi.fn().mockResolvedValue([
+          { fileName: 'LWJGL License.txt', sizeBytes: 1000, modifiedMs: Date.now() },
+        ]),
+        read: vi.fn().mockResolvedValue({ content: 'Test license content' }),
+        copyToUserData: vi.fn().mockResolvedValue({ success: true, copiedCount: 1, destinationDir: '/tmp/licenses' }),
       },
     };
   });
@@ -56,5 +63,24 @@ describe('AboutSection', () => {
     render(<AboutSection />);
     expect(screen.getByText('Created by DukeofRealms')).toBeInTheDocument();
     expect(screen.getByText('Happy building, citizens!')).toBeInTheDocument();
+  });
+
+  it('opens the third-party licenses modal and displays selected license content', async () => {
+    render(<AboutSection />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Third-Party Licenses' }));
+
+    expect(await screen.findByText('Third-Party Licenses')).toBeInTheDocument();
+    expect(await screen.findByText('LWJGL License.txt')).toBeInTheDocument();
+    expect(await screen.findByText('Test license content')).toBeInTheDocument();
+  });
+
+  it('copies bundled licenses to user data from the modal', async () => {
+    render(<AboutSection />);
+    fireEvent.click(screen.getByRole('button', { name: 'Third-Party Licenses' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy to User Data' }));
+
+    expect(await screen.findByText(/Copied 1 license file\(s\)/)).toBeInTheDocument();
   });
 });

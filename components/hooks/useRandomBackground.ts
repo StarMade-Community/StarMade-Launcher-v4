@@ -65,9 +65,27 @@ const useRandomBackground = (): { url: string; loaded: boolean } => {
   useEffect(() => {
     let cancelled = false;
 
-    getBackgroundList().then(list => {
-      if (cancelled) return;
-      const chosen = list[0]; // always index 0 — news cards use slice(1)
+    const load = async () => {
+      let chosen = '';
+
+      if (typeof window !== 'undefined' && window.launcher?.backgrounds?.getPreferred) {
+        try {
+          const preferred = await window.launcher.backgrounds.getPreferred();
+          if (typeof preferred === 'string' && preferred.trim().length > 0) {
+            chosen = preferred;
+          }
+        } catch {
+          // Ignore and fall back to random list.
+        }
+      }
+
+      if (!chosen) {
+        const list = await getBackgroundList();
+        chosen = list[0]; // always index 0 — news cards use slice(1)
+      }
+
+      if (cancelled || !chosen) return;
+
       setLoaded(false);
       setUrl(chosen);
 
@@ -75,9 +93,19 @@ const useRandomBackground = (): { url: string; loaded: boolean } => {
       img.onload  = () => { if (!cancelled) setLoaded(true); };
       img.onerror = () => { if (!cancelled) setLoaded(true); };
       img.src = chosen;
-    });
+    };
 
-    return () => { cancelled = true; };
+    void load();
+
+    const reloadOnChange = () => {
+      void load();
+    };
+    window.addEventListener('launcher-background-changed', reloadOnChange);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('launcher-background-changed', reloadOnChange);
+    };
   }, []);
 
   return { url, loaded };

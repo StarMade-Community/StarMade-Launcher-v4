@@ -153,7 +153,7 @@ export interface LauncherSettingsData {
   closeBehavior: LauncherCloseBehavior;
 }
 
-export type Page = 'Play' | 'Installations' | 'News' | 'Settings' | 'ServerPanel';
+export type Page = 'Play' | 'Installations' | 'News' | 'Screenshots' | 'Settings' | 'ServerPanel';
 export type SettingsSection = 'launcher' | 'accounts' | 'about' | 'defaults';
 export type InstallationsTab = 'installations' | 'servers';
 

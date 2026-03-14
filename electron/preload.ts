@@ -20,6 +20,18 @@ const launcherApi = {
       ipcRenderer.invoke(IPC.APP_GET_SERVER_PANEL_SCHEMA),
   },
 
+  licenses: {
+    /** List bundled third-party license files. */
+    list: (): Promise<Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>> =>
+      ipcRenderer.invoke(IPC.LICENSES_LIST),
+    /** Read one bundled third-party license file by file name. */
+    read: (fileName: string): Promise<{ content: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.LICENSES_READ, fileName),
+    /** Copy bundled third-party license files to userData. */
+    copyToUserData: (): Promise<{ success: boolean; copiedCount: number; destinationDir?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.LICENSES_COPY_TO_USER_DATA),
+  },
+
   window: {
     minimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
     hide: () => ipcRenderer.send(IPC.WINDOW_HIDE),
@@ -364,6 +376,9 @@ const launcherApi = {
     /** List available background image paths (file:// URLs). */
     list: (): Promise<string[]> =>
       ipcRenderer.invoke(IPC.BACKGROUNDS_LIST),
+    /** Returns a pinned launcher background URL, if configured. */
+    getPreferred: (): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.BACKGROUNDS_GET_PREFERRED),
   },
 
   /** Icon image APIs */
@@ -374,6 +389,52 @@ const launcherApi = {
     /** Import a custom icon into the user icons folder. */
     import: (sourcePath: string): Promise<{ success: boolean; path?: string; error?: string }> =>
       ipcRenderer.invoke(IPC.ICONS_IMPORT, sourcePath),
+  },
+
+  /** Screenshot management APIs */
+  screenshots: {
+    /** List PNG screenshots from an installation's screenshots folder. */
+    list: (installationPath: string): Promise<{
+      screenshotsDir: string;
+      screenshots: Array<{
+        name: string;
+        path: string;
+        fileUrl: string;
+        sizeBytes: number;
+        modifiedMs: number;
+        width: number;
+        height: number;
+      }>;
+    }> => ipcRenderer.invoke(IPC.SCREENSHOTS_LIST, installationPath),
+
+    /** Copy a screenshot image into the system clipboard. */
+    copyToClipboard: (installationPath: string, screenshotPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.SCREENSHOTS_COPY_TO_CLIPBOARD, installationPath, screenshotPath),
+
+    /** Open the screenshot's containing folder in the native file manager. */
+    openContainingFolder: (installationPath: string, screenshotPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.SCREENSHOTS_OPEN_CONTAINING_FOLDER, installationPath, screenshotPath),
+
+    /** Delete a screenshot file from the installation screenshots folder. */
+    delete: (installationPath: string, screenshotPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.SCREENSHOTS_DELETE, installationPath, screenshotPath),
+
+    /** Set a screenshot as the launcher's preferred background image. */
+    setAsLauncherBackground: (installationPath: string, screenshotPath: string): Promise<{ success: boolean; url?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.SCREENSHOTS_SET_AS_LAUNCHER_BACKGROUND, installationPath, screenshotPath),
+
+    /** Copy a screenshot to an installation loading-screens folder. */
+    setAsLoadingScreen: (
+      sourceInstallationPath: string,
+      screenshotPath: string,
+      targetInstallationPath?: string,
+    ): Promise<{ success: boolean; destinationPath?: string; error?: string }> =>
+      ipcRenderer.invoke(
+        IPC.SCREENSHOTS_SET_AS_LOADING_SCREEN,
+        sourceInstallationPath,
+        screenshotPath,
+        targetInstallationPath,
+      ),
   },
 
   /** Legacy installation detection APIs */
