@@ -46,7 +46,8 @@
     "typescript": "~5.8.2",
     "vite": "^6.2.0",
     "vitest": "^4.1.0",
-    "wait-on": "^9.0.4"
+    "wait-on": "^9.0.4",
+    "@vitest/coverage-v8": "^4.1.0"
   },
   "build": {
     "appId": "org.starmade.launcher",
