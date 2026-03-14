@@ -231,7 +231,11 @@ async function smdFetchJson(apiPath: string): Promise<unknown> {
   });
 
   if (!response.ok) {
-    throw new Error(`SMD API request failed (${response.status}) for ${normalizedPath}`);
+    const bodyText = await response.text().catch(() => '');
+    const suffix = bodyText.trim().length > 0
+      ? `: ${bodyText.trim().slice(0, 240)}`
+      : '';
+    throw new Error(`SMD API request failed (${response.status}) for ${normalizedPath}${suffix}`);
   }
 
   return response.json();
@@ -271,8 +275,25 @@ function extractStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === 'string');
 }
 
+function hasStarLoaderTag(tags: string[]): boolean {
+  return tags.some((tag) => {
+    const normalized = tag.trim().toLowerCase();
+    return normalized === 'api/starloader'
+      || normalized === 'starloader'
+      || normalized.endsWith('/starloader');
+  });
+}
+
 async function fetchSmdCategoryResources(): Promise<SmdModResource[]> {
-  const raw = await smdFetchJson(`/resource-categories/${SMD_MOD_CATEGORY_ID}/resources`);
+  let raw: unknown;
+  try {
+    raw = await smdFetchJson(`/resource-categories/${SMD_MOD_CATEGORY_ID}/resources`);
+  } catch (error) {
+    const message = toErrorMessage(error);
+    // Some XenForo keys can read /resources but are denied from category-scoped routes.
+    if (!message.includes('(403)')) throw error;
+    raw = await smdFetchJson('/resources');
+  }
   const root = asObject(raw);
   const listRaw = root?.resources;
   if (!Array.isArray(listRaw)) return [];
@@ -287,8 +308,12 @@ async function fetchSmdCategoryResources(): Promise<SmdModResource[]> {
     const author = getStringField(resource, 'username') ?? 'Unknown';
     if (!resourceId || !name) continue;
 
+    const categoryId = getNumberField(resource, 'category_id')
+      ?? getNumberField(resource, 'resource_category_id');
+    if (typeof categoryId === 'number' && categoryId !== SMD_MOD_CATEGORY_ID) continue;
+
     const tags = extractStringArray(resource.tags);
-    const isStarLoaderMod = tags.includes('api/starloader');
+    const isStarLoaderMod = hasStarLoaderTag(tags);
     if (!isStarLoaderMod || name === 'StarLoader') continue;
 
     const customFields = asObject(resource.custom_fields);

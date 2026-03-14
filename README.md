@@ -50,7 +50,7 @@ Download the latest release for your platform:
 
 ### Prerequisites
 
-- **Node.js** 20+ (LTS recommended)
+- **Node.js** 22+ (LTS recommended)
 - **npm** 10+
 
 ### SMD API Key (Required for SMD mod browsing/install)
@@ -65,9 +65,7 @@ For local development, set one of these in your shell before running Electron.
 
 A template is included at `.env.example`. You can copy it to `.env` and fill in your key.
 
-```powershell
-Copy-Item .env.example .env
-```
+When running in Electron, the launcher will auto-load `.env.local` or `.env` (first match) if present.
 
 For GitHub Actions builds, set a repository secret named `SMD_API_KEY`.
 

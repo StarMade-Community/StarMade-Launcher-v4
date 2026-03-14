@@ -14,6 +14,7 @@ afterEach(() => {
   } else {
     delete process.env.SMD_API_KEY;
   }
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -131,6 +132,33 @@ describe('listSmdMods', () => {
     expect(mods[0].resourceId).toBe(2);
     expect(mods[0].name).toBe('Alpha Weapons');
     expect(mods[0].gameVersion).toBe('0.205.1');
+  });
+
+  it('accepts the newer plain "starloader" tag format', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Number.MAX_SAFE_INTEGER - 1);
+
+    const mockResponse = {
+      ok: true,
+      json: async () => ({
+        resources: [
+          {
+            resource_id: 42,
+            title: 'BetterChambers',
+            username: 'Author',
+            tags: ['chambers', 'starloader'],
+            download_count: 12,
+            rating_avg: 4.5,
+          },
+        ],
+      }),
+    };
+
+    vi.stubGlobal('fetch', vi.fn(async () => mockResponse as unknown as Response));
+
+    const mods = await listSmdMods();
+    expect(mods).toHaveLength(1);
+    expect(mods[0].resourceId).toBe(42);
+    expect(mods[0].name).toBe('BetterChambers');
   });
 });
 

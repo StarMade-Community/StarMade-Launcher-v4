@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import fs from 'fs';
 import os from 'os';
 import { Worker } from 'worker_threads';
+import { config as loadDotEnv } from 'dotenv';
 import { IPC } from './ipc-channels.js';
 import { storeGet, storeSet, storeDelete, storeClearAll } from './store.js';
 import { fetchAllVersions, invalidateVersionCache } from './versions.js';
@@ -46,6 +47,30 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+function loadLocalEnvIfPresent(): void {
+  const fileNames = ['.env.local', '.env'];
+  const roots = [
+    process.cwd(),
+    app.getAppPath(),
+    path.dirname(process.execPath),
+  ];
+
+  const tried = new Set<string>();
+  for (const root of roots) {
+    for (const fileName of fileNames) {
+      const candidate = path.resolve(root, fileName);
+      if (tried.has(candidate)) continue;
+      tried.add(candidate);
+
+      if (!fs.existsSync(candidate)) continue;
+      loadDotEnv({ path: candidate, override: false });
+      return;
+    }
+  }
+}
+
+loadLocalEnvIfPresent();
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
