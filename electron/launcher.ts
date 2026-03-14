@@ -11,6 +11,7 @@ import fs from 'fs';
 import { app, shell } from 'electron';
 import { getRequiredJavaVersion, getJvmArgsForJava, resolveJavaPath } from './java.js';
 import { BrowserWindow } from 'electron';
+import { storeGet, storeSet } from './store.js';
 
 // ─── Process tracking ─────────────────────────────────────────────────────────
 
@@ -23,6 +24,7 @@ interface RunningProcess {
   logStream: fs.WriteStream;
   logFileWatcher?: fs.FSWatcher;
   lastLogPosition: number;
+  playTimeSettled?: boolean;
 }
 
 export interface ServerLogFileInfo {
@@ -46,6 +48,42 @@ export interface ServerLogCatalog {
 }
 
 const runningProcesses = new Map<string, RunningProcess>();
+const PLAY_TIME_STORE_KEY = 'playTimeByInstallationMs';
+
+function sanitizePlayTimeRecord(value: unknown): Record<string, number> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+
+  const record: Record<string, number> = {};
+  for (const [key, rawMs] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof rawMs !== 'number' || !Number.isFinite(rawMs) || rawMs <= 0) continue;
+    record[key] = Math.floor(rawMs);
+  }
+  return record;
+}
+
+let persistedPlayTimeByInstallationMs: Record<string, number> = sanitizePlayTimeRecord(storeGet(PLAY_TIME_STORE_KEY));
+
+function persistPlayTime(): void {
+  storeSet(PLAY_TIME_STORE_KEY, persistedPlayTimeByInstallationMs);
+}
+
+function addPlayTimeForSession(installationId: string, durationMs: number): void {
+  if (!installationId || !Number.isFinite(durationMs) || durationMs <= 0) return;
+
+  const existing = persistedPlayTimeByInstallationMs[installationId] ?? 0;
+  persistedPlayTimeByInstallationMs = {
+    ...persistedPlayTimeByInstallationMs,
+    [installationId]: existing + Math.floor(durationMs),
+  };
+  persistPlayTime();
+}
+
+function settlePlayTimeForRunningProcess(running: RunningProcess): void {
+  if (running.playTimeSettled) return;
+  running.playTimeSettled = true;
+  if (running.isServer) return;
+  addPlayTimeForSession(running.installationId, Date.now() - running.startTime);
+}
 
 function quitLauncherIfIdle(): void {
   if (process.platform === 'darwin') return;
@@ -57,6 +95,34 @@ function quitLauncherIfIdle(): void {
 
 export function hasRunningGames(): boolean {
   return runningProcesses.size > 0;
+}
+
+export function getPlayTimeTotals(installationIds?: string[]): { byInstallationId: Record<string, number>; totalMs: number } {
+  const resultByInstallationId: Record<string, number> = {};
+
+  // Snapshot persisted totals first.
+  if (Array.isArray(installationIds) && installationIds.length > 0) {
+    for (const id of installationIds) {
+      if (!id) continue;
+      resultByInstallationId[id] = persistedPlayTimeByInstallationMs[id] ?? 0;
+    }
+  } else {
+    Object.assign(resultByInstallationId, persistedPlayTimeByInstallationMs);
+  }
+
+  // Add currently-running session time so UI can update live.
+  for (const running of runningProcesses.values()) {
+    if (running.isServer) continue;
+    if (Array.isArray(installationIds) && installationIds.length > 0 && !installationIds.includes(running.installationId)) {
+      continue;
+    }
+
+    const accumulated = resultByInstallationId[running.installationId] ?? 0;
+    resultByInstallationId[running.installationId] = accumulated + Math.max(0, Date.now() - running.startTime);
+  }
+
+  const totalMs = Object.values(resultByInstallationId).reduce((sum, value) => sum + value, 0);
+  return { byInstallationId: resultByInstallationId, totalMs };
 }
 
 /**
@@ -470,6 +536,7 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
       
       const running = runningProcesses.get(installationId);
       if (running) {
+        settlePlayTimeForRunningProcess(running);
         running.logStream.end();
         running.logFileWatcher?.close();
       }
@@ -486,6 +553,7 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
       
       const running = runningProcesses.get(installationId);
       if (running) {
+        settlePlayTimeForRunningProcess(running);
         running.logStream.end();
         running.logFileWatcher?.close();
       }
@@ -520,6 +588,7 @@ export function stopGame(installationId: string): boolean {
   }
 
   try {
+    settlePlayTimeForRunningProcess(running);
     running.process.kill('SIGTERM');
     runningProcesses.delete(installationId);
     quitLauncherIfIdle();
@@ -982,6 +1051,7 @@ export function stopAllGames(): void {
   
   for (const [id, running] of runningProcesses.entries()) {
     try {
+      settlePlayTimeForRunningProcess(running);
       running.process.kill('SIGTERM');
       running.logStream.end();
       running.logFileWatcher?.close();

@@ -18,7 +18,7 @@ import { fetchAllVersions, invalidateVersionCache } from './versions.js';
 import { startDownload, cancelDownload } from './downloader.js';
 import type { DownloadProgress } from './downloader.js';
 import { downloadJava, detectSystemJava, resolveJavaPath, getDefaultJavaPaths, findJavaExecutableInDir } from './java.js';
-import { launchGame, stopGame, getGameStatus, getAllRunningGames, hasRunningGames, stopAllGames, getLogPath, openLogLocation, clearServerLogFiles, getGraphicsInfo, listServerLogFiles, readServerLogFile, sendServerStdin, listChatFiles, readChatFile } from './launcher.js';
+import { launchGame, stopGame, getGameStatus, getAllRunningGames, hasRunningGames, stopAllGames, getLogPath, openLogLocation, clearServerLogFiles, getGraphicsInfo, listServerLogFiles, readServerLogFile, sendServerStdin, listChatFiles, readChatFile, getPlayTimeTotals } from './launcher.js';
 import type { UpdateInfo } from './updater.js';
 import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from './updater.js';
 import { createBackup, listBackups, restoreBackup } from './backup.js';
@@ -487,6 +487,10 @@ ipcMain.handle(IPC.GAME_STATUS, (_event, installationId: string) => {
 
 ipcMain.handle(IPC.GAME_LIST_RUNNING, () => {
   return getAllRunningGames();
+});
+
+ipcMain.handle(IPC.GAME_GET_PLAY_TIME_TOTALS, (_event, installationIds?: string[]) => {
+  return getPlayTimeTotals(Array.isArray(installationIds) ? installationIds : undefined);
 });
 
 ipcMain.handle(IPC.GAME_GET_LOG_PATH, (_event, installationId: string) => {

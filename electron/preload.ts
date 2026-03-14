@@ -149,6 +149,10 @@ const launcherApi = {
     listRunning: (): Promise<Array<{ installationId: string; pid?: number; isServer: boolean; uptime: number }>> =>
       ipcRenderer.invoke(IPC.GAME_LIST_RUNNING),
 
+    /** Get tracked play-time totals (ms) keyed by installation id. */
+    getPlayTimeTotals: (installationIds?: string[]): Promise<{ byInstallationId: Record<string, number>; totalMs: number }> =>
+      ipcRenderer.invoke(IPC.GAME_GET_PLAY_TIME_TOTALS, installationIds),
+
     /** Get log file path for a running game. */
     getLogPath: (installationId: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.GAME_GET_LOG_PATH, installationId),

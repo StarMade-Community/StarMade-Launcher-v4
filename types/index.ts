@@ -37,6 +37,12 @@ export interface PlaySession {
   timestamp: string;
 }
 
+/** Aggregate play-time totals stored by installation id in milliseconds. */
+export interface PlayTimeTotals {
+  byInstallationId: Record<string, number>;
+  totalMs: number;
+}
+
 export interface ManagedItem {
   id: string;
   name: string;
@@ -241,10 +247,16 @@ export interface DataContextType {
     lastPlayedSession: PlaySession | null;
     /** Up to 4 sessions pinned by the user for quick access. */
     pinnedSessions: PlaySession[];
+    /** Total tracked play time in milliseconds, keyed by installation id. */
+    playTimeByInstallationMs: Record<string, number>;
+    /** Total tracked play time across all installations in milliseconds. */
+    totalInstallPlayTimeMs: number;
     /** Pin a session for quick access (max 4; oldest pin is dropped when full). */
     pinSession: (session: PlaySession) => void;
     /** Unpin a previously pinned session. */
     unpinSession: (sessionId: string) => void;
     /** Record a completed play session as the new last-played entry. */
     recordSession: (session: PlaySession) => void;
+    /** Refresh play-time totals from the main process. */
+    refreshPlayTime: () => Promise<void>;
 }

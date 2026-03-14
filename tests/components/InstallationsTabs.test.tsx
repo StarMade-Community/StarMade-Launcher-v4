@@ -78,6 +78,8 @@ describe('Installations tab switching during downloads', () => {
     const dataState = {
       installations: [installationItem],
       servers: [serverItem],
+      playTimeByInstallationMs: { 'inst-1': 0 },
+      totalInstallPlayTimeMs: 0,
       downloadStatuses: {
         'srv-1': {
           progress: 2,

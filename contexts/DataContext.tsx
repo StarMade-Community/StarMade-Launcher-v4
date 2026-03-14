@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
-import type { DataContextType, ManagedItem, Account, Version, DownloadStatus, DownloadProgress, LoginResult, RegisterResult, PlaySession } from '../types';
+import type { DataContextType, ManagedItem, Account, Version, DownloadStatus, DownloadProgress, LoginResult, RegisterResult, PlaySession, PlayTimeTotals } from '../types';
 
 // ─── Store keys ──────────────────────────────────────────────────────────────
 
@@ -44,6 +44,7 @@ const hasStore    = (): boolean => typeof window !== 'undefined' && typeof windo
 const hasVersions = (): boolean => typeof window !== 'undefined' && typeof window.launcher?.versions !== 'undefined';
 const hasDownload = (): boolean => typeof window !== 'undefined' && typeof window.launcher?.download !== 'undefined';
 const hasAuth     = (): boolean => typeof window !== 'undefined' && typeof window.launcher?.auth     !== 'undefined';
+const hasGame     = (): boolean => typeof window !== 'undefined' && typeof window.launcher?.game     !== 'undefined';
 
 const areDownloadStatusesEqual = (a?: DownloadStatus, b?: DownloadStatus): boolean => {
     if (!a || !b) return false;
@@ -77,6 +78,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const [downloadStatuses, setDownloadStatuses] = useState<Record<string, DownloadStatus>>({});
     const [pinnedSessions,   setPinnedSessions]   = useState<PlaySession[]>([]);
     const [lastPlayedSession, setLastPlayedSession] = useState<PlaySession | null>(null);
+    const [playTimeByInstallationMs, setPlayTimeByInstallationMs] = useState<Record<string, number>>({});
+    const [totalInstallPlayTimeMs, setTotalInstallPlayTimeMs] = useState(0);
 
     // ── Load from store on mount ─────────────────────────────────────────────
 
@@ -193,6 +196,30 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (isLoaded) refreshVersions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isLoaded]);
+
+    const refreshPlayTime = useCallback(async (): Promise<void> => {
+        if (!hasGame() || !window.launcher.game.getPlayTimeTotals) return;
+
+        try {
+            const installationIds = installations.map(installation => installation.id);
+            const payload = await window.launcher.game.getPlayTimeTotals(installationIds) as PlayTimeTotals;
+            setPlayTimeByInstallationMs(payload?.byInstallationId ?? {});
+            setTotalInstallPlayTimeMs(payload?.totalMs ?? 0);
+        } catch (err) {
+            console.warn('[DataContext] Could not refresh play-time totals:', err);
+        }
+    }, [installations]);
+
+    useEffect(() => {
+        if (!isLoaded) return;
+        void refreshPlayTime();
+
+        const interval = setInterval(() => {
+            void refreshPlayTime();
+        }, 15_000);
+
+        return () => clearInterval(interval);
+    }, [isLoaded, refreshPlayTime]);
 
     // ── Subscribe to download events ─────────────────────────────────────────
 
@@ -571,9 +598,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         refreshVersions: () => refreshVersions(true),
         lastPlayedSession,
         pinnedSessions,
+        playTimeByInstallationMs,
+        totalInstallPlayTimeMs,
         pinSession,
         unpinSession,
         recordSession,
+        refreshPlayTime,
     };
 
     return <DataContext.Provider value={value}>{children}</DataContext.Provider>;

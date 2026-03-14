@@ -17,6 +17,7 @@ interface ItemCardProps {
   onRestore?: (item: ManagedItem) => void;
   actionButtonText: string;
   statusLabel: string;
+  statusValue?: string;
   downloadStatus?: DownloadStatus;
 }
 
@@ -36,7 +37,7 @@ function formatSpeed(bytesPerSec: number): string {
 const ItemCard: React.FC<ItemCardProps> = ({
   item, isFeatured, onEdit, onDelete,
   onDownload, onCancelDownload, onOpenFolder, onAction, onViewLogs, onRestore,
-  actionButtonText, statusLabel,
+  actionButtonText, statusLabel, statusValue,
   downloadStatus,
 }) => {
   const [isRunning, setIsRunning] = useState(false);
@@ -135,7 +136,7 @@ const ItemCard: React.FC<ItemCardProps> = ({
           ) : downloadStatus?.state === 'error' ? (
             <p className="text-sm text-red-400">Download failed</p>
           ) : (
-            <p className="text-sm text-gray-400">{statusLabel}: {item.lastPlayed}</p>
+            <p className="text-sm text-gray-400">{statusLabel}: {statusValue ?? item.lastPlayed}</p>
           )}
         </div>
 

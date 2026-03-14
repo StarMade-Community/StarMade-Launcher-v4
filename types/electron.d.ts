@@ -118,6 +118,8 @@ declare global {
         status: (installationId: string) => Promise<{ running: boolean; pid?: number; uptime?: number }>;
         /** Get all running games/servers. */
         listRunning: () => Promise<Array<{ installationId: string; pid?: number; isServer: boolean; uptime: number }>>;
+        /** Get tracked play-time totals (ms) keyed by installation id. */
+        getPlayTimeTotals: (installationIds?: string[]) => Promise<{ byInstallationId: Record<string, number>; totalMs: number }>;
         /** Get log file path for a running game. */
         getLogPath: (installationId: string) => Promise<string | null>;
         /** List categorized log files from an installation's logs folder. */

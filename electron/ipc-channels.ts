@@ -70,6 +70,8 @@ export const IPC = {
   GAME_STATUS: 'game:status',
   /** Renderer → Main (invoke): get all running games/servers. */
   GAME_LIST_RUNNING: 'game:list-running',
+  /** Renderer → Main (invoke): get tracked play-time totals (ms) by installation id. */
+  GAME_GET_PLAY_TIME_TOTALS: 'game:get-play-time-totals',
   /** Main → Renderer: game log output line. */
   GAME_LOG: 'game:log',
   /** Renderer → Main (invoke): get log file path for a running game. */
