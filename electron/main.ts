@@ -18,7 +18,7 @@ import { fetchAllVersions, invalidateVersionCache } from './versions.js';
 import { startDownload, cancelDownload } from './downloader.js';
 import type { DownloadProgress } from './downloader.js';
 import { downloadJava, detectSystemJava, resolveJavaPath, getDefaultJavaPaths, findJavaExecutableInDir } from './java.js';
-import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, clearServerLogFiles, getGraphicsInfo, listServerLogFiles, readServerLogFile } from './launcher.js';
+import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, clearServerLogFiles, getGraphicsInfo, listServerLogFiles, readServerLogFile, sendServerStdin, listChatFiles, readChatFile } from './launcher.js';
 import type { UpdateInfo } from './updater.js';
 import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from './updater.js';
 import { createBackup, listBackups, restoreBackup } from './backup.js';
@@ -535,6 +535,38 @@ ipcMain.handle(IPC.GAME_CLEAR_LOG_FILES, (_event, installationPath: string) => {
 
 ipcMain.handle(IPC.GAME_GET_GRAPHICS_INFO, (_event, installationPath: string) => {
   return getGraphicsInfo(installationPath);
+});
+
+// ─── Server chat IPC handlers ─────────────────────────────────────────────────
+
+ipcMain.handle(IPC.GAME_SERVER_STDIN, (_event, installationId: string, line: string) => {
+  if (!installationId || typeof line !== 'string') {
+    return { success: false, error: 'Missing installationId or line.' };
+  }
+  return sendServerStdin(installationId, line);
+});
+
+ipcMain.handle(IPC.GAME_LIST_CHAT_FILES, (_event, installationPath: string) => {
+  if (!installationPath) return [];
+  try {
+    return listChatFiles(installationPath);
+  } catch (error) {
+    console.warn('[chat] Failed to list chat files:', error);
+    return [];
+  }
+});
+
+ipcMain.handle(IPC.GAME_READ_CHAT_FILE, (_event, installationPath: string, fileName: string, maxBytes?: number) => {
+  if (!installationPath || !fileName) {
+    return { content: '', truncated: false, error: 'Missing installationPath or fileName.' };
+  }
+  try {
+    return { ...readChatFile(installationPath, fileName, maxBytes), error: undefined };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn('[chat] Failed to read chat file:', { installationPath, fileName, error: message });
+    return { content: '', truncated: false, error: message };
+  }
 });
 
 function readServerCfgKey(installationPath: string, key: string): string | null {
