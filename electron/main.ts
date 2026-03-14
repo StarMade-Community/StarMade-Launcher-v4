@@ -1553,8 +1553,12 @@ function normalizeStoredFileUrl(maybeUrl: string): string | null {
     const normalizedPath = /^[a-zA-Z]:\//.test(withoutScheme)
       ? withoutScheme
       : withoutScheme.replace(/^\/+/, '/');
-    const decodedPath = decodeURIComponent(normalizedPath);
-    return pathToFileURL(decodedPath).href;
+    try {
+      const decodedPath = decodeURIComponent(normalizedPath);
+      return pathToFileURL(decodedPath).href;
+    } catch {
+      return null;
+    }
   }
 
   try {
