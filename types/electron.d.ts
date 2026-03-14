@@ -14,6 +14,16 @@ declare global {
         getServerPanelSchema: () => Promise<unknown>;
       };
 
+      /** Third-party licenses APIs */
+      licenses: {
+        /** List bundled third-party license files. */
+        list: () => Promise<Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>>;
+        /** Read one bundled third-party license file by file name. */
+        read: (fileName: string) => Promise<{ content: string; error?: string }>;
+        /** Copy bundled third-party license files to userData. */
+        copyToUserData: () => Promise<{ success: boolean; copiedCount: number; destinationDir?: string; error?: string }>;
+      };
+
       window: {
         /** Minimize the application window */
         minimize: () => void;
@@ -272,6 +282,39 @@ declare global {
       backgrounds: {
         /** List available background image paths (file:// URLs). */
         list: () => Promise<string[]>;
+        /** Returns the pinned launcher background URL, if one is configured. */
+        getPreferred: () => Promise<string | null>;
+      };
+
+      /** Screenshot management APIs */
+      screenshots: {
+        /** List PNG screenshots from an installation's screenshots folder. */
+        list: (installationPath: string) => Promise<{
+          screenshotsDir: string;
+          screenshots: Array<{
+            name: string;
+            path: string;
+            fileUrl: string;
+            sizeBytes: number;
+            modifiedMs: number;
+            width: number;
+            height: number;
+          }>;
+        }>;
+        /** Copy a screenshot image to the system clipboard. */
+        copyToClipboard: (installationPath: string, screenshotPath: string) => Promise<{ success: boolean; error?: string }>;
+        /** Open the folder containing a screenshot in the native file manager. */
+        openContainingFolder: (installationPath: string, screenshotPath: string) => Promise<{ success: boolean; error?: string }>;
+        /** Delete a screenshot from the installation screenshots folder. */
+        delete: (installationPath: string, screenshotPath: string) => Promise<{ success: boolean; error?: string }>;
+        /** Copy a screenshot to launcher backgrounds and pin it as preferred. */
+        setAsLauncherBackground: (installationPath: string, screenshotPath: string) => Promise<{ success: boolean; url?: string; error?: string }>;
+        /** Copy a screenshot to installation data/image-resource/loading-screens. */
+        setAsLoadingScreen: (
+          sourceInstallationPath: string,
+          screenshotPath: string,
+          targetInstallationPath?: string,
+        ) => Promise<{ success: boolean; destinationPath?: string; error?: string }>;
       };
 
       /** Icon image APIs */

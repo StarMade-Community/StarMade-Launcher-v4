@@ -152,6 +152,15 @@ export const IPC = {
   /** Renderer → Main (invoke): get server panel schema JSON used by config editors. */
   APP_GET_SERVER_PANEL_SCHEMA: 'app:get-server-panel-schema',
 
+  // ─── Licenses ───────────────────────────────────────────────────────────────
+
+  /** Renderer → Main (invoke): list bundled third-party license files. */
+  LICENSES_LIST: 'licenses:list',
+  /** Renderer → Main (invoke): read one bundled third-party license file. */
+  LICENSES_READ: 'licenses:read',
+  /** Renderer → Main (invoke): copy bundled third-party licenses to userData. */
+  LICENSES_COPY_TO_USER_DATA: 'licenses:copy-to-user-data',
+
   // ─── Installation file management ───────────────────────────────────────────
 
   /**
@@ -195,6 +204,8 @@ export const IPC = {
 
   /** Renderer → Main (invoke): list available background image paths. */
   BACKGROUNDS_LIST: 'backgrounds:list',
+  /** Renderer → Main (invoke): get preferred launcher background URL. */
+  BACKGROUNDS_GET_PREFERRED: 'backgrounds:get-preferred',
 
   // ─── Icons ──────────────────────────────────────────────────────────────────
 
@@ -202,6 +213,21 @@ export const IPC = {
   ICONS_LIST: 'icons:list',
   /** Renderer → Main (invoke): import an icon image into the user icons directory. */
   ICONS_IMPORT: 'icons:import',
+
+  // ─── Screenshots ───────────────────────────────────────────────────────────
+
+  /** Renderer → Main (invoke): list PNG screenshots for an installation. */
+  SCREENSHOTS_LIST: 'screenshots:list',
+  /** Renderer → Main (invoke): copy a screenshot to clipboard. */
+  SCREENSHOTS_COPY_TO_CLIPBOARD: 'screenshots:copy-to-clipboard',
+  /** Renderer → Main (invoke): open screenshot containing folder. */
+  SCREENSHOTS_OPEN_CONTAINING_FOLDER: 'screenshots:open-containing-folder',
+  /** Renderer → Main (invoke): delete a screenshot file from an installation. */
+  SCREENSHOTS_DELETE: 'screenshots:delete',
+  /** Renderer → Main (invoke): set screenshot as launcher background. */
+  SCREENSHOTS_SET_AS_LAUNCHER_BACKGROUND: 'screenshots:set-as-launcher-background',
+  /** Renderer → Main (invoke): copy screenshot to installation loading-screens folder. */
+  SCREENSHOTS_SET_AS_LOADING_SCREEN: 'screenshots:set-as-loading-screen',
 
   // ─── Legacy installation detection ──────────────────────────────────────────
 
