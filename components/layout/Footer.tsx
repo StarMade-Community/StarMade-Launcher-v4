@@ -258,12 +258,20 @@ const SciFiPlayButton: React.FC<SciFiPlayButtonProps> = ({ isUpdating, statusLab
 
 const Footer: React.FC = () => {
   const { navigate, isLaunching, launchStatus, openLaunchModal, completeLaunching } = useApp();
-  const { installations, servers, selectedServer, setSelectedServerId } = useData();
+  const { installations, servers, selectedServer, setSelectedServerId, lastPlayedSession } = useData();
 
-  const [selectedInstallationId, setSelectedInstallationId] = useState<string | null>(null);
-
-  // Resolve the effective installation — prefer the user's selection, fall back to first installed
+  // Resolve installed installations first so we can validate the last-used id
   const installedInstallations = installations.filter(inst => inst.installed !== false);
+
+  // Default to the last-used installation (if it still exists and is installed)
+  const lastUsedId = lastPlayedSession?.installationId ?? null;
+  const lastUsedStillInstalled = lastUsedId
+    ? installedInstallations.some(i => i.id === lastUsedId)
+    : false;
+
+  const [selectedInstallationId, setSelectedInstallationId] = useState<string | null>(
+    lastUsedStillInstalled ? lastUsedId : null,
+  );
   const activeInstallation =
       (selectedInstallationId ? installedInstallations.find(i => i.id === selectedInstallationId) : null)
       ?? installedInstallations[0]

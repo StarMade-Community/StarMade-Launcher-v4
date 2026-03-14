@@ -10,7 +10,7 @@ interface ServerPanelProps {
   serverName?: string;
 }
 
-type ServerPanelTab = 'control' | 'actions' | 'logs' | 'configuration' | 'files' | 'database';
+type ServerPanelTab = 'control' | 'actions' | 'logs' | 'chat' | 'configuration' | 'files' | 'database';
 const CONFIG_EDITOR_TABS = [
   { id: 'server-cfg', label: 'server.cfg' },
   { id: 'game-config-xml', label: 'GameConfig.xml' },
@@ -55,12 +55,136 @@ interface LogCategory {
   files: LogFileItem[];
 }
 
+// ─── Chat types ───────────────────────────────────────────────────────────────
+
+interface ChatMessage {
+  /** ISO timestamp (live events) or parsed from file line */
+  timestamp: string;
+  sender: string;
+  /** CHANNEL | DIRECT | SYSTEM */
+  receiverType: string;
+  /** channel name or empty for system */
+  receiver: string;
+  text: string;
+}
+
+interface ChatChannelInfo {
+  fileName: string;
+  channelId: string;
+  channelLabel: string;
+  channelType: 'general' | 'faction' | 'direct' | 'custom';
+  sizeBytes: number;
+  modifiedMs: number;
+}
+
+const GENERAL_CHANNEL_ID = 'all';
+
+const createVirtualGeneralChannel = (): ChatChannelInfo => ({
+  fileName: '',
+  channelId: GENERAL_CHANNEL_ID,
+  channelLabel: 'General',
+  channelType: 'general',
+  sizeBytes: 0,
+  modifiedMs: 0,
+});
+
+const normalizeLiveChatChannelId = (receiverType: string, receiver: string): string => {
+  if (receiverType.toUpperCase() !== 'CHANNEL') return receiver;
+  const lowered = receiver.trim().toLowerCase();
+  if (!lowered || lowered === 'general' || lowered === 'public') return GENERAL_CHANNEL_ID;
+  return receiver;
+};
+
+const buildLiveChannelInfo = (channelId: string, receiverType: string): ChatChannelInfo => {
+  if (channelId === GENERAL_CHANNEL_ID) return createVirtualGeneralChannel();
+  if (receiverType.toUpperCase() === 'DIRECT' || channelId.startsWith('##')) {
+    return {
+      fileName: '',
+      channelId,
+      channelLabel: channelId.startsWith('##') ? `DM: ${channelId.slice(2)}` : `DM: ${channelId}`,
+      channelType: 'direct',
+      sizeBytes: 0,
+      modifiedMs: 0,
+    };
+  }
+  if (/^Faction\d+$/i.test(channelId)) {
+    return {
+      fileName: '',
+      channelId,
+      channelLabel: channelId,
+      channelType: 'faction',
+      sizeBytes: 0,
+      modifiedMs: 0,
+    };
+  }
+  return {
+    fileName: '',
+    channelId,
+    channelLabel: channelId,
+    channelType: 'custom',
+    sizeBytes: 0,
+    modifiedMs: 0,
+  };
+};
+
+const mergeFetchedChatChannels = (fetched: ChatChannelInfo[], existing: ChatChannelInfo[]): ChatChannelInfo[] => {
+  const byId = new Map<string, ChatChannelInfo>();
+  for (const channel of fetched) {
+    byId.set(channel.channelId, channel);
+  }
+
+  // Preserve virtual/live-only channels discovered from console output.
+  for (const channel of existing) {
+    if (channel.fileName || byId.has(channel.channelId)) continue;
+    byId.set(channel.channelId, channel);
+  }
+
+  if (!byId.has(GENERAL_CHANNEL_ID)) {
+    byId.set(GENERAL_CHANNEL_ID, createVirtualGeneralChannel());
+  }
+
+  return Array.from(byId.values()).sort((a, b) => {
+    if (a.channelId === GENERAL_CHANNEL_ID) return -1;
+    if (b.channelId === GENERAL_CHANNEL_ID) return 1;
+    return b.modifiedMs - a.modifiedMs || a.channelLabel.localeCompare(b.channelLabel);
+  });
+};
+
 interface InstallationFileEntry {
   name: string;
   relativePath: string;
   isDirectory: boolean;
   sizeBytes: number;
   modifiedMs: number;
+  isEditableText: boolean;
+  nonEditableReason?: string;
+}
+
+// ─── Database tab types ───────────────────────────────────────────────────────
+
+type DatabaseSqlMode = 'query' | 'update' | 'insertKeys';
+type DatabaseSortKey = 'name-asc' | 'name-desc';
+
+interface DatabaseSqlTable {
+  columns: string[];
+  rows: string[][];
+}
+
+interface DatabaseEntityRow {
+  id: string;
+  uid: string;
+  name: string;
+  typeValue: string;
+  factionValue: string;
+  x: number;
+  y: number;
+  z: number;
+}
+
+interface PendingDatabaseSqlRequest {
+  mode: DatabaseSqlMode;
+  awaitingRequestId: boolean;
+  requestId: number | null;
 }
 
 interface DashboardGroup {
@@ -87,11 +211,26 @@ interface DraggedQuickAction {
   actionId: ServerActionId;
 }
 
-const LOG_BUFFER_CAP = 1200;
+const LOG_BUFFER_CAP = 30000;
 const DASHBOARD_STORE_KEY = 'serverPanelDashboardLayoutsV2';
 const MIN_GROUP_HEIGHT = 260;
 const MAX_GROUP_HEIGHT = 1200;
-const FACTION_CONFIG_PATH_CANDIDATES = ['FactionConfig.xml', 'StarMade/FactionConfig.xml'] as const;
+const STOP_SHUTDOWN_SECONDS = 15;
+const RESTART_SHUTDOWN_SECONDS = 20;
+const UPDATE_SHUTDOWN_SECONDS = 25;
+const SHUTDOWN_POLL_INTERVAL_MS = 1000;
+const SHUTDOWN_EXTRA_GRACE_MS = 60000;
+const PLAYER_LIST_SETTLE_MS = 1400;
+const PLAYER_LIST_POLL_MS = 30000;
+const FACTION_CONFIG_PATH_CANDIDATES = [
+  'customFactionConfig/FactionConfigTemplate.xml',
+  'config/customConfigTemplate/FactionConfigTemplate.xml',
+  'FactionConfigTemplate.xml',
+] as const;
+
+function quoteServerCommandArg(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
 
 const WIDGET_HEIGHT_WEIGHT: Record<DashboardWidgetId, number> = {
   status: 120,
@@ -113,6 +252,7 @@ const tabItems: { id: ServerPanelTab; label: string }[] = [
   { id: 'control', label: 'Dashboard' },
   { id: 'actions', label: 'Actions' },
   { id: 'logs', label: 'Logs' },
+  { id: 'chat', label: 'Chat' },
   { id: 'configuration', label: 'Configuration' },
   { id: 'files', label: 'Files' },
   { id: 'database', label: 'Database' },
@@ -295,6 +435,146 @@ const formatLogModifiedTime = (modifiedMs: number): string => {
   return new Date(modifiedMs).toLocaleString();
 };
 
+// ─── Database SQL helpers ─────────────────────────────────────────────────────
+
+/** Parse a single CSV-with-quotes-and-semicolons row produced by DatabaseIndex.resultSetToStringBuffer */
+const parseQuotedSemicolonLine = (line: string): string[] => {
+  const cells: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    const next = i + 1 < line.length ? line[i + 1] : '';
+
+    if (ch === '"') {
+      if (inQuotes && next === '"') { // escaped quote
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (ch === ';' && !inQuotes) {
+      cells.push(current);
+      current = '';
+      continue;
+    }
+
+    current += ch;
+  }
+
+  cells.push(current);
+  return cells;
+};
+
+/** Convert raw SQL output lines (from SQL#id: … rows) into a column/row table */
+const parseDatabaseSqlTable = (lines: string[]): DatabaseSqlTable => {
+  const cleaned = lines.map((l) => l.trim()).filter((l) => l.length > 0);
+  if (cleaned.length === 0) return { columns: [], rows: [] };
+
+  const columns = parseQuotedSemicolonLine(cleaned[0]).map((c) => c.trim());
+  const rows = cleaned.slice(1).map((line) => {
+    const row = parseQuotedSemicolonLine(line);
+    if (row.length >= columns.length) return row.slice(0, columns.length);
+    return [...row, ...Array.from<string>({ length: columns.length - row.length }).fill('')];
+  });
+
+  return { columns, rows };
+};
+
+const getDbColIdx = (columns: string[], ...candidates: string[]): number => {
+  const norm = columns.map((c) => c.trim().toUpperCase());
+  for (const candidate of candidates) {
+    const idx = norm.indexOf(candidate.toUpperCase());
+    if (idx !== -1) return idx;
+  }
+  return -1;
+};
+
+const parseDatabaseEntities = (table: DatabaseSqlTable): DatabaseEntityRow[] => {
+  const idIdx  = getDbColIdx(table.columns, 'ID');
+  const uidIdx = getDbColIdx(table.columns, 'UID');
+  const nmIdx  = getDbColIdx(table.columns, 'NAME', 'REAL_NAME');
+  const tyIdx  = getDbColIdx(table.columns, 'TYPE');
+  const faIdx  = getDbColIdx(table.columns, 'FACTION');
+  const xIdx   = getDbColIdx(table.columns, 'X');
+  const yIdx   = getDbColIdx(table.columns, 'Y');
+  const zIdx   = getDbColIdx(table.columns, 'Z');
+
+  if ([idIdx, uidIdx, nmIdx, tyIdx, faIdx, xIdx, yIdx, zIdx].some((i) => i < 0)) return [];
+
+  const result: DatabaseEntityRow[] = [];
+  for (const row of table.rows) {
+    const x = Number.parseInt(row[xIdx] ?? '', 10);
+    const y = Number.parseInt(row[yIdx] ?? '', 10);
+    const z = Number.parseInt(row[zIdx] ?? '', 10);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    result.push({
+      id: row[idIdx] ?? '',
+      uid: row[uidIdx] ?? '',
+      name: row[nmIdx] ?? '(Unnamed)',
+      typeValue: row[tyIdx] ?? 'Unknown',
+      factionValue: row[faIdx] ?? '0',
+      x, y, z,
+    });
+  }
+  return result;
+};
+
+/** The default entity-browser query — joins on SECTORS to only show non-transient (loaded) sectors */
+const DATABASE_ENTITY_LIST_SQL =
+  'SELECT e.ID, e.UID, e.NAME, e.TYPE, e.FACTION, e.X, e.Y, e.Z ' +
+  'FROM ENTITIES e ' +
+  'JOIN SECTORS s ON s.X = e.X AND s.Y = e.Y AND s.Z = e.Z ' +
+  'WHERE s.TRANSIENT = FALSE ' +
+  'ORDER BY e.X, e.Y, e.Z, e.NAME';
+
+const DATABASE_CMD_BY_MODE: Record<DatabaseSqlMode, string> = {
+  query:      'sql_query',
+  update:     'sql_update',
+  insertKeys: 'sql_insert_return_generated_keys',
+};
+
+/**
+ * Parse a line from a StarMade chatlogs/*.txt file.
+ *
+ * Channel format: "yyyy/MM/dd - HH:mm:ss [sender]: text"
+ * Direct format:  "yyyy/MM/dd - HH:mm:ss [sender -> receiver]: text"
+ */
+const parseChatLogLine = (rawLine: string, channelId: string): ChatMessage | null => {
+  const trimmed = rawLine.trim();
+  if (!trimmed) return null;
+
+  // Direct message: [sender -> receiver]
+  const dmMatch = trimmed.match(/^([\d/]+ - [\d:]+)\s+\[([^\]]+)\s+->\s+([^\]]+)\]:\s*(.*)$/);
+  if (dmMatch) {
+    return {
+      timestamp: dmMatch[1],
+      sender: dmMatch[2].trim(),
+      receiverType: 'DIRECT',
+      receiver: dmMatch[3].trim(),
+      text: dmMatch[4],
+    };
+  }
+
+  // Channel message: [sender]: text
+  const channelMatch = trimmed.match(/^([\d/]+ - [\d:]+)\s+\[([^\]]+)\]:\s*(.*)$/);
+  if (channelMatch) {
+    return {
+      timestamp: channelMatch[1],
+      sender: channelMatch[2].trim(),
+      receiverType: 'CHANNEL',
+      receiver: channelId,
+      text: channelMatch[3],
+    };
+  }
+
+  return null;
+};
+
 const formatUptime = (uptimeMs?: number): string => {
   if (!uptimeMs || uptimeMs <= 0) return '00:00:00';
   const totalSeconds = Math.floor(uptimeMs / 1000);
@@ -348,8 +628,8 @@ interface ServerConfigEntry {
 type ConfigFieldValidation = import('../../common/ConfigPanel').ConfigFieldValidation;
 
 type GameConfigFieldType = 'string' | 'number' | 'boolean';
-type GameConfigCategory = 'economy' | 'environment' | 'limits' | 'other';
-type FactionConfigCategory = 'activity' | 'system-bonus' | 'points' | 'other';
+type GameConfigCategory = 'economy' | 'environment' | 'limits';
+type FactionConfigCategory = 'activity' | 'system-bonus' | 'points';
 
 interface GameConfigFieldMeta {
   label: string;
@@ -468,19 +748,17 @@ const GAME_CONFIG_CATEGORY_LABELS: Record<GameConfigCategory, string> = {
   economy: 'Economy',
   environment: 'Environment',
   limits: 'Limits',
-  other: 'Other',
 };
 
-const GAME_CONFIG_CATEGORY_ORDER: GameConfigCategory[] = ['economy', 'environment', 'limits', 'other'];
+const GAME_CONFIG_CATEGORY_ORDER: GameConfigCategory[] = ['economy', 'environment', 'limits'];
 
 const FACTION_CONFIG_CATEGORY_LABELS: Record<FactionConfigCategory, string> = {
   activity: 'Activity',
   'system-bonus': 'System Bonus',
   points: 'Faction Points',
-  other: 'Other',
 };
 
-const FACTION_CONFIG_CATEGORY_ORDER: FactionConfigCategory[] = ['activity', 'system-bonus', 'points', 'other'];
+const FACTION_CONFIG_CATEGORY_ORDER: FactionConfigCategory[] = ['activity', 'system-bonus', 'points'];
 
 const FACTION_CONFIG_FIELD_META: Record<string, FactionConfigFieldMeta> = {
   'Faction/FactionActivity/BasicValues/SetInactiveAfterHours': {
@@ -831,7 +1109,7 @@ const inferGameConfigCategory = (path: string, rules: GameConfigCategoryRule[]):
     if (rule.startsWith && path.startsWith(rule.startsWith)) return rule.category;
     if (rule.includes && lowerPath.includes(rule.includes.toLowerCase())) return rule.category;
   }
-  return 'other';
+  return null
 };
 
 const inferFactionConfigCategory = (path: string, rules: FactionConfigCategoryRule[]): FactionConfigCategory => {
@@ -840,7 +1118,7 @@ const inferFactionConfigCategory = (path: string, rules: FactionConfigCategoryRu
     if (rule.startsWith && path.startsWith(rule.startsWith)) return rule.category;
     if (rule.includes && lowerPath.includes(rule.includes.toLowerCase())) return rule.category;
   }
-  return 'other';
+  return null
 };
 
 const parseGameConfigXmlDocument = (xmlContent: string): Document => {
@@ -1505,11 +1783,20 @@ const getConfigFieldValidation = (field: ServerConfigField, rawValue: string): C
 interface ServerActionDefinition {
   id: ServerActionId;
   label: string;
+  buttonLabel?: string;
   description: string;
   detail: string;
   enabled: boolean;
+  isLoading?: boolean;
+  allowClickWhileLoading?: boolean;
   emphasis?: 'default' | 'accent' | 'danger';
   onClick: () => void;
+}
+
+interface PlayersListCollection {
+  token: number;
+  names: Set<string>;
+  timeoutId: number;
 }
 
 const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
@@ -1517,6 +1804,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [activeConfigTab, setActiveConfigTab] = useState<ConfigEditorTab>('server-cfg');
   const [activeLogFilters, setActiveLogFilters] = useState<LogFilter[]>([...LOG_FILTER_OPTIONS]);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [isLogWrapEnabled, setIsLogWrapEnabled] = useState(true);
+  const [isFileWrapEnabled, setIsFileWrapEnabled] = useState(true);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [lifecycleState, setLifecycleState] = useState<ServerLifecycleState>('stopped');
   const [runtimePid, setRuntimePid] = useState<number | undefined>(undefined);
@@ -1571,14 +1860,38 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [gameConfigError, setGameConfigError] = useState<string | null>(null);
   const [savingConfigKey, setSavingConfigKey] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingServerAction, setPendingServerAction] = useState<ServerActionId | null>(null);
+  const [onlinePlayers, setOnlinePlayers] = useState<string[]>([]);
+  const [isPlayersRefreshing, setIsPlayersRefreshing] = useState(false);
+  const [playersError, setPlayersError] = useState<string | null>(null);
+  const [isPlayersBroadcasting, setIsPlayersBroadcasting] = useState(false);
+  const [playerMessageTarget, setPlayerMessageTarget] = useState<string | null>(null);
+  const [playerMessageText, setPlayerMessageText] = useState('');
+  const [isPlayerMessageSending, setIsPlayerMessageSending] = useState(false);
+  const [kickingPlayerName, setKickingPlayerName] = useState<string | null>(null);
   const [logPath, setLogPath] = useState<string | null>(null);
   const [logCategories, setLogCategories] = useState<LogCategory[]>([]);
   const [selectedLogRelativePath, setSelectedLogRelativePath] = useState<string | null>(null);
-  const [selectedLogPathByCategoryId, setSelectedLogPathByCategoryId] = useState<Record<string, string>>({});
   const [isLogListLoading, setIsLogListLoading] = useState(false);
   const [isLogFileLoading, setIsLogFileLoading] = useState(false);
   const [isLogFileTruncated, setIsLogFileTruncated] = useState(false);
   const [logLoadError, setLogLoadError] = useState<string | null>(null);
+  const [isClearingLogFiles, setIsClearingLogFiles] = useState(false);
+
+  // ─── Chat state ─────────────────────────────────────────────────────────────
+  const [chatChannels, setChatChannels] = useState<ChatChannelInfo[]>([]);
+  const [selectedChatChannelId, setSelectedChatChannelId] = useState<string | null>(null);
+  const [chatMessagesByChannel, setChatMessagesByChannel] = useState<Record<string, ChatMessage[]>>({});
+  const [chatInput, setChatInput] = useState('');
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const [isChatListLoading, setIsChatListLoading] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [chatAutoScroll, setChatAutoScroll] = useState(true);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLInputElement>(null);
+  const playerMessageInputRef = useRef<HTMLInputElement>(null);
+  const chatChannelsRef = useRef<ChatChannelInfo[]>([]);
+  const playersListCollectionRef = useRef<PlayersListCollection | null>(null);
   const [fileEntriesByDir, setFileEntriesByDir] = useState<Record<string, InstallationFileEntry[]>>({});
   const [expandedFileDirs, setExpandedFileDirs] = useState<string[]>(['']);
   const [openFileTabs, setOpenFileTabs] = useState<string[]>([]);
@@ -1589,6 +1902,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [isFileEditorLoading, setIsFileEditorLoading] = useState(false);
   const [isFileSaving, setIsFileSaving] = useState(false);
   const [fileTabError, setFileTabError] = useState<string | null>(null);
+  const [fileTabErrorPath, setFileTabErrorPath] = useState<string | null>(null);
   const [dashboardLayout, setDashboardLayout] = useState<DashboardLayout>(createDefaultDashboardLayout);
   const [dashboardLoaded, setDashboardLoaded] = useState(false);
   const [isLayoutEditMode, setIsLayoutEditMode] = useState(false);
@@ -1601,8 +1915,27 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [groupDropTarget, setGroupDropTarget] = useState<number | null>(null);
   const [quickActionDropTarget, setQuickActionDropTarget] = useState<number | null>(null);
   const [groupResizeDraft, setGroupResizeDraft] = useState<{ groupId: string; startY: number; startHeight: number } | null>(null);
+
+  // ─── Database tab state ─────────────────────────────────────────────────────
+  const [databaseSqlInput, setDatabaseSqlInput] = useState<string>(DATABASE_ENTITY_LIST_SQL);
+  const [databaseSqlMode, setDatabaseSqlMode] = useState<DatabaseSqlMode>('query');
+  const [databaseSqlOutput, setDatabaseSqlOutput] = useState<DatabaseSqlTable>({ columns: [], rows: [] });
+  const [databaseSqlRawLines, setDatabaseSqlRawLines] = useState<string[]>([]);
+  const [databaseSqlStatus, setDatabaseSqlStatus] = useState<string>('Run a query to inspect data.');
+  const [databaseSqlError, setDatabaseSqlError] = useState<string | null>(null);
+  const [databaseIsExecuting, setDatabaseIsExecuting] = useState(false);
+  const [databaseLastRequestId, setDatabaseLastRequestId] = useState<number | null>(null);
+  const [databaseEntities, setDatabaseEntities] = useState<DatabaseEntityRow[]>([]);
+  const [databaseEntityTypeFilter, setDatabaseEntityTypeFilter] = useState<string>('all');
+  const [databaseFactionFilter, setDatabaseFactionFilter] = useState<string>('all');
+  const [databaseSortKey, setDatabaseSortKey] = useState<DatabaseSortKey>('name-asc');
+  const [databaseClipboardMsg, setDatabaseClipboardMsg] = useState<string | null>(null);
+
   const logContainerRef = useRef<HTMLDivElement>(null);
   const groupContainerRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const pendingDbRequestRef = useRef<PendingDatabaseSqlRequest | null>(null);
+  const dbLinesByRequestRef = useRef<Map<number, string[]>>(new Map());
+  const dbTimeoutRef = useRef<number | null>(null);
 
   const { navigate } = useApp();
   const {
@@ -1635,6 +1968,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const hasGameApi = typeof window !== 'undefined' && !!window.launcher?.game;
   const hasDownloadApi = typeof window !== 'undefined' && !!window.launcher?.download;
   const hasStoreApi = typeof window !== 'undefined' && !!window.launcher?.store;
+  const isPoppedOutPanel = typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('panelMode') === 'popout';
 
   const serverConfigDefaults = useMemo<Record<string, string>>(
     () => Object.fromEntries(serverConfigSchemaFields.map((field) => [field.key, field.defaultValue])),
@@ -1649,32 +1984,36 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const serverDownloadStatus = effectiveServer ? downloadStatuses[effectiveServer.id] : undefined;
   const isUpdating = serverDownloadStatus?.state === 'checksums' || serverDownloadStatus?.state === 'downloading';
 
-  const selectedLogCategoryId = useMemo(() => {
+  const allLogFiles = useMemo(() => {
+    return logCategories
+      .flatMap((category) => category.files)
+      .map((file, index) => ({ file, index }))
+      .sort((a, b) => {
+        if (b.file.modifiedMs !== a.file.modifiedMs) {
+          return b.file.modifiedMs - a.file.modifiedMs;
+        }
+        if (a.file.relativePath !== b.file.relativePath) {
+          return a.file.relativePath.localeCompare(b.file.relativePath);
+        }
+        return a.index - b.index;
+      })
+      .map(({ file }) => file);
+  }, [logCategories]);
+
+  const selectedLogFile = useMemo(() => {
     if (!selectedLogRelativePath) return null;
-    const category = logCategories.find((item) => item.files.some((file) => file.relativePath === selectedLogRelativePath));
-    return category?.id ?? null;
-  }, [logCategories, selectedLogRelativePath]);
-
-  const selectedLogCategoryFiles = useMemo(() => {
-    if (!selectedLogCategoryId) return [] as LogFileItem[];
-    return logCategories.find((category) => category.id === selectedLogCategoryId)?.files ?? [];
-  }, [logCategories, selectedLogCategoryId]);
-
-  const selectedLogCategory = useMemo(() => {
-    if (!selectedLogCategoryId) return null;
-    return logCategories.find((category) => category.id === selectedLogCategoryId) ?? null;
-  }, [logCategories, selectedLogCategoryId]);
+    return allLogFiles.find((file) => file.relativePath === selectedLogRelativePath) ?? null;
+  }, [allLogFiles, selectedLogRelativePath]);
 
   const selectedLogRelativePathRef = useRef<string | null>(null);
-  const selectedLogPathByCategoryRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
     selectedLogRelativePathRef.current = selectedLogRelativePath;
   }, [selectedLogRelativePath]);
 
   useEffect(() => {
-    selectedLogPathByCategoryRef.current = selectedLogPathByCategoryId;
-  }, [selectedLogPathByCategoryId]);
+    chatChannelsRef.current = chatChannels;
+  }, [chatChannels]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.launcher?.app?.getServerPanelSchema) return;
@@ -1778,7 +2117,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     if (!effectiveServer || !hasGameApi) {
       setLogCategories([]);
       setSelectedLogRelativePath(null);
-      setSelectedLogPathByCategoryId({});
       setLogPath(null);
       return;
     }
@@ -1795,17 +2133,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       const nextSelected = currentSelection && knownPaths.has(currentSelection)
         ? currentSelection
         : fallback;
-
-      const nextByCategory = { ...selectedLogPathByCategoryRef.current };
-      for (const category of catalog.categories) {
-        const currentForCategory = nextByCategory[category.id];
-        const inCategory = category.files.some((file) => file.relativePath === currentForCategory);
-        if (!inCategory && category.files[0]) {
-          nextByCategory[category.id] = category.files[0].relativePath;
-        }
-      }
-      setSelectedLogPathByCategoryId(nextByCategory);
-
       setSelectedLogRelativePath(nextSelected ?? null);
       setLogPath(nextSelected ? `logs/${nextSelected}` : null);
     } catch (error) {
@@ -1817,6 +2144,161 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setIsLogListLoading(false);
     }
   }, [effectiveServer, hasGameApi]);
+
+  // ─── Chat callbacks ──────────────────────────────────────────────────────────
+
+  const reloadChatChannels = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi) {
+      setChatChannels([]);
+      setSelectedChatChannelId(null);
+      return;
+    }
+    setIsChatListLoading(true);
+    try {
+      const files = await window.launcher.game.listChatFiles(effectiveServer.path);
+      const mergedChannels = mergeFetchedChatChannels(files, chatChannelsRef.current);
+      setChatChannels(mergedChannels);
+      // Auto-select the "all" (General) channel if nothing selected
+      setSelectedChatChannelId((prev) => {
+        if (prev && mergedChannels.some((f) => f.channelId === prev)) return prev;
+        const general = mergedChannels.find((f) => f.channelType === 'general');
+        return general?.channelId ?? mergedChannels[0]?.channelId ?? null;
+      });
+    } catch (error) {
+      console.warn('[ServerPanel] Failed to list chat files:', error);
+      setChatChannels((prev) => mergeFetchedChatChannels([], prev));
+    } finally {
+      setIsChatListLoading(false);
+    }
+  }, [effectiveServer, hasGameApi]);
+
+  const loadChatMessagesForChannel = useCallback(async (channelId: string | null) => {
+    if (!channelId || !effectiveServer || !hasGameApi) return;
+    const channel = chatChannels.find((c) => c.channelId === channelId);
+    if (!channel) return;
+
+    if (!channel.fileName) {
+      setIsChatLoading(false);
+      setChatError(null);
+      return;
+    }
+
+    setIsChatLoading(true);
+    setChatError(null);
+    try {
+      const result = await window.launcher.game.readChatFile(effectiveServer.path, channel.fileName);
+      if (result.error) {
+        setChatError(result.error);
+        return;
+      }
+      const lines = result.content.split('\n');
+      const messages: ChatMessage[] = [];
+      for (const line of lines) {
+        const msg = parseChatLogLine(line, channelId);
+        if (msg) messages.push(msg);
+      }
+      setChatMessagesByChannel((prev) => ({ ...prev, [channelId]: messages }));
+    } catch (error) {
+      setChatError(`Failed to load chat messages: ${String(error)}`);
+    } finally {
+      setIsChatLoading(false);
+    }
+  }, [chatChannels, effectiveServer, hasGameApi]);
+
+  const handleSendChatMessage = useCallback(async () => {
+    const text = chatInput.trim();
+    if (!text || !effectiveServer || !hasGameApi || !selectedChatChannelId) return;
+
+    setChatInput('');
+    setChatError(null);
+
+    const channel = chatChannels.find((c) => c.channelId === selectedChatChannelId);
+    let command: string;
+
+    if (channel?.channelType === 'direct') {
+      // For DMs, extract recipient name from channel label "DM: <combined>"
+      // We can't easily reverse the combined name, so prompt the user to use broadcast
+      // and show the DM label. For now, we use the combined part as-is after ##
+      const dmTarget = channel.channelId.slice(2); // strip ##
+      command = `/server_message_to plain "${dmTarget}" "${text}"`;
+    } else {
+      command = `/server_message_broadcast plain "${text}"`;
+    }
+
+    const result = await window.launcher.game.sendServerCommand(effectiveServer.id, command);
+    if (!result.success) {
+      setChatError(result.error ?? 'Failed to send message.');
+    } else {
+      // Optimistically add the message to the local buffer as a system message
+      const optimistic: ChatMessage = {
+        timestamp: new Date().toISOString().replace('T', ' - ').replace(/\.\d+Z$/, ''),
+        sender: '[SERVER]',
+        receiverType: channel?.channelType === 'direct' ? 'DIRECT' : 'CHANNEL',
+        receiver: selectedChatChannelId,
+        text,
+      };
+      setChatMessagesByChannel((prev) => {
+        const existing = prev[selectedChatChannelId] ?? [];
+        return { ...prev, [selectedChatChannelId]: [...existing, optimistic] };
+      });
+    }
+  }, [chatChannels, chatInput, effectiveServer, hasGameApi, selectedChatChannelId]);
+
+  // Load chat channels when chat tab is active
+  useEffect(() => {
+    if (activeTab !== 'chat') return;
+    void reloadChatChannels();
+  }, [activeTab, reloadChatChannels]);
+
+  // Load messages when channel selection changes
+  useEffect(() => {
+    if (activeTab !== 'chat') return;
+    void loadChatMessagesForChannel(selectedChatChannelId);
+  }, [activeTab, selectedChatChannelId, loadChatMessagesForChannel]);
+
+  // Subscribe to live chat messages from the server process
+  useEffect(() => {
+    if (!effectiveServer || typeof window === 'undefined' || !window.launcher?.game?.onChatMessage) return;
+
+    const unsubscribe = window.launcher.game.onChatMessage((data) => {
+      if (data.installationId !== effectiveServer.id) return;
+
+      const msg: ChatMessage = {
+        timestamp: new Date(data.timestamp).toLocaleString(),
+        sender: data.sender,
+        receiverType: data.receiverType,
+        receiver: data.receiver,
+        text: data.text,
+      };
+
+      // Map the receiver to a channelId
+      // For CHANNEL messages, receiver is the channel name (e.g. "all", "Faction1001")
+      // For DIRECT messages, receiver is the recipient name, not the channel ##name
+      // We use the receiver as-is; the channel sidebar is keyed by channelId from chat files
+      const channelId = normalizeLiveChatChannelId(data.receiverType, data.receiver);
+
+      setChatMessagesByChannel((prev) => {
+        const existing = prev[channelId] ?? [];
+        return { ...prev, [channelId]: [...existing, msg] };
+      });
+
+      setChatChannels((prev) => {
+        if (prev.some((c) => c.channelId === channelId)) return prev;
+        return [buildLiveChannelInfo(channelId, data.receiverType), ...prev];
+      });
+
+      // Auto-focus the first discovered live channel when no selection exists yet.
+      setSelectedChatChannelId((prev) => prev ?? channelId);
+    });
+
+    return unsubscribe;
+  }, [effectiveServer]);
+
+  // Auto-scroll the chat container
+  useEffect(() => {
+    if (!chatAutoScroll || !chatContainerRef.current) return;
+    chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+  }, [chatMessagesByChannel, selectedChatChannelId, chatAutoScroll]);
 
   const refreshRuntimeStatus = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) {
@@ -1830,11 +2312,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       const status = await window.launcher.game.status(effectiveServer.id);
       setRuntimePid(status.pid);
       setRuntimeUptimeMs(status.uptime);
-      setLifecycleState((prev) => {
-        if (status.running) return 'running';
-        if (prev === 'starting' || prev === 'stopping') return prev;
-        return 'stopped';
-      });
+      setLifecycleState(status.running ? 'running' : 'stopped');
     } catch (error) {
       console.error('[ServerPanel] Failed to refresh server status:', error);
       setLifecycleState('error');
@@ -1853,12 +2331,25 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   useEffect(() => {
     setLogs([]);
     setActionError(null);
+    setPendingServerAction(null);
+    setOnlinePlayers([]);
+    setIsPlayersRefreshing(false);
+    setPlayersError(null);
+    setIsPlayersBroadcasting(false);
+    setPlayerMessageTarget(null);
+    setPlayerMessageText('');
+    setIsPlayerMessageSending(false);
+    setKickingPlayerName(null);
+    if (playersListCollectionRef.current) {
+      window.clearTimeout(playersListCollectionRef.current.timeoutId);
+      playersListCollectionRef.current = null;
+    }
     setLogPath(null);
     setLogCategories([]);
     setSelectedLogRelativePath(null);
-    setSelectedLogPathByCategoryId({});
     setIsLogFileTruncated(false);
     setLogLoadError(null);
+    setIsClearingLogFiles(false);
     setActiveConfigTab('server-cfg');
     setGameConfigXmlText('');
     setGameConfigFields([]);
@@ -1892,6 +2383,32 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setFileTabError(null);
     setServerNameInput(effectiveServer?.name ?? '');
     setServerPortInput(effectiveServer?.port?.trim() || '4242');
+    // Reset chat state on server change
+    setChatChannels([]);
+    setSelectedChatChannelId(null);
+    setChatMessagesByChannel({});
+    setChatInput('');
+    setChatError(null);
+    // Reset database state on server change
+    setDatabaseSqlInput(DATABASE_ENTITY_LIST_SQL);
+    setDatabaseSqlMode('query');
+    setDatabaseSqlOutput({ columns: [], rows: [] });
+    setDatabaseSqlRawLines([]);
+    setDatabaseSqlStatus('Run a query to inspect data.');
+    setDatabaseSqlError(null);
+    setDatabaseIsExecuting(false);
+    setDatabaseLastRequestId(null);
+    setDatabaseEntities([]);
+    setDatabaseEntityTypeFilter('all');
+    setDatabaseFactionFilter('all');
+    setDatabaseSortKey('name-asc');
+    setDatabaseClipboardMsg(null);
+    pendingDbRequestRef.current = null;
+    dbLinesByRequestRef.current.clear();
+    if (dbTimeoutRef.current !== null) {
+      window.clearTimeout(dbTimeoutRef.current);
+      dbTimeoutRef.current = null;
+    }
   }, [effectiveServer?.id]);
 
   const readFactionConfigXmlFromInstallation = useCallback(async (): Promise<{ content: string; relativePath: string; error?: string }> => {
@@ -1911,7 +2428,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     return {
       content: '',
       relativePath: FACTION_CONFIG_PATH_CANDIDATES[0],
-      error: firstError ?? `Could not find ${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}.`,
+      error: firstError ?? `Could not find faction config template (${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}).`,
     };
   }, [effectiveServer, hasGameApi]);
 
@@ -1934,7 +2451,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       if (!firstError) firstError = result.error;
     }
 
-    return { success: false, error: firstError ?? `Could not write ${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}.` };
+    return {
+      success: false,
+      error: firstError ?? `Could not write faction config template (${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}).`,
+    };
   }, [effectiveServer, factionConfigRelativePath, hasGameApi]);
 
   useEffect(() => {
@@ -2085,7 +2605,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         if (cancelled) return;
 
         if (payload.error) {
-          setFactionConfigError(`Failed to load FactionConfig.xml: ${payload.error}`);
+          setFactionConfigError(`Failed to load faction config template: ${payload.error}`);
           setFactionConfigFields([]);
           setFactionConfigValues({});
           setFactionConfigSavedValues({});
@@ -2098,7 +2618,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         setFactionConfigLoadedServerId(effectiveServer.id);
       } catch (error) {
         if (cancelled) return;
-        setFactionConfigError(`Failed to load FactionConfig.xml: ${String(error)}`);
+        setFactionConfigError(`Failed to load faction config template: ${String(error)}`);
         setFactionConfigFields([]);
         setFactionConfigValues({});
         setFactionConfigSavedValues({});
@@ -2156,8 +2676,19 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
   }, [fileEntriesByDir, loadFileDirectory]);
 
-  const openFileInTab = useCallback(async (relativePath: string) => {
+  const openFileInTab = useCallback(async (entry: InstallationFileEntry) => {
     if (!effectiveServer || !hasGameApi) return;
+
+    if (!entry.isEditableText) {
+      const errorPath = entry.relativePath;
+      setFileTabError(entry.nonEditableReason ?? `Cannot open ${errorPath}: binary files are not supported in the editor.`);
+      setFileTabErrorPath(errorPath);
+      setOpenFileTabs((prev) => (prev.includes(errorPath) ? prev : [...prev, errorPath]));
+      setActiveFileTabPath(errorPath);
+      return;
+    }
+
+    const relativePath = entry.relativePath;
 
     setOpenFileTabs((prev) => (prev.includes(relativePath) ? prev : [...prev, relativePath]));
     setActiveFileTabPath(relativePath);
@@ -2166,10 +2697,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     setIsFileEditorLoading(true);
     setFileTabError(null);
+    setFileTabErrorPath(null);
     try {
       const payload = await window.launcher.game.readInstallationFile(effectiveServer.path, relativePath);
       if (payload.error) {
         setFileTabError(`Failed to open ${relativePath}: ${payload.error}`);
+        setFileTabErrorPath(relativePath);
         return;
       }
 
@@ -2177,6 +2710,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setSavedFileContentByPath((prev) => ({ ...prev, [relativePath]: payload.content }));
     } catch (error) {
       setFileTabError(`Failed to open ${relativePath}: ${String(error)}`);
+      setFileTabErrorPath(relativePath);
     } finally {
       setIsFileEditorLoading(false);
     }
@@ -2191,6 +2725,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       });
       return next;
     });
+    setFileTabErrorPath((current) => {
+      if (current === relativePath) {
+        setFileTabError(null);
+        return null;
+      }
+      return current;
+    });
   }, []);
 
   const reloadActiveFileTab = useCallback(async () => {
@@ -2198,16 +2739,19 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     setIsFileEditorLoading(true);
     setFileTabError(null);
+    setFileTabErrorPath(null);
     try {
       const payload = await window.launcher.game.readInstallationFile(effectiveServer.path, activeFileTabPath);
       if (payload.error) {
         setFileTabError(`Failed to reload ${activeFileTabPath}: ${payload.error}`);
+        setFileTabErrorPath(activeFileTabPath);
         return;
       }
       setFileContentByPath((prev) => ({ ...prev, [activeFileTabPath]: payload.content }));
       setSavedFileContentByPath((prev) => ({ ...prev, [activeFileTabPath]: payload.content }));
     } catch (error) {
       setFileTabError(`Failed to reload ${activeFileTabPath}: ${String(error)}`);
+      setFileTabErrorPath(activeFileTabPath);
     } finally {
       setIsFileEditorLoading(false);
     }
@@ -2218,17 +2762,20 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     setIsFileSaving(true);
     setFileTabError(null);
+    setFileTabErrorPath(null);
     try {
       const content = fileContentByPath[activeFileTabPath] ?? '';
       const result = await window.launcher.game.writeInstallationFile(effectiveServer.path, activeFileTabPath, content);
       if (!result.success) {
         setFileTabError(result.error ?? `Failed to save ${activeFileTabPath}.`);
+        setFileTabErrorPath(activeFileTabPath);
         return;
       }
 
       setSavedFileContentByPath((prev) => ({ ...prev, [activeFileTabPath]: content }));
     } catch (error) {
       setFileTabError(`Failed to save ${activeFileTabPath}: ${String(error)}`);
+      setFileTabErrorPath(activeFileTabPath);
     } finally {
       setIsFileSaving(false);
     }
@@ -2430,28 +2977,333 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     void refreshRuntimeStatus();
   }, [effectiveServer, hasGameApi, activeAccount?.id, refreshRuntimeStatus]);
 
+  const sendServerCommandOrThrow = useCallback(async (command: string) => {
+    if (!effectiveServer || !hasGameApi) {
+      throw new Error('Server context unavailable.');
+    }
+
+    const result = await window.launcher.game.sendServerCommand(effectiveServer.id, command);
+    if (!result.success) {
+      throw new Error(result.error ?? `Failed to execute command: ${command}`);
+    }
+  }, [effectiveServer, hasGameApi]);
+
+  const refreshPlayers = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') {
+      setOnlinePlayers([]);
+      setIsPlayersRefreshing(false);
+      return;
+    }
+
+    const existing = playersListCollectionRef.current;
+    if (existing) {
+      window.clearTimeout(existing.timeoutId);
+      playersListCollectionRef.current = null;
+    }
+
+    setPlayersError(null);
+    setIsPlayersRefreshing(true);
+
+    const token = Date.now();
+    const names = new Set<string>();
+    const timeoutId = window.setTimeout(() => {
+      const active = playersListCollectionRef.current;
+      if (!active || active.token !== token) return;
+      setOnlinePlayers(Array.from(active.names).sort((a, b) => a.localeCompare(b)));
+      setIsPlayersRefreshing(false);
+      playersListCollectionRef.current = null;
+    }, PLAYER_LIST_SETTLE_MS);
+
+    playersListCollectionRef.current = { token, names, timeoutId };
+
+    const result = await window.launcher.game.sendServerCommand(effectiveServer.id, '/player_list');
+    if (!result.success) {
+      window.clearTimeout(timeoutId);
+      playersListCollectionRef.current = null;
+      setIsPlayersRefreshing(false);
+      setPlayersError(result.error ?? 'Failed to request player list.');
+    }
+  }, [effectiveServer, hasGameApi, lifecycleState]);
+
+  const handleKickPlayer = useCallback(async (playerName: string) => {
+    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') return;
+    if (kickingPlayerName || isPlayerMessageSending || isPlayersBroadcasting) return;
+
+    const confirmed = typeof window !== 'undefined'
+      ? window.confirm(`Kick player \"${playerName}\" from the server?`)
+      : true;
+    if (!confirmed) return;
+
+    const reasonRaw = typeof window !== 'undefined'
+      ? window.prompt(`Optional kick reason for ${playerName} (leave empty for no reason):`, '')
+      : '';
+    if (reasonRaw === null) return;
+    const reason = reasonRaw.trim();
+
+    setPlayersError(null);
+    setKickingPlayerName(playerName);
+    try {
+      if (reason) {
+        await sendServerCommandOrThrow(`/kick_reason ${quoteServerCommandArg(playerName)} ${quoteServerCommandArg(reason)}`);
+      } else {
+        await sendServerCommandOrThrow(`/kick ${quoteServerCommandArg(playerName)}`);
+      }
+      if (playerMessageTarget === playerName) {
+        setPlayerMessageTarget(null);
+        setPlayerMessageText('');
+      }
+      void refreshPlayers();
+    } catch (error) {
+      setPlayersError(`Failed to kick ${playerName}: ${String(error)}`);
+    } finally {
+      setKickingPlayerName(null);
+    }
+  }, [
+    effectiveServer,
+    hasGameApi,
+    isPlayerMessageSending,
+    isPlayersBroadcasting,
+    kickingPlayerName,
+    lifecycleState,
+    playerMessageTarget,
+    refreshPlayers,
+    sendServerCommandOrThrow,
+  ]);
+
+  const sendPlayerMessage = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') return;
+    if (!playerMessageTarget || isPlayerMessageSending || kickingPlayerName || isPlayersBroadcasting) return;
+
+    const text = playerMessageText.trim();
+    if (!text) {
+      setPlayersError('Enter a message before sending.');
+      return;
+    }
+
+    setPlayersError(null);
+    setIsPlayerMessageSending(true);
+    try {
+      const command = `/server_message_to plain ${quoteServerCommandArg(playerMessageTarget)} ${quoteServerCommandArg(text)}`;
+      await sendServerCommandOrThrow(command);
+      setPlayerMessageText('');
+      setPlayerMessageTarget(null);
+    } catch (error) {
+      setPlayersError(`Failed to send message to ${playerMessageTarget}: ${String(error)}`);
+    } finally {
+      setIsPlayerMessageSending(false);
+    }
+  }, [
+    effectiveServer,
+    hasGameApi,
+    kickingPlayerName,
+    lifecycleState,
+    isPlayersBroadcasting,
+    playerMessageTarget,
+    playerMessageText,
+    isPlayerMessageSending,
+    sendServerCommandOrThrow,
+  ]);
+
+  const messageAllOnlinePlayers = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') return;
+    if (isPlayersBroadcasting || isPlayerMessageSending || kickingPlayerName) return;
+
+    const messageRaw = typeof window !== 'undefined'
+      ? window.prompt('Message all online players:', '')
+      : '';
+    if (messageRaw === null) return;
+
+    const message = messageRaw.trim();
+    if (!message) return;
+
+    setPlayersError(null);
+    setIsPlayersBroadcasting(true);
+    try {
+      await sendServerCommandOrThrow(`/server_message_broadcast plain ${quoteServerCommandArg(message)}`);
+    } catch (error) {
+      setPlayersError(`Failed to message all players: ${String(error)}`);
+    } finally {
+      setIsPlayersBroadcasting(false);
+    }
+  }, [
+    effectiveServer,
+    hasGameApi,
+    lifecycleState,
+    isPlayersBroadcasting,
+    isPlayerMessageSending,
+    kickingPlayerName,
+    sendServerCommandOrThrow,
+  ]);
+
+  useEffect(() => {
+    if (!playerMessageTarget) return;
+    if (onlinePlayers.includes(playerMessageTarget)) return;
+    setPlayerMessageTarget(null);
+    setPlayerMessageText('');
+  }, [onlinePlayers, playerMessageTarget]);
+
+  useEffect(() => {
+    if (!playerMessageTarget || !playerMessageInputRef.current) return;
+    playerMessageInputRef.current.focus();
+  }, [playerMessageTarget]);
+
+  const scheduleTimedShutdown = useCallback(async (seconds: number) => {
+    await sendServerCommandOrThrow(`/shutdown ${seconds}`);
+  }, [sendServerCommandOrThrow]);
+
+  const sendBroadcastNotice = useCallback(async (message: string, type: 'plain' | 'info' | 'warning' | 'error' = 'warning') => {
+    await sendServerCommandOrThrow(`/server_message_broadcast ${type} ${quoteServerCommandArg(message)}`);
+  }, [sendServerCommandOrThrow]);
+
+  const waitForServerToStop = useCallback(async (timeoutMs: number): Promise<boolean> => {
+    if (!effectiveServer || !hasGameApi) return false;
+
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const status = await window.launcher.game.status(effectiveServer.id);
+      if (!status.running) {
+        return true;
+      }
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, SHUTDOWN_POLL_INTERVAL_MS);
+      });
+    }
+
+    return false;
+  }, [effectiveServer, hasGameApi]);
+
   const stopServer = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) return;
 
     setActionError(null);
+    setPendingServerAction('stop');
     setLifecycleState('stopping');
-    const result = await window.launcher.game.stop(effectiveServer.id);
+    try {
+      await scheduleTimedShutdown(STOP_SHUTDOWN_SECONDS);
+      const stopped = await waitForServerToStop((STOP_SHUTDOWN_SECONDS * 1000) + SHUTDOWN_EXTRA_GRACE_MS);
+      if (!stopped) {
+        setLifecycleState('error');
+        setActionError('Timed shutdown was scheduled, but the server did not stop in time.');
+        return;
+      }
 
-    if (!result.success) {
+      setLifecycleState('stopped');
+      setRuntimePid(undefined);
+      setRuntimeUptimeMs(undefined);
+    } catch (error) {
       setLifecycleState('error');
-      setActionError('Failed to stop server.');
+      setActionError(`Failed to schedule server shutdown: ${String(error)}`);
+    } finally {
+      setPendingServerAction(null);
+    }
+  }, [effectiveServer, hasGameApi, scheduleTimedShutdown, waitForServerToStop]);
+
+  const forceStopServer = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || pendingServerAction !== 'stop') return;
+
+    setActionError(null);
+    const result = await window.launcher.game.stop(effectiveServer.id);
+    if (!result.success) {
+      setActionError('Failed to force stop server.');
       return;
     }
 
+    setPendingServerAction(null);
     setLifecycleState('stopped');
     setRuntimePid(undefined);
     setRuntimeUptimeMs(undefined);
-  }, [effectiveServer, hasGameApi]);
+  }, [effectiveServer, hasGameApi, pendingServerAction]);
+
+  // ─── Database callbacks ─────────────────────────────────────────────────────
+
+  const clearPendingDatabaseSql = useCallback(() => {
+    if (dbTimeoutRef.current !== null) {
+      window.clearTimeout(dbTimeoutRef.current);
+      dbTimeoutRef.current = null;
+    }
+    pendingDbRequestRef.current = null;
+    setDatabaseIsExecuting(false);
+  }, []);
+
+  const executeDatabaseSql = useCallback(async (query: string, mode: DatabaseSqlMode) => {
+    const trimmed = query.trim();
+    if (!trimmed || !effectiveServer || !hasGameApi) return;
+    if (lifecycleState !== 'running') {
+      setDatabaseSqlError('Server must be running to execute SQL admin commands.');
+      return;
+    }
+
+    clearPendingDatabaseSql();
+    setDatabaseSqlError(null);
+    setDatabaseSqlStatus('Command sent — waiting for SQL output in server log…');
+    setDatabaseClipboardMsg(null);
+
+    pendingDbRequestRef.current = { mode, awaitingRequestId: true, requestId: null };
+    setDatabaseIsExecuting(true);
+
+    const command = `/${DATABASE_CMD_BY_MODE[mode]} ${quoteServerCommandArg(trimmed)}`;
+    const result = await window.launcher.game.sendServerCommand(effectiveServer.id, command);
+    if (!result.success) {
+      clearPendingDatabaseSql();
+      setDatabaseSqlError(result.error ?? 'Failed to submit SQL command.');
+      return;
+    }
+
+    dbTimeoutRef.current = window.setTimeout(() => {
+      if (!pendingDbRequestRef.current) return;
+      clearPendingDatabaseSql();
+      setDatabaseSqlError('Timed out (15 s) waiting for SQL response in server log.');
+    }, 15_000);
+  }, [clearPendingDatabaseSql, effectiveServer, hasGameApi, lifecycleState]);
+
+  const loadDatabaseEntities = useCallback(async () => {
+    setDatabaseSqlInput(DATABASE_ENTITY_LIST_SQL);
+    setDatabaseSqlMode('query');
+    await executeDatabaseSql(DATABASE_ENTITY_LIST_SQL, 'query');
+  }, [executeDatabaseSql]);
+
+  const copyToClipboard = useCallback(async (text: string, label: string) => {
+    if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+      setDatabaseClipboardMsg('Clipboard API unavailable.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setDatabaseClipboardMsg(`${label} copied.`);
+    } catch (err) {
+      setDatabaseClipboardMsg(`Copy failed: ${String(err)}`);
+    }
+  }, []);
 
   const restartServer = useCallback(async () => {
-    await stopServer();
-    await startServer();
-  }, [startServer, stopServer]);
+    if (!effectiveServer || !hasGameApi) return;
+
+    setActionError(null);
+    setPendingServerAction('restart');
+    setLifecycleState('stopping');
+
+    try {
+      await sendBroadcastNotice(`Server restart in ${RESTART_SHUTDOWN_SECONDS} seconds.`);
+      await scheduleTimedShutdown(RESTART_SHUTDOWN_SECONDS);
+
+      const stopped = await waitForServerToStop((RESTART_SHUTDOWN_SECONDS * 1000) + SHUTDOWN_EXTRA_GRACE_MS);
+      if (!stopped) {
+        setLifecycleState('error');
+        setActionError('Restart timed out while waiting for server shutdown.');
+        return;
+      }
+
+      setLifecycleState('stopped');
+      setRuntimePid(undefined);
+      setRuntimeUptimeMs(undefined);
+      await startServer();
+    } catch (error) {
+      setLifecycleState('error');
+      setActionError(`Failed to restart server: ${String(error)}`);
+    } finally {
+      setPendingServerAction(null);
+    }
+  }, [effectiveServer, hasGameApi, scheduleTimedShutdown, sendBroadcastNotice, startServer, waitForServerToStop]);
 
   const updateServer = useCallback(async () => {
     if (!effectiveServer || !hasDownloadApi) return;
@@ -2463,12 +3315,163 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
 
     setActionError(null);
+    setPendingServerAction('update');
     try {
+      if (hasGameApi) {
+        const status = await window.launcher.game.status(effectiveServer.id);
+        if (status.running) {
+          setLifecycleState('stopping');
+          await sendBroadcastNotice(`Server update scheduled. Restarting in ${UPDATE_SHUTDOWN_SECONDS} seconds.`);
+          await scheduleTimedShutdown(UPDATE_SHUTDOWN_SECONDS);
+
+          const stopped = await waitForServerToStop((UPDATE_SHUTDOWN_SECONDS * 1000) + SHUTDOWN_EXTRA_GRACE_MS);
+          if (!stopped) {
+            setLifecycleState('error');
+            setActionError('Update timed out while waiting for server shutdown.');
+            return;
+          }
+
+          setLifecycleState('stopped');
+          setRuntimePid(undefined);
+          setRuntimeUptimeMs(undefined);
+        }
+      }
+
       await window.launcher.download.start(effectiveServer.id, buildPath, effectiveServer.path);
     } catch (error) {
       setActionError(`Failed to start update: ${String(error)}`);
+    } finally {
+      setPendingServerAction(null);
     }
-  }, [effectiveServer, hasDownloadApi, resolveBuildPath]);
+  }, [
+    effectiveServer,
+    hasDownloadApi,
+    hasGameApi,
+    resolveBuildPath,
+    scheduleTimedShutdown,
+    sendBroadcastNotice,
+    waitForServerToStop,
+  ]);
+
+  useEffect(() => {
+    if (!effectiveServer || typeof window === 'undefined' || !window.launcher?.game?.onLog) return;
+
+    const cleanup = window.launcher.game.onLog((data) => {
+      if (data.installationId !== effectiveServer.id) return;
+
+      // ── Player-list parsing ────────────────────────────────────────────────
+      const playerNameMatch = data.message.match(/\[PL\]\s+Name:\s*(.+)$/i);
+      if (playerNameMatch) {
+        const playerName = playerNameMatch[1].trim();
+        if (playerName) {
+          const active = playersListCollectionRef.current;
+          if (active) active.names.add(playerName);
+        }
+      }
+
+      // ── Database SQL output parsing ────────────────────────────────────────
+      const pending = pendingDbRequestRef.current;
+      if (!pending) return;
+
+      // Permission error
+      if (data.message.includes('YOU DO NOT HAVE PERMISSIONS TO DO SQL QUERIES')) {
+        clearPendingDatabaseSql();
+        setDatabaseSqlError('Permission denied. Add your name to SQL_PERMISSION in server.cfg.');
+        return;
+      }
+
+      // "---------- SQL QUERY N BEGIN ----------"
+      const beginMatch = data.message.match(/SQL QUERY\s+(\d+)\s+BEGIN/i);
+      if (beginMatch) {
+        const rid = Number.parseInt(beginMatch[1], 10);
+        dbLinesByRequestRef.current.set(rid, []);
+        if (pending.awaitingRequestId) {
+          pending.awaitingRequestId = false;
+          pending.requestId = rid;
+          setDatabaseLastRequestId(rid);
+        }
+        return;
+      }
+
+      // "SQL#N: <csv-row>"
+      const rowMatch = data.message.match(/^SQL#(\d+):\s*(.*)$/);
+      if (rowMatch) {
+        const rid = Number.parseInt(rowMatch[1], 10);
+        const lines = dbLinesByRequestRef.current.get(rid) ?? [];
+        lines.push(rowMatch[2]);
+        dbLinesByRequestRef.current.set(rid, lines);
+        return;
+      }
+
+      // "---------- SQL QUERY N END ----------"
+      const endMatch = data.message.match(/SQL QUERY\s+(\d+)\s+END/i);
+      if (endMatch) {
+        const rid = Number.parseInt(endMatch[1], 10);
+        const lines = dbLinesByRequestRef.current.get(rid) ?? [];
+        dbLinesByRequestRef.current.delete(rid);
+        if (pending.requestId !== rid) return;
+
+        const savedMode = pending.mode;
+        clearPendingDatabaseSql();
+
+        setDatabaseSqlRawLines(lines);
+        const table = parseDatabaseSqlTable(lines);
+        setDatabaseSqlOutput(table);
+
+        if (savedMode === 'query') {
+          const entities = parseDatabaseEntities(table);
+          setDatabaseEntities(entities);
+          setDatabaseSqlStatus(`Query completed — ${table.rows.length} row${table.rows.length === 1 ? '' : 's'} returned.`);
+        } else if (savedMode === 'update') {
+          setDatabaseSqlStatus('Update completed. SQL_UPDATE does not return row data.');
+        } else {
+          setDatabaseSqlStatus(`Insert completed — ${table.rows.length} generated key row${table.rows.length === 1 ? '' : 's'} returned.`);
+        }
+      }
+    });
+
+    return cleanup;
+  }, [clearPendingDatabaseSql, effectiveServer]);
+
+  useEffect(() => {
+    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') {
+      setOnlinePlayers([]);
+      setIsPlayersRefreshing(false);
+      setPlayersError(null);
+      if (playersListCollectionRef.current) {
+        window.clearTimeout(playersListCollectionRef.current.timeoutId);
+        playersListCollectionRef.current = null;
+      }
+      return;
+    }
+
+    void refreshPlayers();
+    const interval = window.setInterval(() => {
+      void refreshPlayers();
+    }, PLAYER_LIST_POLL_MS);
+
+    return () => {
+      window.clearInterval(interval);
+      if (playersListCollectionRef.current) {
+        window.clearTimeout(playersListCollectionRef.current.timeoutId);
+        playersListCollectionRef.current = null;
+      }
+    };
+  }, [effectiveServer?.id, hasGameApi, lifecycleState, refreshPlayers]);
+
+  // Auto-load entity list when switching to the database tab (only if no data yet)
+  useEffect(() => {
+    if (activeTab !== 'database') return;
+    if (databaseEntities.length > 0 || databaseIsExecuting) return;
+    void loadDatabaseEntities();
+  }, [activeTab, databaseEntities.length, databaseIsExecuting, loadDatabaseEntities]);
+
+  // Cleanup pending DB request timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (dbTimeoutRef.current !== null) window.clearTimeout(dbTimeoutRef.current);
+    };
+  }, []);
 
   const filteredLogs = logs.filter((log) => {
     if (activeLogFilters.length === 0) return false;
@@ -2497,6 +3500,43 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const areAllLogFiltersEnabled = activeLogFilters.length === LOG_FILTER_OPTIONS.length;
 
+  // ─── Database derived state ─────────────────────────────────────────────────
+  const databaseEntityTypeOptions = useMemo(
+    () => Array.from(new Set(databaseEntities.map((e) => e.typeValue))).sort((a, b) => a.localeCompare(b)),
+    [databaseEntities],
+  );
+
+  const databaseFactionOptions = useMemo(
+    () => Array.from(new Set(databaseEntities.map((e) => e.factionValue))).sort((a, b) => a.localeCompare(b)),
+    [databaseEntities],
+  );
+
+  const filteredSortedDatabaseEntities = useMemo(() => {
+    const filtered = databaseEntities.filter((e) => {
+      if (databaseEntityTypeFilter !== 'all' && e.typeValue !== databaseEntityTypeFilter) return false;
+      if (databaseFactionFilter !== 'all' && e.factionValue !== databaseFactionFilter) return false;
+      return true;
+    });
+
+    filtered.sort((a, b) => {
+      if (databaseSortKey === 'name-desc') return b.name.localeCompare(a.name);
+      return a.name.localeCompare(b.name);
+    });
+
+    return filtered;
+  }, [databaseEntities, databaseEntityTypeFilter, databaseFactionFilter, databaseSortKey]);
+
+  const databaseSectorGroups = useMemo(() => {
+    const bySector = new Map<string, DatabaseEntityRow[]>();
+    for (const entity of filteredSortedDatabaseEntities) {
+      const key = `${entity.x}, ${entity.y}, ${entity.z}`;
+      const arr = bySector.get(key);
+      if (arr) arr.push(entity);
+      else bySector.set(key, [entity]);
+    }
+    return Array.from(bySector.entries()).map(([sector, entities]) => ({ sector, entities }));
+  }, [filteredSortedDatabaseEntities]);
+
   const toggleLogFilter = useCallback((filter: LogFilter) => {
     setActiveLogFilters((prev) => {
       if (prev.includes(filter)) {
@@ -2516,7 +3556,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const canStart = !!effectiveServer && !isUpdating && lifecycleState !== 'running' && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
   const canStop = !!effectiveServer && !isUpdating && (lifecycleState === 'running' || lifecycleState === 'starting');
   const canRestart = !!effectiveServer && !isUpdating && lifecycleState === 'running';
-  const canUpdate = !!effectiveServer && !isUpdating && lifecycleState !== 'running' && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
+  const canUpdate = !!effectiveServer && !isUpdating && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
 
   const getLogLevelColor = (level: LogEntry['level']) => {
     switch (level) {
@@ -2725,9 +3765,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     {
       id: 'start',
       label: 'Start Server',
+      buttonLabel: lifecycleState === 'starting' ? 'Starting...' : 'Start Server',
       description: 'Launch the selected StarMade server using its current install and Java settings.',
       detail: lifecycleState === 'running' ? 'Server is already online.' : 'Starts the dedicated server process.',
       enabled: canStart,
+      isLoading: lifecycleState === 'starting',
       emphasis: 'accent',
       onClick: () => { void startServer(); },
     },
@@ -2735,27 +3777,50 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       id: 'stop',
       label: 'Stop Server',
       description: 'Gracefully stop the currently running dedicated server process.',
-      detail: lifecycleState === 'stopped' ? 'Server is currently offline.' : 'Sends a termination request to the server process.',
-      enabled: canStop,
+      buttonLabel: pendingServerAction === 'stop' ? 'Force Stop' : 'Stop Server',
+      detail: pendingServerAction === 'stop'
+        ? 'Timed shutdown is in progress. Click Force Stop to kill the process immediately.'
+        : lifecycleState === 'stopped'
+          ? 'Server is currently offline.'
+          : 'Schedules a timed shutdown and waits for the process to stop.',
+      enabled: pendingServerAction === 'stop' ? true : canStop,
+      isLoading: pendingServerAction === 'stop',
+      allowClickWhileLoading: pendingServerAction === 'stop',
       emphasis: 'danger',
-      onClick: () => { void stopServer(); },
+      onClick: () => {
+        if (pendingServerAction === 'stop') {
+          void forceStopServer();
+          return;
+        }
+        void stopServer();
+      },
     },
     {
       id: 'restart',
       label: 'Restart Server',
+      buttonLabel: pendingServerAction === 'restart' ? 'Restarting...' : 'Restart Server',
       description: 'Stop and then start the server again with the current configuration.',
       detail: 'Useful after config changes or when you want a clean runtime reset.',
       enabled: canRestart,
+      isLoading: pendingServerAction === 'restart',
       onClick: () => { void restartServer(); },
     },
     {
       id: 'update',
-      label: isUpdating ? `Updating (${serverDownloadStatus?.percent ?? 0}%)` : 'Update Server',
+      label: 'Update Server',
+      buttonLabel: isUpdating
+        ? `Updating (${serverDownloadStatus?.percent ?? 0}%)`
+        : pendingServerAction === 'update'
+          ? 'Scheduling Update...'
+          : 'Update Server',
       description: 'Download and verify the selected StarMade server version into this server path.',
       detail: isUpdating
         ? `Download state: ${serverDownloadStatus?.state ?? 'downloading'}`
+        : pendingServerAction === 'update'
+          ? 'Broadcasting update notice and waiting for timed shutdown.'
         : 'Checks the current version manifest and updates local files.',
       enabled: canUpdate,
+      isLoading: isUpdating || pendingServerAction === 'update',
       onClick: () => { void updateServer(); },
     },
   ]), [
@@ -2765,6 +3830,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     canUpdate,
     isUpdating,
     lifecycleState,
+    pendingServerAction,
+    forceStopServer,
     restartServer,
     serverDownloadStatus?.percent,
     serverDownloadStatus?.state,
@@ -2840,22 +3907,38 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     });
   }, [updateQuickActions]);
 
-  const handleClearLogs = () => setLogs([]);
+  const handleClearLogs = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || isClearingLogFiles) return;
 
-  const handleClearCategoryLogs = useCallback((categoryId: string) => {
-    if (selectedLogCategoryId === categoryId) {
+    const confirmed = window.confirm('Are you sure you want to delete all files in this server\'s logs folder? This cannot be undone.');
+    if (!confirmed) return;
+
+    setIsClearingLogFiles(true);
+    setLogLoadError(null);
+
+    try {
+      const result = await window.launcher.game.clearLogFiles(effectiveServer.path);
+      if (!result.success) {
+        setLogLoadError(result.error ?? 'Failed to clear logs folder.');
+        return;
+      }
+
       setLogs([]);
       setIsLogFileTruncated(false);
+      setSelectedLogRelativePath(null);
+      setLogPath(null);
+      await reloadLogCatalog();
+    } catch (error) {
+      setLogLoadError(`Failed to clear logs folder: ${String(error)}`);
+    } finally {
+      setIsClearingLogFiles(false);
     }
+  }, [effectiveServer, hasGameApi, isClearingLogFiles, reloadLogCatalog]);
 
-    // Forget prior per-category tab selection so reopening defaults to latest.
-    setSelectedLogPathByCategoryId((prev) => {
-      if (!(categoryId in prev)) return prev;
-      const next = { ...prev };
-      delete next[categoryId];
-      return next;
-    });
-  }, [selectedLogCategoryId]);
+  const handleClearBufferedLogs = useCallback(() => {
+    setLogs([]);
+    setIsLogFileTruncated(false);
+  }, []);
 
   const handleOpenLogFolder = async () => {
     if (!effectiveServer || !hasGameApi) return;
@@ -2879,6 +3962,39 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
+
+  const handlePopOutServerPanel = useCallback(async () => {
+    if (isPoppedOutPanel) return;
+    if (typeof window === 'undefined' || !window.launcher?.window?.openServerPanel) return;
+
+    const result = await window.launcher.window.openServerPanel(
+      effectiveServer?.id ?? serverId,
+      effectiveServer?.name ?? serverName ?? effectiveServerName,
+    ).catch((error) => ({ success: false, error: String(error) }));
+
+    if (!result.success) {
+      setActionError(result.error ?? 'Failed to pop out server panel window.');
+    } else {
+      // Navigate the main window away from ServerPanel so it isn't duplicated
+      navigate('Play');
+    }
+  }, [effectiveServer?.id, effectiveServer?.name, effectiveServerName, isPoppedOutPanel, navigate, serverId, serverName]);
+
+  const handleDockServerPanel = useCallback(() => {
+    if (typeof window === 'undefined') return;
+
+    if (typeof BroadcastChannel !== 'undefined') {
+      const channel = new BroadcastChannel('starmade-launcher-navigation');
+      channel.postMessage({
+        type: 'open-server-panel',
+        serverId: effectiveServer?.id ?? serverId,
+        serverName: effectiveServer?.name ?? serverName ?? effectiveServerName,
+      });
+      channel.close();
+    }
+
+    window.launcher?.window?.close();
+  }, [effectiveServer?.id, effectiveServer?.name, effectiveServerName, serverId, serverName]);
 
   const reloadGameConfigXml = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) return;
@@ -2905,7 +4021,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     try {
       const payload = await readFactionConfigXmlFromInstallation();
       if (payload.error) {
-        setFactionConfigError(`Failed to reload FactionConfig.xml: ${payload.error}`);
+        setFactionConfigError(`Failed to reload faction config template: ${payload.error}`);
         return;
       }
       const next = payload.content ?? '';
@@ -2913,7 +4029,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setFactionConfigRelativePath(payload.relativePath);
       setFactionConfigLoadedServerId(effectiveServer.id);
     } catch (error) {
-      setFactionConfigError(`Failed to reload FactionConfig.xml: ${String(error)}`);
+      setFactionConfigError(`Failed to reload faction config template: ${String(error)}`);
     } finally {
       setIsFactionConfigLoading(false);
     }
@@ -3055,7 +4171,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       const doc = parseGameConfigXmlDocument(factionConfigXmlText);
       const target = findElementByGameConfigPath(doc, field.path);
       if (!target) {
-        setFactionConfigError(`Could not locate ${field.path} in FactionConfig.xml.`);
+        setFactionConfigError(`Could not locate ${field.path} in the faction config template.`);
         return;
       }
 
@@ -3063,7 +4179,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       const serialized = new XMLSerializer().serializeToString(doc);
       const result = await writeFactionConfigXmlToInstallation(serialized);
       if (!result.success) {
-        setFactionConfigError(result.error ?? `Failed to save ${field.label} to FactionConfig.xml.`);
+        setFactionConfigError(result.error ?? `Failed to save ${field.label} to the faction config template.`);
         return;
       }
 
@@ -3216,7 +4332,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   if (!effectiveServer) {
     return (
-      <PageContainer>
+      <PageContainer resizable>
         <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-white/20 bg-black/20 p-8 text-center">
           <div>
             <h3 className="mb-2 text-2xl font-semibold text-white">No Server Selected</h3>
@@ -3366,8 +4482,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const renderServerInfoWidget = () => (
     <div className="space-y-3">
-      <label className="flex items-center gap-3 text-sm">
-        <span className="w-36 text-gray-300">Launcher Name:</span>
+      {/*<label className="flex items-center gap-3 text-sm">
+        <span className="w-36 text-gray-300">Server Name:</span>
         <input
           value={serverNameInput}
           onChange={(event) => setServerNameInput(event.target.value)}
@@ -3381,7 +4497,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           disabled={isSavingServerName}
           className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
         />
-      </label>
+      </label>*/}
       {renderDashboardConfigField('SERVER_LIST_NAME')}
       {renderDashboardConfigField('SERVER_LIST_DESCRIPTION')}
       {renderDashboardConfigField('HOST_NAME_TO_ANNOUNCE_TO_SERVER_LIST')}
@@ -3429,13 +4545,137 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   );
 
   const renderPlayersWidget = () => (
-    <div className="min-h-[220px] overflow-y-auto rounded-md border border-white/10 bg-black/20 p-3 font-mono text-sm text-blue-300">
-      Player listing will appear here when server player-state events are wired.
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+          Online: <span className="text-gray-200">{onlinePlayers.length}</span>
+        </p>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => { void messageAllOnlinePlayers(); }}
+            disabled={lifecycleState !== 'running' || !hasGameApi || isPlayersBroadcasting || isPlayersRefreshing || !!kickingPlayerName || isPlayerMessageSending || onlinePlayers.length === 0}
+            className="rounded border border-cyan-500/35 bg-cyan-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <span className="inline-flex items-center gap-1.5">
+              {isPlayersBroadcasting && (
+                <span
+                  aria-hidden="true"
+                  className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent"
+                />
+              )}
+              <span>{isPlayersBroadcasting ? 'Sending...' : 'Message All'}</span>
+            </span>
+          </button>
+          <button
+            onClick={() => { void refreshPlayers(); }}
+            disabled={lifecycleState !== 'running' || isPlayersRefreshing || !hasGameApi || !!kickingPlayerName || isPlayerMessageSending || isPlayersBroadcasting}
+            className="rounded border border-white/15 bg-black/25 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-200 transition-colors hover:bg-black/40 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <span className="inline-flex items-center gap-1.5">
+              {isPlayersRefreshing && (
+                <span
+                  aria-hidden="true"
+                  className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent"
+                />
+              )}
+              <span>{isPlayersRefreshing ? 'Refreshing...' : 'Refresh'}</span>
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <div className="min-h-[220px] overflow-y-auto rounded-md border border-white/10 bg-black/20 p-3 font-mono text-sm text-blue-300">
+        {playersError && (
+          <p className="mb-2 text-red-300">{playersError}</p>
+        )}
+        {lifecycleState !== 'running' ? (
+          <p className="text-gray-500">Server is offline. Start the server to view connected players.</p>
+        ) : onlinePlayers.length === 0 ? (
+          <p className="text-gray-500">No players online.</p>
+        ) : (
+          <div className="space-y-1">
+            {onlinePlayers.map((playerName) => (
+              <div
+                key={playerName}
+                className="rounded border border-white/10 bg-black/25 px-2 py-1.5 text-cyan-200"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate">{playerName}</span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => {
+                        setPlayersError(null);
+                        setPlayerMessageTarget(playerName);
+                        if (playerMessageTarget !== playerName) {
+                          setPlayerMessageText('');
+                        }
+                      }}
+                      disabled={isPlayerMessageSending || !!kickingPlayerName || isPlayersBroadcasting}
+                      className="rounded border border-cyan-400/40 bg-cyan-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-cyan-200 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Message
+                    </button>
+                    <button
+                      onClick={() => { void handleKickPlayer(playerName); }}
+                      disabled={isPlayerMessageSending || !!kickingPlayerName || isPlayersBroadcasting}
+                      className="rounded border border-red-400/40 bg-red-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-red-200 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {kickingPlayerName === playerName ? 'Kicking...' : 'Kick'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {playerMessageTarget && (
+        <div className="space-y-2 rounded-md border border-cyan-500/25 bg-cyan-900/10 p-2">
+          <p className="text-xs text-cyan-200">
+            Direct message to <span className="font-semibold">{playerMessageTarget}</span>
+          </p>
+          <div className="flex gap-2">
+            <input
+              ref={playerMessageInputRef}
+              type="text"
+              value={playerMessageText}
+              onChange={(event) => setPlayerMessageText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  void sendPlayerMessage();
+                }
+              }}
+              placeholder="Type a direct server message..."
+              disabled={isPlayerMessageSending || !!kickingPlayerName || lifecycleState !== 'running'}
+              className="flex-1 rounded border border-white/15 bg-black/25 px-2 py-1.5 text-xs text-gray-100 placeholder-gray-500"
+            />
+            <button
+              onClick={() => { void sendPlayerMessage(); }}
+              disabled={!playerMessageText.trim() || isPlayerMessageSending || !!kickingPlayerName || isPlayersBroadcasting || lifecycleState !== 'running'}
+              className="rounded border border-cyan-400/40 bg-cyan-500/10 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-cyan-200 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isPlayerMessageSending ? 'Sending...' : 'Send'}
+            </button>
+            <button
+              onClick={() => {
+                setPlayerMessageTarget(null);
+                setPlayerMessageText('');
+              }}
+              disabled={isPlayerMessageSending}
+              className="rounded border border-white/20 bg-black/30 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-300 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 
   const getActionButtonClassName = (action: ServerActionDefinition) => {
-    if (!action.enabled) {
+    if (!action.enabled || (action.isLoading && !action.allowClickWhileLoading)) {
       return 'border-white/5 bg-black/15 text-gray-500 cursor-not-allowed';
     }
     if (action.emphasis === 'danger') {
@@ -3500,7 +4740,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   setDraggedQuickAction(null);
                   setQuickActionDropTarget(null);
                 }}
-                className={`rounded-lg border p-4 transition-all ${
+                className={`flex h-full flex-col rounded-lg border p-4 transition-all ${
                   draggedQuickAction?.actionId === action.id
                     ? 'border-starmade-accent/50 bg-starmade-accent/10 opacity-60 shadow-[0_0_0_1px_rgba(34,123,134,0.25)]'
                     : 'border-white/10 bg-black/20 hover:border-white/20'
@@ -3521,14 +4761,22 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 )}
               </div>
 
-              <p className="mb-4 text-xs text-gray-500">{action.detail}</p>
+              <p className="mb-4 flex-1 text-xs text-gray-500">{action.detail}</p>
 
               <button
                 onClick={action.onClick}
-                disabled={!action.enabled}
-                className={`w-full rounded-md border px-4 py-3 text-sm font-semibold transition-colors ${getActionButtonClassName(action)}`}
+                disabled={!action.enabled || (!!action.isLoading && !action.allowClickWhileLoading)}
+                className={`mt-auto w-full rounded-md border px-4 py-3 text-sm font-semibold transition-colors ${getActionButtonClassName(action)}`}
               >
-                {action.label}
+                <span className="inline-flex items-center justify-center gap-2">
+                  {action.isLoading && (
+                    <span
+                      aria-hidden="true"
+                      className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+                    />
+                  )}
+                  <span>{action.buttonLabel ?? action.label}</span>
+                </span>
               </button>
               </div>
               {options?.enableQuickDrag && isLayoutEditMode && renderQuickActionDropZone((isPinned ? quickActionIndex : dashboardLayout.quickActionIds.length) + 1, 'col-span-full')}
@@ -3834,7 +5082,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             groupContainerRefs.current[group.id] = element;
           }}
           style={{ height: `${height}px`, minHeight: `${minHeight}px` }}
-          className={`space-y-2 overflow-y-auto pr-1 ${isResizing ? 'select-none' : ''}`}
+          className={`space-y-2 overflow-y-auto pr-1 pb-2 ${isResizing ? 'select-none' : ''}`}
         >
           {renderDropZone(group.id, 0)}
           {group.widgetIds.map((widgetId, index) => {
@@ -4076,125 +5324,99 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               />
               Auto-scroll
             </label>
+
+            <button
+              onClick={() => setIsLogWrapEnabled((prev) => !prev)}
+              className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45"
+            >
+              {isLogWrapEnabled ? 'Wrap: On' : 'Wrap: Off'}
+            </button>
           </div>
         </div>
 
-        <div className="mt-3 rounded-md border border-white/10 bg-black/25 p-3">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-wider text-gray-300">Log Categories</p>
-            <button
-              onClick={() => { void reloadLogCatalog(); }}
-              disabled={isLogListLoading}
-              className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isLogListLoading ? 'Refreshing...' : 'Refresh List'}
-            </button>
-          </div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+          <p className="px-2 py-1 text-xs text-gray-500">
+            {isLogListLoading
+              ? 'Scanning logs folder...'
+              : allLogFiles.length > 0
+                ? `${allLogFiles.length} log file${allLogFiles.length === 1 ? '' : 's'} available`
+                : 'No log files found in logs'}
+          </p>
+          <button
+            onClick={() => { void reloadLogCatalog(); }}
+            disabled={isLogListLoading}
+            className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isLogListLoading ? 'Refreshing...' : 'Refresh List'}
+          </button>
+        </div>
 
-          {logCategories.length === 0 ? (
-            <p className="text-sm text-gray-400">{isLogListLoading ? 'Scanning logs folder...' : 'No log files found in logs/.'}</p>
-          ) : (
-            <>
-              <div className="mb-3 flex flex-wrap items-center gap-2">
-                {logCategories.map((category) => {
-                  const isSelectedCategory = selectedLogCategoryId === category.id;
-                  return (
-                    <div key={category.id} className="inline-flex items-center gap-1">
-                      <button
-                        onClick={() => {
-                          const remembered = selectedLogPathByCategoryId[category.id];
-                          const rememberedInCategory = category.files.find((file) => file.relativePath === remembered);
-                          const next = rememberedInCategory?.relativePath ?? category.files[0]?.relativePath ?? null;
-                          setSelectedLogRelativePath(next);
-                        }}
-                        className={`rounded border px-2 py-1 text-xs font-semibold uppercase tracking-wider transition-colors ${
-                          isSelectedCategory
-                            ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white'
-                            : 'border-white/15 bg-black/30 text-gray-300 hover:bg-black/45'
-                        }`}
-                      >
-                        {category.label} ({category.files.length})
-                      </button>
-                      <button
-                        onClick={() => handleClearCategoryLogs(category.id)}
-                        className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-300 hover:bg-black/45"
-                        title={`Clear ${category.label} view`}
-                      >
-                        Clear
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
+        {selectedLogFile && (
+          <p className="mt-2 text-xs text-gray-400">
+            {selectedLogFile.fileName} - {formatLogFileSize(selectedLogFile.sizeBytes)} - modified {formatLogModifiedTime(selectedLogFile.modifiedMs)}
+          </p>
+        )}
 
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-                  {selectedLogCategory ? `${selectedLogCategory.label} Files` : 'Files'}
-                </span>
-                {selectedLogCategoryFiles.map((file) => {
+        {logLoadError && (
+          <p className="mt-2 text-sm text-red-300">{logLoadError}</p>
+        )}
+      </div>
+
+      <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[320px_1fr]">
+        <div className="flex min-h-0 flex-col border-b border-white/10 xl:border-b-0 xl:border-r xl:border-white/10">
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            {allLogFiles.length === 0 ? (
+              <p className="p-2 text-sm text-gray-500">No log files available.</p>
+            ) : (
+              <div className="space-y-1">
+                {allLogFiles.map((file) => {
                   const isActiveFile = selectedLogRelativePath === file.relativePath;
                   return (
                     <button
                       key={file.relativePath}
-                      onClick={() => {
-                        setSelectedLogRelativePath(file.relativePath);
-                        if (selectedLogCategoryId) {
-                          setSelectedLogPathByCategoryId((prev) => ({
-                            ...prev,
-                            [selectedLogCategoryId]: file.relativePath,
-                          }));
-                        }
-                      }}
-                      className={`rounded border px-2 py-1 text-xs font-semibold transition-colors ${
+                      onClick={() => setSelectedLogRelativePath(file.relativePath)}
+                      className={`w-full rounded border px-2 py-2 text-left transition-colors ${
                         isActiveFile
-                          ? 'border-starmade-accent/40 bg-starmade-accent/20 text-white'
-                          : 'border-white/15 bg-black/30 text-gray-300 hover:bg-black/45'
+                          ? 'border-starmade-accent/40 bg-starmade-accent/20'
+                          : 'border-white/15 bg-black/25 hover:bg-black/35'
                       }`}
                     >
-                      {file.fileName}
+                      <p className="truncate text-xs font-semibold text-gray-200">{file.fileName}</p>
+                      <p className="truncate text-[11px] text-gray-500">
+                        {formatLogFileSize(file.sizeBytes)} - {formatLogModifiedTime(file.modifiedMs)}
+                      </p>
                     </button>
                   );
                 })}
               </div>
+            )}
+          </div>
+        </div>
 
-              {selectedLogRelativePath && (() => {
-                const selectedFile = selectedLogCategoryFiles.find((file) => file.relativePath === selectedLogRelativePath)
-                  ?? logCategories.flatMap((category) => category.files).find((file) => file.relativePath === selectedLogRelativePath);
-
-                if (!selectedFile) return null;
-
-                return (
-                  <p className="mt-2 text-xs text-gray-400">
-                    {selectedFile.fileName} - {formatLogFileSize(selectedFile.sizeBytes)} - modified {formatLogModifiedTime(selectedFile.modifiedMs)}
-                  </p>
-                );
-              })()}
-            </>
-          )}
-
-          {logLoadError && (
-            <p className="mt-2 text-sm text-red-300">{logLoadError}</p>
+        <div ref={logContainerRef} className="min-h-0 overflow-x-auto overflow-y-auto p-4 font-mono text-sm">
+          {isLogFileLoading ? (
+            <p className="text-gray-400">Loading log file...</p>
+          ) : (
+            <div className="space-y-1">
+              {selectedLogRelativePath == null && (
+                <p className="text-gray-500">Select a log file from the left to load it.</p>
+              )}
+              {selectedLogRelativePath != null && filteredLogs.length === 0 && (
+                <p className="text-gray-500">No log lines in this file yet.</p>
+              )}
+              {filteredLogs.map((log, index) => (
+                <div
+                  key={`${log.timestamp}-${index}`}
+                  className={`flex gap-3 rounded px-2 py-1 hover:bg-white/5 ${isLogWrapEnabled ? '' : 'min-w-max'}`}
+                >
+                  <span className="flex-shrink-0 text-gray-500">{log.timestamp}</span>
+                  <span className={`flex-shrink-0 font-semibold ${getLogLevelColor(log.level)}`}>[{log.level}]</span>
+                  <span className={`${isLogWrapEnabled ? 'break-all' : 'whitespace-pre'} text-gray-300`}>{log.message}</span>
+                </div>
+              ))}
+            </div>
           )}
         </div>
-      </div>
-
-      <div ref={logContainerRef} className="flex-1 overflow-y-auto p-4 font-mono text-sm">
-        {isLogFileLoading ? (
-          <p className="text-gray-400">Loading log file...</p>
-        ) : (
-          <div className="space-y-1">
-            {filteredLogs.length === 0 && (
-              <p className="text-gray-500">No log lines yet for this server.</p>
-            )}
-            {filteredLogs.map((log, index) => (
-              <div key={`${log.timestamp}-${index}`} className="flex gap-3 rounded px-2 py-1 hover:bg-white/5">
-                <span className="flex-shrink-0 text-gray-500">{log.timestamp}</span>
-                <span className={`flex-shrink-0 font-semibold ${getLogLevelColor(log.level)}`}>[{log.level}]</span>
-                <span className="break-all text-gray-300">{log.message}</span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
       <div className="flex items-center justify-between gap-3 border-t border-white/10 bg-black/20 px-4 py-3">
@@ -4203,8 +5425,19 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           {isLogFileTruncated ? ' (tail view)' : ''}
         </p>
         <div className="flex gap-2">
-          <button onClick={handleClearLogs} className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600">
-            Clear
+          <button
+            onClick={handleClearBufferedLogs}
+            disabled={logs.length === 0}
+            className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Clear Buffer
+          </button>
+          <button
+            onClick={() => { void handleClearLogs(); }}
+            disabled={!effectiveServer || !hasGameApi || isClearingLogFiles}
+            className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isClearingLogFiles ? 'Clearing...' : 'Delete Log Files'}
           </button>
           <button onClick={() => { void handleOpenLogFolder(); }} className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600">
             Open Folder
@@ -4220,7 +5453,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const renderServerCfgConfiguration = () => {
     const model: ConfigPanelModel = {
       title: 'Server Configuration',
-      subtitle: 'Values are read from and written to server.cfg in this installation.',
+      subtitle: 'Edit server settings.',
       loadingText: 'Loading configuration from server.cfg...',
       searchPlaceholder: 'Search key, label, or description',
       emptyMessage: 'No configuration keys match the current search/filter.',
@@ -4267,201 +5500,67 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     const hasUnsavedChanges = Object.keys(gameConfigValues).some(
       (path) => gameConfigValues[path] !== (gameConfigSavedValues[path] ?? ''),
     );
-    const needle = gameConfigSearchTerm.trim().toLowerCase();
-    const enabledTogglePaths = new Set(
-      gameConfigCommentToggleEntries
-        .filter((entry) => gameConfigCommentToggleStates[entry.id])
-        .map((entry) => entry.path),
-    );
-
-    const filteredGameConfigListSections = gameConfigListSections
-      .filter((section) => {
-        for (const enabledPath of enabledTogglePaths) {
-          if (section.key.startsWith(enabledPath)) return false;
-        }
-        if (gameConfigCategoryFilter.size > 0 && !gameConfigCategoryFilter.has(section.category)) return false;
-        if (!needle) return true;
-        if (section.key.toLowerCase().includes(needle) || section.label.toLowerCase().includes(needle)) return true;
-        return section.columns.some((column) => column.label.toLowerCase().includes(needle) || column.key.toLowerCase().includes(needle));
-      })
-      .map((section) => {
-        if (!needle) return section;
-        const rows = section.rows.filter((row) => section.columns.some((column) => {
-          const path = row.fieldPaths[column.key];
-          const value = (gameConfigValues[path] ?? gameConfigSavedValues[path] ?? '').toLowerCase();
-          return value.includes(needle) || path.toLowerCase().includes(needle);
-        }));
-        return { ...section, rows };
-      })
-      .filter((section) => section.rows.length > 0);
-
-    const visibleCommentToggleEntries = gameConfigCommentToggleEntries.filter((entry) => {
+    const toggleNeedle = gameConfigSearchTerm.trim().toLowerCase();
+    const toggleEntries = gameConfigCommentToggleEntries.filter((entry) => {
       if (gameConfigCategoryFilter.size > 0 && !gameConfigCategoryFilter.has(entry.category)) return false;
-      if (!needle) return true;
+      if (!toggleNeedle) return true;
+
       return (
-        entry.label.toLowerCase().includes(needle)
-        || entry.description.toLowerCase().includes(needle)
-        || entry.path.toLowerCase().includes(needle)
+        entry.id.toLowerCase().includes(toggleNeedle)
+        || entry.label.toLowerCase().includes(toggleNeedle)
+        || entry.description.toLowerCase().includes(toggleNeedle)
+        || entry.path.toLowerCase().includes(toggleNeedle)
       );
     });
 
-    const bodyExtras = (
-      <section className="space-y-3">
-        <div className="rounded-md border border-white/10 bg-black/20 p-3">
-          <p className="text-sm font-semibold text-white">Optional Commented Entries</p>
+    const toggleEntriesByCategory = gameConfigCategoryOrder.reduce<Partial<Record<string, React.ReactNode[]>>>((acc, category) => {
+      const categoryEntries = toggleEntries.filter((entry) => entry.category === category);
+      if (categoryEntries.length === 0) return acc;
+
+      acc[category] = [
+        <div key={`game-config-toggle-${category}`} className="rounded-md border border-white/10 bg-black/20 p-3">
+          <p className="text-sm font-semibold text-white">Optional Commented Sections</p>
           <p className="mt-1 text-xs text-gray-400">
-            Toggle these to comment/uncomment optional top-level blocks in GameConfig.xml.
+            These sections are disabled in XML comments by default. Toggle them on to expose their fields in this editor.
           </p>
+          <div className="mt-3 space-y-2">
+            {categoryEntries.map((entry) => {
+              const enabled = gameConfigCommentToggleStates[entry.id] ?? false;
+              const isSavingThisToggle = savingGameConfigToggleId === entry.id;
+              const toggleDisabled = !!savingGameConfigPath || (!!savingGameConfigToggleId && !isSavingThisToggle);
 
-          {visibleCommentToggleEntries.length === 0 ? (
-            <p className="mt-3 text-sm text-gray-400">No optional entries match the current search/filter.</p>
-          ) : (
-            <div className="mt-3 space-y-2">
-              {visibleCommentToggleEntries.map((entry) => {
-                const checked = gameConfigCommentToggleStates[entry.id] ?? false;
-                const isSaving = savingGameConfigToggleId === entry.id;
-                return (
-                  <label key={entry.id} className="flex items-start gap-2 rounded border border-white/10 bg-black/20 px-3 py-2 text-sm text-gray-300">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={(event) => {
-                        void setGameConfigCommentToggle(entry, event.target.checked);
-                      }}
-                      disabled={!!savingGameConfigPath || !!savingGameConfigToggleId}
-                      className="mt-0.5 h-4 w-4 rounded"
-                    />
-                    <span className="flex-1">
-                      <span className="font-semibold text-white">{entry.label}</span>
-                      <span className="mt-0.5 block text-xs text-gray-400">{entry.description}</span>
-                      <span className="mt-1 block font-mono text-[11px] text-gray-500">{entry.path}</span>
-                    </span>
-                    {isSaving && <span className="text-xs uppercase tracking-wider text-gray-500">Saving...</span>}
-                  </label>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {filteredGameConfigListSections.length > 0 && (
-          <div className="space-y-4">
-            {filteredGameConfigListSections.map((section) => (
-              <div key={section.key} className="rounded-md border border-white/10 bg-black/20 p-3">
-                <div className="mb-2">
-                  <p className="text-sm font-semibold text-white">{section.label}</p>
-                  <p className="text-xs text-gray-400">{section.description}</p>
-                  <p className="mt-1 text-[11px] font-mono text-gray-500">{section.key}</p>
+              return (
+                <div key={entry.id} className="rounded border border-white/10 bg-black/25 p-2">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-200">{entry.label}</p>
+                      <p className="text-xs text-gray-400">{entry.description}</p>
+                      <p className="mt-1 font-mono text-[11px] text-gray-500">{entry.path}</p>
+                    </div>
+                    <button
+                      onClick={() => { void setGameConfigCommentToggle(entry, !enabled); }}
+                      disabled={toggleDisabled}
+                      className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isSavingThisToggle ? 'Saving...' : (enabled ? 'Disable' : 'Enable')}
+                    </button>
+                  </div>
                 </div>
-
-                <div className="overflow-x-auto">
-                  <table className="min-w-full border-collapse text-sm">
-                    <thead>
-                      <tr>
-                        <th className="border-b border-white/10 px-2 py-2 text-left text-xs uppercase tracking-wider text-gray-400">#</th>
-                        {section.columns.map((column) => (
-                          <th key={`${section.key}-${column.key}`} className="border-b border-white/10 px-2 py-2 text-left text-xs uppercase tracking-wider text-gray-400">
-                            {column.label}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {section.rows.map((row) => (
-                        <tr key={`${section.key}-row-${row.index}`}>
-                          <td className="border-b border-white/5 px-2 py-2 align-top text-xs text-gray-500">{row.index}</td>
-                          {section.columns.map((column) => {
-                            const fieldPath = row.fieldPaths[column.key];
-                            const rawValue = gameConfigValues[fieldPath] ?? '';
-                            const explicitMeta = getGameConfigMetaForPath(gameConfigFieldMetaByPath, fieldPath);
-                            const pseudoField: GameConfigField = {
-                              path: fieldPath,
-                              label: explicitMeta?.label ?? `${section.label} ${column.label}`,
-                              description: explicitMeta?.description ?? `${section.key} row ${row.index}`,
-                              category: explicitMeta?.category ?? section.category,
-                              type: explicitMeta?.type ?? column.type,
-                              defaultValue: gameConfigSavedValues[fieldPath] ?? rawValue,
-                              min: explicitMeta?.min,
-                              max: explicitMeta?.max,
-                              guidance: explicitMeta?.guidance,
-                              validation: explicitMeta?.validation,
-                            };
-                            const validation = getGameConfigFieldValidation(pseudoField, rawValue);
-                            const isSavingThisField = savingGameConfigPath === fieldPath;
-
-                            return (
-                              <td key={fieldPath} className="border-b border-white/5 px-2 py-2 align-top">
-                                <div className="flex min-w-[180px] items-center gap-2">
-                                  {column.type === 'boolean' ? (
-                                    <label className="inline-flex items-center gap-2 text-xs text-gray-300">
-                                      <input
-                                        type="checkbox"
-                                        checked={parseCfgBoolean(rawValue, false)}
-                                        onChange={(event) => {
-                                          const next = String(event.target.checked);
-                                          setGameConfigValues((prev) => ({ ...prev, [fieldPath]: next }));
-                                          void saveGameConfigField(pseudoField, next);
-                                        }}
-                                        disabled={!!savingGameConfigPath || !!validation.error}
-                                        className="h-4 w-4 rounded"
-                                      />
-                                      Enabled
-                                    </label>
-                                  ) : (
-                                    <>
-                                      <input
-                                        type={column.type === 'number' ? 'number' : 'text'}
-                                        value={rawValue}
-                                        onChange={(event) => {
-                                          const next = event.target.value;
-                                          setGameConfigValues((prev) => ({ ...prev, [fieldPath]: next }));
-                                        }}
-                                        onBlur={() => { void saveGameConfigField(pseudoField); }}
-                                        onKeyDown={(event) => {
-                                          if (event.key === 'Enter') {
-                                            event.preventDefault();
-                                            void saveGameConfigField(pseudoField);
-                                          }
-                                        }}
-                                        disabled={!!savingGameConfigPath}
-                                        className="w-full rounded-md border border-white/15 bg-black/30 px-2 py-1.5 text-xs text-gray-200"
-                                      />
-                                      <button
-                                        onClick={() => { void saveGameConfigField(pseudoField); }}
-                                        disabled={!!savingGameConfigPath || !!validation.error}
-                                        className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
-                                      >
-                                        {isSavingThisField ? 'Saving...' : 'Save'}
-                                      </button>
-                                    </>
-                                  )}
-                                </div>
-                                {(validation.error || validation.warning) && (
-                                  <p className={`mt-1 text-[10px] ${validation.error ? 'text-red-300' : 'text-amber-300'}`}>
-                                    {validation.error ?? validation.warning}
-                                  </p>
-                                )}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
-        )}
-      </section>
-    );
+        </div>
+      ];
+
+      return acc;
+    }, {});
 
     const model: ConfigPanelModel = {
       title: 'GameConfig.xml',
-      subtitle: 'Edit game settings using typed fields and save each value directly to GameConfig.xml.',
+      subtitle: 'Edit game settings.',
       loadingText: 'Loading GameConfig.xml...',
-      searchPlaceholder: 'Search GameConfig fields...',
-      emptyMessage: 'No GameConfig fields match the current search/filter.',
+      searchPlaceholder: 'Search by key, label, description, or value',
+      emptyMessage: 'No fields match the current search/filter.',
       categoryOrder: gameConfigCategoryOrder,
       categoryLabels: gameConfigCategoryLabels,
       fields: gameConfigFields.map((field) => ({
@@ -4497,7 +5596,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       reloadLabel: 'Reload',
       onReload: reloadGameConfigXml,
       reloadDisabled: !effectiveServer || !hasGameApi || isGameConfigLoading || !!savingGameConfigPath || !!savingGameConfigToggleId,
-      bodyExtras,
+      categoryExtras: toggleEntriesByCategory,
     };
 
     return <ConfigPanel model={model} />;
@@ -4510,10 +5609,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     const model: ConfigPanelModel = {
       title: 'FactionConfig.xml',
-      subtitle: 'Edit faction settings and save each value directly to FactionConfig.xml.',
-      loadingText: 'Loading FactionConfig.xml...',
-      searchPlaceholder: 'Search faction config fields...',
-      emptyMessage: 'No faction config fields match the current search/filter.',
+      subtitle: 'Edit faction settings from the generated template file.',
+      loadingText: 'Loading faction config template...',
+      searchPlaceholder: 'Search by key, label, description, or value',
+      emptyMessage: 'No fields match the current search/filter.',
       categoryOrder: factionConfigCategoryOrder,
       categoryLabels: factionConfigCategoryLabels,
       fields: factionConfigFields.map((field) => ({
@@ -4627,18 +5726,24 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         );
       }
 
+      const isEditableTextFile = entry.isEditableText;
       return (
         <button
           key={entry.relativePath}
-          onClick={() => { void openFileInTab(entry.relativePath); }}
+          onClick={() => { void openFileInTab(entry); }}
+          disabled={!isEditableTextFile}
           className={`flex w-full items-center rounded px-2 py-1 text-left text-sm transition-colors ${
-            activeFileTabPath === entry.relativePath
+            !isEditableTextFile
+              ? 'cursor-not-allowed text-gray-500'
+              : activeFileTabPath === entry.relativePath
               ? 'bg-starmade-accent/20 text-white'
               : 'text-gray-300 hover:bg-white/5'
           }`}
           style={{ paddingLeft: `${22 + (depth * 14)}px` }}
+          title={isEditableTextFile ? undefined : (entry.nonEditableReason ?? 'Binary files are not editable in this panel.')}
         >
           <span className="truncate">{entry.name}</span>
+          {!isEditableTextFile && <span className="ml-2 text-[10px] uppercase tracking-wider text-gray-500">Binary</span>}
           {isTabOpen && <span className="ml-2 text-[10px] uppercase tracking-wider text-gray-500">Open</span>}
         </button>
       );
@@ -4669,10 +5774,16 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
         <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
           <div>
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">Manual File Editor</h3>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">File Editor</h3>
             <p className="text-xs text-gray-500">Use Configuration tab for structured editing, or edit raw files here.</p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsFileWrapEnabled((prev) => !prev)}
+              className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45"
+            >
+              {isFileWrapEnabled ? 'Wrap: On' : 'Wrap: Off'}
+            </button>
             <button
               onClick={() => { void reloadActiveFileTab(); }}
               disabled={!activeFileTabPath || isFileEditorLoading || isFileSaving}
@@ -4746,14 +5857,230 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 const next = event.target.value;
                 setFileContentByPath((prev) => ({ ...prev, [activeFileTabPath]: next }));
               }}
+              wrap={isFileWrapEnabled ? 'soft' : 'off'}
               spellCheck={false}
-              className="h-full w-full resize-none rounded-md border border-white/15 bg-black/40 p-3 font-mono text-xs leading-5 text-gray-200 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+              className={`h-full w-full resize-none rounded-md border border-white/15 bg-black/40 p-3 font-mono text-xs leading-5 text-gray-200 focus:outline-none focus:ring-2 focus:ring-starmade-accent ${
+                isFileWrapEnabled ? 'overflow-x-hidden whitespace-pre-wrap' : 'overflow-x-auto whitespace-pre'
+              }`}
             />
           )}
         </div>
       </div>
     </div>
   );
+
+  const renderChat = () => {
+    const currentMessages = selectedChatChannelId ? (chatMessagesByChannel[selectedChatChannelId] ?? []) : [];
+    const selectedChannel = chatChannels.find((c) => c.channelId === selectedChatChannelId);
+
+    const getChannelTypeColor = (type: ChatChannelInfo['channelType']) => {
+      if (type === 'general') return 'text-blue-300';
+      if (type === 'faction') return 'text-green-300';
+      if (type === 'direct') return 'text-purple-300';
+      return 'text-yellow-300';
+    };
+
+    const getChannelTypeIcon = (type: ChatChannelInfo['channelType']) => {
+      if (type === 'general') return '#';
+      if (type === 'faction') return '⚑';
+      if (type === 'direct') return '@';
+      return '⊕';
+    };
+
+    const getSenderColor = (sender: string, receiverType: string) => {
+      if (receiverType === 'SYSTEM' || sender === '[SERVER]' || sender === '') return 'text-amber-300';
+      if (receiverType === 'DIRECT') return 'text-purple-300';
+      return 'text-cyan-300';
+    };
+
+    return (
+      <div className="flex h-full min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
+        {/* Header */}
+        <div className="border-b border-white/10 px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="font-display text-lg font-bold uppercase tracking-wider text-white">Server Chat</h3>
+              <p className="text-sm text-gray-400">
+                {selectedChannel ? `${selectedChannel.channelLabel}` : 'Select a channel'}
+                {lifecycleState !== 'running' && (
+                  <span className="ml-2 text-amber-400">(server not running — showing saved logs)</span>
+                )}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="flex items-center gap-2 text-sm text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={chatAutoScroll}
+                  onChange={(e) => setChatAutoScroll(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-600 bg-slate-700"
+                />
+                Auto-scroll
+              </label>
+              <button
+                onClick={() => { void reloadChatChannels(); void loadChatMessagesForChannel(selectedChatChannelId); }}
+                disabled={isChatListLoading || isChatLoading}
+                className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isChatListLoading ? 'Refreshing...' : 'Refresh'}
+              </button>
+            </div>
+          </div>
+          {chatError && (
+            <p className="mt-2 text-sm text-red-300">{chatError}</p>
+          )}
+        </div>
+
+        {/* Body: left channel pane + right message pane */}
+        <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[260px_1fr]">
+          {/* Channel list */}
+          <div className="flex min-h-0 flex-col border-b border-white/10 xl:border-b-0 xl:border-r xl:border-white/10">
+            <div className="border-b border-white/10 px-3 py-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-300">Channels</h4>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+              {chatChannels.length === 0 ? (
+                <div className="p-2">
+                  {isChatListLoading ? (
+                    <p className="text-sm text-gray-500">Loading channels...</p>
+                  ) : (
+                    <p className="text-sm text-gray-500">
+                      No chat logs found. Chat logs are created in{' '}
+                      <code className="text-xs text-gray-400">chatlogs/</code> when
+                      players chat on the server.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {chatChannels.map((ch) => {
+                    const isActive = selectedChatChannelId === ch.channelId;
+                    const isLiveOnly = !ch.fileName;
+                    const unread = false; // future: track unread count
+                    return (
+                      <button
+                        key={ch.channelId}
+                        onClick={() => setSelectedChatChannelId(ch.channelId)}
+                        className={`w-full rounded border px-2 py-2 text-left transition-colors ${
+                          isActive
+                            ? 'border-starmade-accent/40 bg-starmade-accent/20'
+                            : 'border-white/15 bg-black/25 hover:bg-black/35'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span className={`flex-shrink-0 text-sm font-bold ${getChannelTypeColor(ch.channelType)}`}>
+                            {getChannelTypeIcon(ch.channelType)}
+                          </span>
+                          <p className={`truncate text-xs font-semibold ${isActive ? 'text-white' : 'text-gray-200'} ${unread ? 'text-white' : ''}`}>
+                            {ch.channelLabel}
+                          </p>
+                          {isLiveOnly && (
+                            <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                              isActive
+                                ? 'border-cyan-300/40 bg-cyan-400/15 text-cyan-100'
+                                : 'border-cyan-400/30 bg-cyan-500/10 text-cyan-300'
+                            }`}>
+                              Live-only
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 truncate pl-5 text-[11px] text-gray-500">
+                          {formatLogFileSize(ch.sizeBytes)}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Message area */}
+          <div className="flex min-h-0 flex-col">
+            <div
+              ref={chatContainerRef}
+              className="min-h-0 flex-1 overflow-y-auto p-4 font-mono text-sm"
+            >
+              {!selectedChatChannelId ? (
+                <p className="text-gray-500">Select a channel from the left to view messages.</p>
+              ) : isChatLoading ? (
+                <p className="text-gray-400">Loading messages...</p>
+              ) : currentMessages.length === 0 ? (
+                <p className="text-gray-500">No messages in this channel yet.</p>
+              ) : (
+                <div className="space-y-1">
+                  {currentMessages.map((msg, index) => (
+                    <div
+                      key={`${msg.timestamp}-${index}`}
+                      className="flex min-w-0 gap-2 rounded px-2 py-0.5 hover:bg-white/5"
+                    >
+                      <span className="flex-shrink-0 text-[11px] text-gray-600">{msg.timestamp}</span>
+                      {msg.receiverType === 'DIRECT' && (
+                        <span className="flex-shrink-0 text-[11px] text-purple-400">[DM]</span>
+                      )}
+                      <span className={`flex-shrink-0 font-semibold ${getSenderColor(msg.sender, msg.receiverType)}`}>
+                        {msg.sender || '[System]'}:
+                      </span>
+                      <span className="min-w-0 break-words text-gray-200">{msg.text}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Message input */}
+            <div className="border-t border-white/10 bg-black/20 px-3 py-2">
+              {lifecycleState !== 'running' && (
+                <p className="mb-2 text-xs text-amber-400">
+                  ⚠ Server is not running. Messages will not be sent.
+                </p>
+              )}
+              {selectedChannel?.channelType === 'direct' && (
+                <p className="mb-2 text-xs text-purple-400">
+                  ℹ Direct messages are sent via /server_message_to — the recipient is derived from the channel name.
+                </p>
+              )}
+              <div className="flex gap-2">
+                <input
+                  ref={chatInputRef}
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      void handleSendChatMessage();
+                    }
+                  }}
+                  placeholder={
+                    !selectedChatChannelId
+                      ? 'Select a channel first...'
+                      : lifecycleState !== 'running'
+                        ? 'Server not running...'
+                        : `Message ${selectedChannel?.channelLabel ?? selectedChatChannelId}...`
+                  }
+                  disabled={!selectedChatChannelId || lifecycleState !== 'running'}
+                  className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-starmade-accent disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <button
+                  onClick={() => { void handleSendChatMessage(); }}
+                  disabled={!chatInput.trim() || !selectedChatChannelId || lifecycleState !== 'running'}
+                  className="rounded-md bg-starmade-accent px-4 py-2 text-sm font-semibold uppercase tracking-wider text-white hover:bg-starmade-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Send
+                </button>
+              </div>
+              <p className="mt-1.5 text-[11px] text-gray-600">
+                Messages are sent as server broadcasts using{' '}
+                <code className="text-gray-500">/server_message_broadcast plain</code>{' '}
+                (or <code className="text-gray-500">/server_message_to</code> for DMs).
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const renderPlaceholderTab = (title: string, description: string) => (
     <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-white/20 bg-black/20 p-6 text-center">
@@ -4764,12 +6091,252 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     </div>
   );
 
+  const renderDatabaseTab = () => (
+    <div className="grid h-full min-h-0 grid-cols-1 gap-3 xl:grid-cols-[420px_1fr]">
+
+      {/* ── Left pane: SQL Console ── */}
+      <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
+        <div className="border-b border-white/10 px-3 py-2">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">SQL Console</h3>
+          <p className="text-xs text-gray-500">
+            Executes admin commands <code className="text-gray-400">/sql_query</code>,{' '}
+            <code className="text-gray-400">/sql_update</code>, and{' '}
+            <code className="text-gray-400">/sql_insert_return_generated_keys</code>.
+            Requires your name in <code className="text-gray-400">SQL_PERMISSION</code> in server.cfg.
+          </p>
+        </div>
+
+        <div className="space-y-3 overflow-y-auto p-3">
+          {/* Mode selector + buttons */}
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={databaseSqlMode}
+              onChange={(e) => setDatabaseSqlMode(e.target.value as DatabaseSqlMode)}
+              className="rounded border border-white/15 bg-black/30 px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-starmade-accent"
+            >
+              <option value="query">Query (SELECT)</option>
+              <option value="update">Update (UPDATE / DELETE)</option>
+              <option value="insertKeys">Insert + return generated keys</option>
+            </select>
+            <button
+              onClick={() => { void executeDatabaseSql(databaseSqlInput, databaseSqlMode); }}
+              disabled={databaseIsExecuting || lifecycleState !== 'running'}
+              className="rounded bg-starmade-accent px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-white hover:bg-starmade-accent/80 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {databaseIsExecuting ? 'Running…' : 'Execute'}
+            </button>
+            <button
+              onClick={() => { void loadDatabaseEntities(); }}
+              disabled={databaseIsExecuting || lifecycleState !== 'running'}
+              className="rounded border border-white/15 bg-black/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Reload Entities
+            </button>
+          </div>
+
+          {/* Query input */}
+          <textarea
+            value={databaseSqlInput}
+            onChange={(e) => setDatabaseSqlInput(e.target.value)}
+            spellCheck={false}
+            rows={10}
+            className="w-full resize-y rounded-md border border-white/15 bg-black/40 p-3 font-mono text-xs leading-5 text-gray-200 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+          />
+
+          {/* Status area */}
+          <div className="space-y-1 rounded-md border border-white/10 bg-black/20 px-3 py-2 text-xs">
+            <p className="text-gray-400">{databaseSqlStatus}</p>
+            {databaseLastRequestId !== null && (
+              <p className="text-gray-500">Last request id: <span className="font-mono">#{databaseLastRequestId}</span></p>
+            )}
+            {databaseSqlError && <p className="text-red-300">{databaseSqlError}</p>}
+            {databaseClipboardMsg && <p className="text-cyan-300">{databaseClipboardMsg}</p>}
+            {lifecycleState !== 'running' && (
+              <p className="text-amber-300">⚠ Server must be running to execute SQL commands.</p>
+            )}
+          </div>
+
+          {/* Last result table */}
+          {databaseSqlOutput.columns.length > 0 && (
+            <div>
+              <h4 className="mb-1 text-xs font-semibold uppercase tracking-wider text-gray-400">Last SQL Result</h4>
+              <div className="overflow-x-auto rounded border border-white/10 bg-black/20">
+                <table className="min-w-full border-collapse text-left text-xs">
+                  <thead>
+                    <tr>
+                      {databaseSqlOutput.columns.map((col) => (
+                        <th key={col} className="border-b border-white/10 px-2 py-1.5 font-semibold uppercase tracking-wider text-gray-300 whitespace-nowrap">{col}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {databaseSqlOutput.rows.slice(0, 100).map((row, ri) => (
+                      <tr key={`row-${ri}`} className="border-b border-white/5 hover:bg-white/5">
+                        {row.map((cell, ci) => (
+                          <td key={`cell-${ri}-${ci}`} className="px-2 py-1 text-gray-200 max-w-[200px] truncate" title={cell}>{cell}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {databaseSqlOutput.rows.length > 100 && (
+                <p className="mt-1 text-[11px] text-gray-500">Showing first 100 of {databaseSqlOutput.rows.length} rows.</p>
+              )}
+            </div>
+          )}
+
+          {/* Raw lines toggle */}
+          {databaseSqlRawLines.length > 0 && (
+            <details className="text-xs">
+              <summary className="cursor-pointer text-gray-400 hover:text-gray-200">
+                Raw SQL output ({databaseSqlRawLines.length} lines)
+              </summary>
+              <pre className="mt-1 max-h-48 overflow-auto rounded border border-white/10 bg-black/30 p-2 font-mono text-[11px] text-gray-300">
+                {databaseSqlRawLines.join('\n')}
+              </pre>
+            </details>
+          )}
+        </div>
+      </div>
+
+      {/* ── Right pane: Entity Browser ── */}
+      <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
+        <div className="border-b border-white/10 px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">Entities by Loaded Sector</h3>
+            <span className="rounded border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wider text-gray-400">
+              {filteredSortedDatabaseEntities.length} visible
+            </span>
+          </div>
+          <p className="text-xs text-gray-500">
+            Grouped by sector coords. Only sectors with <code className="text-gray-400">TRANSIENT = FALSE</code> are shown.
+          </p>
+        </div>
+
+        {/* Filters + sort */}
+        <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-3 py-2">
+          <select
+            value={databaseEntityTypeFilter}
+            onChange={(e) => setDatabaseEntityTypeFilter(e.target.value)}
+            className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-starmade-accent"
+          >
+            <option value="all">All types</option>
+            {databaseEntityTypeOptions.map((t) => (
+              <option key={t} value={t}>Type {t}</option>
+            ))}
+          </select>
+          <select
+            value={databaseFactionFilter}
+            onChange={(e) => setDatabaseFactionFilter(e.target.value)}
+            className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-starmade-accent"
+          >
+            <option value="all">All factions</option>
+            {databaseFactionOptions.map((f) => (
+              <option key={f} value={f}>Faction {f}</option>
+            ))}
+          </select>
+          <select
+            value={databaseSortKey}
+            onChange={(e) => setDatabaseSortKey(e.target.value as DatabaseSortKey)}
+            className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-starmade-accent"
+          >
+            <option value="name-asc">Sort: Name A→Z</option>
+            <option value="name-desc">Sort: Name Z→A</option>
+          </select>
+        </div>
+
+        {/* Entity list */}
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+          {databaseIsExecuting && databaseEntities.length === 0 ? (
+            <p className="text-sm text-gray-400">Loading entities…</p>
+          ) : databaseSectorGroups.length === 0 ? (
+            <div className="rounded border border-dashed border-white/15 bg-black/20 p-4 text-center text-sm text-gray-400">
+              {databaseEntities.length === 0
+                ? 'No entities loaded. Click "Reload Entities" while the server is running.'
+                : 'No entities match the current filters.'}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {databaseSectorGroups.map((group) => (
+                <div key={group.sector} className="rounded border border-white/10 bg-black/20">
+                  <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+                    <h4 className="font-mono text-xs font-semibold text-gray-200">
+                      Sector <span className="text-starmade-accent/80">{group.sector}</span>
+                    </h4>
+                    <span className="text-[11px] text-gray-500">{group.entities.length} {group.entities.length === 1 ? 'entity' : 'entities'}</span>
+                  </div>
+
+                  <div className="divide-y divide-white/5">
+                    {group.entities.map((entity) => (
+                      <div
+                        key={`${group.sector}|${entity.id}|${entity.uid}`}
+                        className="grid grid-cols-1 gap-2 px-3 py-2 md:grid-cols-[1fr_auto] md:items-start"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-gray-100" title={entity.name}>
+                            {entity.name || '(Unnamed entity)'}
+                          </p>
+                          <p className="mt-0.5 font-mono text-[11px] text-gray-400">
+                            ID&nbsp;<span className="text-gray-300">{entity.id}</span>
+                            &ensp;|&ensp;Type&nbsp;<span className="text-gray-300">{entity.typeValue}</span>
+                            &ensp;|&ensp;Faction&nbsp;<span className="text-gray-300">{entity.factionValue}</span>
+                          </p>
+                          <p className="mt-0.5 font-mono text-[11px] text-gray-500 truncate" title={entity.uid}>
+                            UID: {entity.uid}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            onClick={() => {
+                              const q = `SELECT * FROM ENTITIES WHERE ID = ${entity.id};`;
+                              setDatabaseSqlInput(q);
+                              setDatabaseSqlMode('query');
+                              void executeDatabaseSql(q, 'query');
+                            }}
+                            disabled={databaseIsExecuting || lifecycleState !== 'running'}
+                            className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            Inspect
+                          </button>
+                          <button
+                            onClick={() => {
+                              const q = `DELETE FROM ENTITIES WHERE ID = ${entity.id};`;
+                              setDatabaseSqlMode('update');
+                              setDatabaseSqlInput(q);
+                              setDatabaseSqlStatus('Delete query drafted — review and click Execute to run.');
+                            }}
+                            className="rounded border border-red-400/30 bg-red-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-red-200 hover:bg-red-500/20"
+                          >
+                            Draft Delete
+                          </button>
+                          <button
+                            onClick={() => { void copyToClipboard(entity.uid, 'UID'); }}
+                            className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45"
+                          >
+                            Copy UID
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
   const renderActiveTab = () => {
     if (activeTab === 'control') return renderControlPanel();
     if (activeTab === 'actions') return renderActionsPanel();
     if (activeTab === 'logs') return renderLogs();
+    if (activeTab === 'chat') return renderChat();
     if (activeTab === 'configuration') return renderConfiguration();
     if (activeTab === 'files') return renderFilesTab();
+    if (activeTab === 'database') return renderDatabaseTab();
     return renderPlaceholderTab(
       'Database',
       'Database tools placeholder. This area is reserved for universe/player data operations later.'
@@ -4777,22 +6344,31 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   };
 
   return (
-    <PageContainer>
+    <PageContainer resizable>
       <div className="flex h-full min-h-0 flex-col">
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          {tabItems.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`rounded-md border px-3 py-1.5 text-sm font-semibold transition-colors ${
-                activeTab === tab.id
-                  ? 'border-starmade-accent bg-starmade-accent/20 text-white'
-                  : 'border-white/10 bg-black/20 text-gray-300 hover:bg-black/35'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {tabItems.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`rounded-md border px-3 py-1.5 text-sm font-semibold transition-colors ${
+                  activeTab === tab.id
+                    ? 'border-starmade-accent bg-starmade-accent/20 text-white'
+                    : 'border-white/10 bg-black/20 text-gray-300 hover:bg-black/35'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/*<button
+            onClick={isPoppedOutPanel ? handleDockServerPanel : () => { void handlePopOutServerPanel(); }}
+            className="rounded-md border border-white/15 bg-black/20 px-3 py-1.5 text-sm font-semibold text-gray-200 transition-colors hover:bg-black/35"
+          >
+            {isPoppedOutPanel ? 'Dock Back' : 'Pop Out'}
+          </button>*/}
         </div>
 
         <div className="min-h-0 flex-1">{renderActiveTab()}</div>

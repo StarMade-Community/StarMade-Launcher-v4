@@ -91,7 +91,7 @@ const News: React.FC = () => {
         <PageContainer>
             <div className="h-full flex flex-col">
                 <h1 className="font-display text-3xl font-bold uppercase text-white mb-6 tracking-wider flex-shrink-0">
-                    Steam News Feed
+                    News Feed
                 </h1>
                 {renderContent()}
             </div>

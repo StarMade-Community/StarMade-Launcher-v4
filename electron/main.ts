@@ -18,7 +18,7 @@ import { fetchAllVersions, invalidateVersionCache } from './versions.js';
 import { startDownload, cancelDownload } from './downloader.js';
 import type { DownloadProgress } from './downloader.js';
 import { downloadJava, detectSystemJava, resolveJavaPath, getDefaultJavaPaths, findJavaExecutableInDir } from './java.js';
-import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, getGraphicsInfo, listServerLogFiles, readServerLogFile } from './launcher.js';
+import { launchGame, stopGame, getGameStatus, getAllRunningGames, stopAllGames, getLogPath, openLogLocation, clearServerLogFiles, getGraphicsInfo, listServerLogFiles, readServerLogFile, sendServerStdin, listChatFiles, readChatFile } from './launcher.js';
 import type { UpdateInfo } from './updater.js';
 import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from './updater.js';
 import { createBackup, listBackups, restoreBackup } from './backup.js';
@@ -116,6 +116,32 @@ function getLauncherDir(): string {
 // ─── Window ──────────────────────────────────────────────────────────────────
 
 let mainWindow: BrowserWindow | null = null;
+const serverPanelWindows = new Set<BrowserWindow>();
+const SERVER_PANEL_POPOUT_BOUNDS_KEY = 'serverPanelPopoutBoundsV1';
+
+const getWindowIconPath = (): string => (
+  app.isPackaged
+    ? path.join(process.resourcesPath, 'icon.png')
+    : path.join(__dirname, '../build/icon.png')
+);
+
+function loadRendererRoute(
+  window: BrowserWindow,
+  query?: { page?: string; serverId?: string; serverName?: string; panelMode?: string },
+): Promise<void> {
+  const queryEntries = Object.entries(query ?? {}).filter((entry): entry is [string, string] => (
+    typeof entry[1] === 'string' && entry[1].trim().length > 0
+  ));
+  const queryObject = Object.fromEntries(queryEntries);
+
+  if (isDev) {
+    const params = new URLSearchParams(queryObject).toString();
+    const targetUrl = params.length > 0 ? `${RENDERER_URL}?${params}` : RENDERER_URL;
+    return window.loadURL(targetUrl);
+  }
+
+  return window.loadFile(path.join(__dirname, '../dist/index.html'), { query: queryObject });
+}
 
 function createWindow(): void {
   const { height: workAreaHeight } = screen.getPrimaryDisplay().workAreaSize;
@@ -127,9 +153,7 @@ function createWindow(): void {
   // resources/icon.png via extraResources so it lives outside the asar and
   // can be used as a real file path.  In dev we reference it directly from
   // the build/ folder.
-  const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'icon.png')
-    : path.join(__dirname, '../build/icon.png');
+  const iconPath = getWindowIconPath();
 
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -139,7 +163,9 @@ function createWindow(): void {
     resizable: true,
     thickFrame: true,
     frame: false,
+    roundedCorners: true,
     titleBarStyle: 'hidden',
+    transparent: true,
     backgroundColor: '#0D0D1B',
     icon: iconPath,
     show: false,
@@ -152,11 +178,9 @@ function createWindow(): void {
   });
 
   // Load the app
+  void loadRendererRoute(mainWindow);
   if (isDev) {
-    mainWindow.loadURL(RENDERER_URL);
     mainWindow.webContents.openDevTools({ mode: 'detach' });
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
   // Show the window once it is ready to prevent a white flash
@@ -185,19 +209,110 @@ function createWindow(): void {
   });
 }
 
+function createServerPanelWindow(serverId?: string, serverName?: string): BrowserWindow {
+  const storedBoundsRaw = storeGet(SERVER_PANEL_POPOUT_BOUNDS_KEY);
+  const storedBounds = (
+    storedBoundsRaw
+    && typeof storedBoundsRaw === 'object'
+    && !Array.isArray(storedBoundsRaw)
+    && typeof (storedBoundsRaw as { width?: unknown }).width === 'number'
+    && typeof (storedBoundsRaw as { height?: unknown }).height === 'number'
+    && typeof (storedBoundsRaw as { x?: unknown }).x === 'number'
+    && typeof (storedBoundsRaw as { y?: unknown }).y === 'number'
+  )
+    ? storedBoundsRaw as { width: number; height: number; x: number; y: number }
+    : null;
+
+  const iconPath = getWindowIconPath();
+  const serverPanelWindow = new BrowserWindow({
+    width: storedBounds?.width ?? 1440,
+    height: storedBounds?.height ?? 980,
+    x: storedBounds?.x,
+    y: storedBounds?.y,
+    minWidth: 1100,
+    minHeight: 720,
+    resizable: true,
+    thickFrame: true,
+    frame: false,
+    roundedCorners: true,
+    titleBarStyle: 'hidden',
+    transparent: true,
+    backgroundColor: '#0D0D1B',
+    icon: iconPath,
+    show: false,
+    webPreferences: {
+      preload: PRELOAD_PATH,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+
+  serverPanelWindows.add(serverPanelWindow);
+  void loadRendererRoute(serverPanelWindow, { page: 'ServerPanel', serverId, serverName, panelMode: 'popout' });
+
+  serverPanelWindow.once('ready-to-show', () => {
+    serverPanelWindow.show();
+  });
+
+  serverPanelWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('https:') || url.startsWith('http:')) {
+      void shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+
+  const persistPopoutBounds = () => {
+    if (serverPanelWindow.isDestroyed() || serverPanelWindow.isMaximized() || serverPanelWindow.isMinimized()) return;
+    const bounds = serverPanelWindow.getBounds();
+    storeSet(SERVER_PANEL_POPOUT_BOUNDS_KEY, {
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+    });
+  };
+
+  serverPanelWindow.on('resize', persistPopoutBounds);
+  serverPanelWindow.on('move', persistPopoutBounds);
+
+  serverPanelWindow.on('closed', () => {
+    serverPanelWindows.delete(serverPanelWindow);
+  });
+
+  return serverPanelWindow;
+}
+
 // ─── IPC handlers ────────────────────────────────────────────────────────────
 
-ipcMain.on(IPC.WINDOW_MINIMIZE, () => mainWindow?.minimize());
+ipcMain.on(IPC.WINDOW_MINIMIZE, (event) => {
+  const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  targetWindow?.minimize();
+});
 
-ipcMain.on(IPC.WINDOW_MAXIMIZE, () => {
-  if (mainWindow?.isMaximized()) {
-    mainWindow.unmaximize();
+ipcMain.on(IPC.WINDOW_MAXIMIZE, (event) => {
+  const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  if (!targetWindow) return;
+  if (targetWindow.isMaximized()) {
+    targetWindow.unmaximize();
   } else {
-    mainWindow?.maximize();
+    targetWindow.maximize();
   }
 });
 
-ipcMain.on(IPC.WINDOW_CLOSE, () => mainWindow?.close());
+ipcMain.on(IPC.WINDOW_CLOSE, (event) => {
+  const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  targetWindow?.close();
+});
+
+ipcMain.handle(IPC.WINDOW_OPEN_SERVER_PANEL, async (_event, payload?: { serverId?: string; serverName?: string }) => {
+  try {
+    createServerPanelWindow(payload?.serverId, payload?.serverName);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
 
 // ─── Store IPC handlers ───────────────────────────────────────────────────────
 
@@ -406,8 +521,52 @@ ipcMain.handle(IPC.GAME_OPEN_LOG_LOCATION, (_event, installationPath: string) =>
   return { success: true };
 });
 
+ipcMain.handle(IPC.GAME_CLEAR_LOG_FILES, (_event, installationPath: string) => {
+  if (!installationPath) {
+    return { success: false, deletedCount: 0, error: 'Missing installation path.' };
+  }
+
+  const result = clearServerLogFiles(installationPath);
+  if (!result.success) {
+    console.warn('[logs] Failed to clear logs folder:', { installationPath, error: result.error });
+  }
+  return result;
+});
+
 ipcMain.handle(IPC.GAME_GET_GRAPHICS_INFO, (_event, installationPath: string) => {
   return getGraphicsInfo(installationPath);
+});
+
+// ─── Server chat IPC handlers ─────────────────────────────────────────────────
+
+ipcMain.handle(IPC.GAME_SERVER_STDIN, (_event, installationId: string, line: string) => {
+  if (!installationId || typeof line !== 'string') {
+    return { success: false, error: 'Missing installationId or line.' };
+  }
+  return sendServerStdin(installationId, line);
+});
+
+ipcMain.handle(IPC.GAME_LIST_CHAT_FILES, (_event, installationPath: string) => {
+  if (!installationPath) return [];
+  try {
+    return listChatFiles(installationPath);
+  } catch (error) {
+    console.warn('[chat] Failed to list chat files:', error);
+    return [];
+  }
+});
+
+ipcMain.handle(IPC.GAME_READ_CHAT_FILE, (_event, installationPath: string, fileName: string, maxBytes?: number) => {
+  if (!installationPath || !fileName) {
+    return { content: '', truncated: false, error: 'Missing installationPath or fileName.' };
+  }
+  try {
+    return { ...readChatFile(installationPath, fileName, maxBytes), error: undefined };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn('[chat] Failed to read chat file:', { installationPath, fileName, error: message });
+    return { content: '', truncated: false, error: message };
+  }
 });
 
 function readServerCfgKey(installationPath: string, key: string): string | null {
@@ -525,10 +684,45 @@ function resolveInstallationTargetPath(installationPath: string, relativePath: s
   return target;
 }
 
+const KNOWN_BINARY_EXTENSIONS = new Set([
+  '.7z', '.a', '.avi', '.bin', '.bmp', '.class', '.dat', '.db', '.dll', '.dylib', '.ear', '.exe', '.gif',
+  '.gz', '.ico', '.iso', '.jar', '.jpeg', '.jpg', '.lib', '.lock', '.lz', '.mp3', '.mp4', '.o', '.ogg', '.otf',
+  '.pdf', '.png', '.rar', '.so', '.sqlite', '.tar', '.ttf', '.war', '.wav', '.webm', '.webp', '.woff', '.woff2', '.zip',
+]);
+
+function isKnownBinaryFileByExtension(filePath: string): boolean {
+  const extension = path.extname(filePath).toLowerCase();
+  return extension.length > 0 && KNOWN_BINARY_EXTENSIONS.has(extension);
+}
+
+function isLikelyBinaryContent(content: Buffer): boolean {
+  if (content.length === 0) return false;
+
+  let suspiciousByteCount = 0;
+  const sampleSize = Math.min(content.length, 8192);
+  for (let index = 0; index < sampleSize; index += 1) {
+    const value = content[index];
+    if (value === 0) return true;
+    if (value < 7 || (value > 14 && value < 32)) suspiciousByteCount += 1;
+  }
+
+  return (suspiciousByteCount / sampleSize) > 0.3;
+}
+
+function isEditableTextFile(targetPath: string): boolean {
+  if (isKnownBinaryFileByExtension(targetPath)) return false;
+  const content = fs.readFileSync(targetPath);
+  return !isLikelyBinaryContent(content);
+}
+
+function getNonEditableFileReason(relativePath: string): string {
+  return `Cannot open ${relativePath}: binary files are not supported in the editor.`;
+}
+
 function listInstallationEntries(
   installationPath: string,
   relativeDir = '',
-): Array<{ name: string; relativePath: string; isDirectory: boolean; sizeBytes: number; modifiedMs: number }> {
+): Array<{ name: string; relativePath: string; isDirectory: boolean; sizeBytes: number; modifiedMs: number; isEditableText: boolean; nonEditableReason?: string }> {
   const dirPath = resolveInstallationTargetPath(installationPath, relativeDir || '.');
   const stats = fs.statSync(dirPath);
   if (!stats.isDirectory()) {
@@ -546,6 +740,10 @@ function listInstallationEntries(
       isDirectory: entry.isDirectory(),
       sizeBytes: entry.isDirectory() ? 0 : entryStat.size,
       modifiedMs: entryStat.mtimeMs,
+      isEditableText: entry.isDirectory() || !isKnownBinaryFileByExtension(entry.name),
+      nonEditableReason: entry.isDirectory() || !isKnownBinaryFileByExtension(entry.name)
+        ? undefined
+        : getNonEditableFileReason(relativePath),
     };
   });
 
@@ -563,6 +761,11 @@ function readInstallationTextFile(installationPath: string, relativePath: string
   if (!stats.isFile()) {
     throw new Error('Target path is not a file.');
   }
+
+  if (!isEditableTextFile(targetPath)) {
+    throw new Error(getNonEditableFileReason(relativePath));
+  }
+
   return fs.readFileSync(targetPath, 'utf8');
 }
 
@@ -571,6 +774,10 @@ function writeInstallationTextFile(installationPath: string, relativePath: strin
   const stats = fs.statSync(targetPath);
   if (!stats.isFile()) {
     return { success: false, error: 'Target path is not a file.' };
+  }
+
+  if (!isEditableTextFile(targetPath)) {
+    return { success: false, error: getNonEditableFileReason(relativePath) };
   }
 
   fs.writeFileSync(targetPath, content, 'utf8');
@@ -1214,6 +1421,41 @@ function listImagesInDir(dir: string): string[] {
   }
 }
 
+function importImageToDir(sourcePath: string, targetDir: string): { success: boolean; path?: string; error?: string } {
+  try {
+    if (typeof sourcePath !== 'string' || sourcePath.trim().length === 0) {
+      return { success: false, error: 'Invalid source path.' };
+    }
+    if (!fs.existsSync(sourcePath)) {
+      return { success: false, error: 'Selected file does not exist.' };
+    }
+
+    const ext = path.extname(sourcePath).toLowerCase();
+    if (!IMAGE_EXTS.has(ext)) {
+      return { success: false, error: 'Unsupported icon format.' };
+    }
+
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    const baseNameRaw = path.basename(sourcePath, ext);
+    const baseName = baseNameRaw.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'custom-icon';
+
+    let counter = 0;
+    let destFileName = `${baseName}${ext}`;
+    let destPath = path.join(targetDir, destFileName);
+    while (fs.existsSync(destPath)) {
+      counter += 1;
+      destFileName = `${baseName}-${counter}${ext}`;
+      destPath = path.join(targetDir, destFileName);
+    }
+
+    fs.copyFileSync(sourcePath, destPath);
+    return { success: true, path: `file://${destPath}` };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
 ipcMain.handle(IPC.BACKGROUNDS_LIST, async () => {
   const userDir    = path.join(app.getPath('userData'), 'backgrounds');
   const bundledDir = path.join(__dirname, '..', 'presets', 'backgrounds');
@@ -1231,6 +1473,11 @@ ipcMain.handle(IPC.ICONS_LIST, async () => {
   try { fs.mkdirSync(userDir, { recursive: true }); } catch { /* ignore */ }
 
   return [...listImagesInDir(bundledDir), ...listImagesInDir(userDir)];
+});
+
+ipcMain.handle(IPC.ICONS_IMPORT, async (_event, sourcePath: string) => {
+  const userDir = path.join(app.getPath('userData'), 'icons');
+  return importImageToDir(sourcePath, userDir);
 });
 
 // ─── Preset assets initialisation ───────────────────────────────────────────

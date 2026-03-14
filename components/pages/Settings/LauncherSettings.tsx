@@ -713,25 +713,6 @@ const LauncherSettings: React.FC = () => {
                 </div>
 
                 <div className="mt-8">
-                    <h2 className="font-display text-xl font-bold uppercase tracking-wider text-red-400 mb-4 pb-2 border-b-2 border-red-500/30">
-                        Danger Zone
-                    </h2>
-                    <div className="space-y-4">
-                        <SettingRow
-                            title="Reset All Data"
-                            description="Permanently wipe all accounts, installations, sessions, and settings, then restart the launcher."
-                        >
-                            <button
-                                onClick={() => setClearDataConfirmOpen(true)}
-                                className="px-4 py-2 rounded-md bg-red-700/60 hover:bg-red-600/80 border border-red-500/40 text-red-200 transition-colors text-sm font-semibold uppercase tracking-wider"
-                            >
-                                Clear All Data
-                            </button>
-                        </SettingRow>
-                    </div>
-                </div>
-
-                <div className="mt-8">
                     <h2 className="font-display text-xl font-bold uppercase tracking-wider text-white mb-1 pb-2 border-b-2 border-white/10">
                         Legacy Installations
                     </h2>
@@ -789,6 +770,25 @@ const LauncherSettings: React.FC = () => {
                             })}
                         </div>
                     )}
+                </div>
+
+                <div className="mt-8">
+                    <h2 className="font-display text-xl font-bold uppercase tracking-wider text-red-400 mb-4 pb-2 border-b-2 border-red-500/30">
+                        Danger Zone
+                    </h2>
+                    <div className="space-y-4">
+                        <SettingRow
+                            title="Reset All Data"
+                            description="Permanently wipe all accounts, installations, sessions, and settings, then restart the launcher."
+                        >
+                            <button
+                                onClick={() => setClearDataConfirmOpen(true)}
+                                className="px-4 py-2 rounded-md bg-red-700/60 hover:bg-red-600/80 border border-red-500/40 text-red-200 transition-colors text-sm font-semibold uppercase tracking-wider"
+                            >
+                                Clear All Data
+                            </button>
+                        </SettingRow>
+                    </div>
                 </div>
             </div>
         </div>

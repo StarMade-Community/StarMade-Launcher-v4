@@ -59,6 +59,39 @@ function sendLogEvent(installationId: string, level: 'INFO' | 'WARNING' | 'ERROR
 }
 
 /**
+ * Parse a [CHANNELROUTER] stderr line and emit a chat message event if matched.
+ *
+ * The server writes lines like:
+ *   [CHANNELROUTER] RECEIVED MESSAGE ON <state>: [CHAT][sender=Alice][receiverType=CHANNEL][receiver=all][message=Hello]
+ */
+function tryEmitChatMessage(installationId: string, line: string): void {
+  // Must start with [CHANNELROUTER] RECEIVED MESSAGE ON
+  if (!line.includes('[CHANNELROUTER]') || !line.includes('[CHAT]')) return;
+
+  const senderMatch = line.match(/\[sender=([^\]]*)\]/);
+  const receiverTypeMatch = line.match(/\[receiverType=([^\]]*)\]/);
+  // Use negative lookahead to avoid matching [receiverType=...] instead of [receiver=...]
+  const receiverMatch = line.match(/\[receiver=(?!Type)([^\]]*)\]/);
+  const messageMatch = line.match(/\[message=([\s\S]*)\]$/);
+
+  if (!senderMatch || !receiverTypeMatch || !receiverMatch || !messageMatch) return;
+
+  const sender = senderMatch[1];
+  const receiverType = receiverTypeMatch[1];
+  const receiver = receiverMatch[1];
+  const text = messageMatch[1];
+  const timestamp = new Date().toISOString();
+
+  const payload = { installationId, sender, receiverType, receiver, text, timestamp };
+
+  BrowserWindow.getAllWindows().forEach(win => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('game:chat-message', payload);
+    }
+  });
+}
+
+/**
  * Parse a StarMade log line to extract level and message.
  * Example format: "[2024-03-11 14:23:45] [INFO] Loading game data..."
  */
@@ -329,12 +362,9 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
     }
 
     // Pass the authentication token to the game so players don't need to
-    // log in again through the in-game menu (mirrors v2 launcher behaviour).
-    // Each flag and its value are separate spawn arguments so the OS/JVM
-    // receives them correctly (a single combined string would be treated as
-    // one opaque argument by the process).
+    // log in again through the in-game menu
     if (authToken) {
-      args.push('-auth', authToken);
+      args.push('-auth ' + authToken); //The game requires it to be like this, no idea why
       sendLogEvent(installationId, 'INFO', 'Auth token injected.');
     }
 
@@ -358,10 +388,12 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
 
     sendLogEvent(installationId, 'INFO', `Command: ${safeArgs.join(' ')}`);
 
-    // Spawn the process
+    // Spawn the process.
+    // For server processes we open stdin as a pipe so we can send console
+    // commands (e.g. admin broadcast messages) while the server is running.
     const child = spawn(javaPath, args, {
       cwd: installationPath,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [isServer ? 'pipe' : 'ignore', 'pipe', 'pipe'],
       detached: false,
     });
 
@@ -406,6 +438,8 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
         if (line.trim()) {
           console.error(`[Game ${installationId}] ${line}`);
           logStream.write(`[STDERR] ${line}\n`);
+          // Parse live chat messages from the ChannelRouter output
+          tryEmitChatMessage(installationId, line);
           // Only elevate to ERROR when the line looks like a real Java
           // exception or error; everything else stays as the neutral 'stderr'
           // level so it doesn't pollute the errors filter in the log viewer.
@@ -539,6 +573,39 @@ export function openLogLocation(installationPath: string): void {
 }
 
 /**
+ * Delete all files/directories inside the installation's logs folder.
+ */
+export function clearServerLogFiles(installationPath: string): { success: boolean; deletedCount: number; error?: string } {
+  const logsDir = path.resolve(path.join(installationPath, 'logs'));
+
+  try {
+    if (!fs.existsSync(logsDir)) {
+      return { success: true, deletedCount: 0 };
+    }
+
+    const stats = fs.statSync(logsDir);
+    if (!stats.isDirectory()) {
+      return { success: false, deletedCount: 0, error: 'Logs path is not a directory.' };
+    }
+
+    let deletedCount = 0;
+    for (const entry of fs.readdirSync(logsDir, { withFileTypes: true })) {
+      const entryPath = path.join(logsDir, entry.name);
+      fs.rmSync(entryPath, { recursive: true, force: true });
+      deletedCount += 1;
+    }
+
+    return { success: true, deletedCount };
+  } catch (error) {
+    return {
+      success: false,
+      deletedCount: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
  * Get GraphicsInfo.txt content if it exists in the installation's logs folder.
  */
 export function getGraphicsInfo(installationPath: string): string | null {
@@ -590,7 +657,7 @@ function getLogCategory(fileName: string): { id: string; label: string } {
     const normalizedPattern = lower.replace(/\d+/g, 'n');
     return {
       id: `pattern:${normalizedPattern}`,
-      label: `Pattern: ${normalizedPattern}`,
+      label: `${normalizedPattern}`,
     };
   }
 
@@ -611,6 +678,7 @@ export function listServerLogFiles(installationPath: string): ServerLogCatalog {
   for (const entry of fs.readdirSync(logsDir, { withFileTypes: true })) {
     if (!entry.isFile()) continue;
     if (entry.name.toLowerCase() === 'graphicsinfo.txt') continue;
+    if (entry.name.toLowerCase().endsWith('.lck')) continue;
 
     const filePath = path.join(logsDir, entry.name);
     let stat: fs.Stats;
@@ -740,6 +808,146 @@ export function readServerLogFile(
       }
     }
 
+    return { content, truncated };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Send a line of text to a running server's stdin (console input).
+ * Used to submit admin commands such as /server_message_broadcast.
+ */
+export function sendServerStdin(installationId: string, line: string): { success: boolean; error?: string } {
+  const running = runningProcesses.get(installationId);
+  if (!running) {
+    return { success: false, error: 'Server is not running.' };
+  }
+  if (!running.isServer) {
+    return { success: false, error: 'Target process is not a server.' };
+  }
+  if (!running.process.stdin) {
+    return { success: false, error: 'Server stdin pipe is not available.' };
+  }
+  try {
+    running.process.stdin.write(`${line}\n`);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+export interface ChatFileInfo {
+  fileName: string;
+  channelId: string;
+  channelLabel: string;
+  channelType: 'general' | 'faction' | 'direct' | 'custom';
+  sizeBytes: number;
+  modifiedMs: number;
+}
+
+/**
+ * List chat log files from an installation's chatlogs directory.
+ */
+export function listChatFiles(installationPath: string): ChatFileInfo[] {
+  const chatDir = path.join(installationPath, 'chatlogs');
+  if (!fs.existsSync(chatDir)) return [];
+
+  const result: ChatFileInfo[] = [];
+
+  try {
+    for (const entry of fs.readdirSync(chatDir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.endsWith('.txt')) continue;
+
+      const filePath = path.join(chatDir, entry.name);
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(filePath);
+      } catch {
+        continue;
+      }
+
+      const channelId = entry.name.replace(/\.txt$/i, '');
+      let channelLabel: string;
+      let channelType: ChatFileInfo['channelType'];
+
+      if (channelId === 'all') {
+        channelLabel = 'General';
+        channelType = 'general';
+      } else if (/^Faction\d+$/i.test(channelId)) {
+        const fid = channelId.replace(/^Faction/i, '');
+        channelLabel = `Faction ${fid}`;
+        channelType = 'faction';
+      } else if (channelId.startsWith('##')) {
+        // DirectChatChannel names: ##<player1><player2> (combined, sorted by hashCode)
+        // We show the raw combined name; actual player names are in the file content
+        channelLabel = `DM: ${channelId.slice(2)}`;
+        channelType = 'direct';
+      } else {
+        channelLabel = channelId;
+        channelType = 'custom';
+      }
+
+      result.push({
+        fileName: entry.name,
+        channelId,
+        channelLabel,
+        channelType,
+        sizeBytes: stat.size,
+        modifiedMs: stat.mtimeMs,
+      });
+    }
+  } catch (error) {
+    console.error('[Launcher] Failed to list chat files:', error);
+  }
+
+  // Sort: general first, then faction, then direct, then custom; alphabetically within type
+  const typeOrder: Record<ChatFileInfo['channelType'], number> = { general: 0, faction: 1, custom: 2, direct: 3 };
+  result.sort((a, b) => {
+    const typeDiff = typeOrder[a.channelType] - typeOrder[b.channelType];
+    if (typeDiff !== 0) return typeDiff;
+    return a.channelLabel.localeCompare(b.channelLabel);
+  });
+
+  return result;
+}
+
+/**
+ * Read the tail of a chat log file from the chatlogs directory.
+ */
+export function readChatFile(
+  installationPath: string,
+  fileName: string,
+  maxBytes = 512 * 1024,
+): { content: string; truncated: boolean } {
+  const chatDir = path.resolve(path.join(installationPath, 'chatlogs'));
+  const filePath = path.resolve(path.join(chatDir, fileName));
+
+  // Path traversal guard
+  if (!filePath.startsWith(`${chatDir}${path.sep}`) && filePath !== chatDir) {
+    throw new Error('Invalid chat file path.');
+  }
+
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) throw new Error('Chat path is not a file.');
+
+  const size = stat.size;
+  const bytesToRead = Math.max(1, Math.min(Math.floor(maxBytes), size));
+  const start = Math.max(0, size - bytesToRead);
+
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(size === 0 ? 0 : bytesToRead);
+    if (buffer.length > 0) {
+      fs.readSync(fd, buffer, 0, buffer.length, start);
+    }
+    let content = buffer.toString('utf8');
+    const truncated = start > 0;
+    if (truncated) {
+      const firstBreak = content.indexOf('\n');
+      if (firstBreak >= 0) content = content.slice(firstBreak + 1);
+    }
     return { content, truncated };
   } finally {
     fs.closeSync(fd);

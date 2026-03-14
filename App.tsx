@@ -25,6 +25,7 @@ interface UpdateInfo {
 
 const App: React.FC = () => {
   const [isShortViewport, setIsShortViewport] = useState<boolean>(false);
+  const [isWindowMaximized, setIsWindowMaximized] = useState<boolean>(false);
 
   const {
     activePage, 
@@ -36,6 +37,7 @@ const App: React.FC = () => {
     logViewerOpen,
     logViewerInstallation,
     closeLogViewer,
+    navigate,
   } = useApp();
 
   const { url: bgUrl, loaded: bgLoaded } = useRandomBackground();
@@ -66,6 +68,41 @@ const App: React.FC = () => {
     handleViewportResize();
     window.addEventListener('resize', handleViewportResize);
     return () => window.removeEventListener('resize', handleViewportResize);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('page') !== 'ServerPanel') return;
+
+    const serverId = params.get('serverId') ?? undefined;
+    const serverName = params.get('serverName') ?? undefined;
+    navigate('ServerPanel', { serverId, serverName });
+  }, [navigate]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') return;
+
+    const channel = new BroadcastChannel('starmade-launcher-navigation');
+    channel.onmessage = (event: MessageEvent<unknown>) => {
+      const payload = event.data as { type?: string; serverId?: string; serverName?: string } | null;
+      if (!payload || payload.type !== 'open-server-panel') return;
+      navigate('ServerPanel', {
+        serverId: payload.serverId,
+        serverName: payload.serverName,
+      });
+      window.focus();
+    };
+
+    return () => {
+      channel.close();
+    };
+  }, [navigate]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.launcher?.window?.onMaximizedChanged) return;
+    return window.launcher.window.onMaximizedChanged((value) => setIsWindowMaximized(value));
   }, []);
 
 
@@ -101,7 +138,9 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className={`bg-starmade-bg text-gray-200 font-sans h-screen w-screen flex flex-col antialiased overflow-x-hidden ${isShortViewport ? 'overflow-y-auto' : 'overflow-y-hidden'}`}>
+    <div className={`bg-starmade-bg text-gray-200 font-sans h-screen w-screen flex flex-col antialiased overflow-x-hidden ${
+      isShortViewport ? 'overflow-y-auto' : 'overflow-y-hidden'
+    } ${isWindowMaximized ? 'rounded-none p-0 border-0 shadow-none' : 'rounded-3xl p-[3px] border border-white/10 shadow-[0_0_0_1px_rgba(0,0,0,0.6),0_24px_64px_rgba(0,0,0,0.8)]'} overflow-hidden`}>
       <LaunchConfirmModal
         isOpen={isLaunchModalOpen}
         onConfirm={startLaunchingAndTerminate}

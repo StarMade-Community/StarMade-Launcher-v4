@@ -24,6 +24,8 @@ const launcherApi = {
     minimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
     maximize: () => ipcRenderer.send(IPC.WINDOW_MAXIMIZE),
     close:    () => ipcRenderer.send(IPC.WINDOW_CLOSE),
+    openServerPanel: (serverId?: string, serverName?: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.WINDOW_OPEN_SERVER_PANEL, { serverId, serverName }),
     onMaximizedChanged: (cb: (isMaximized: boolean) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, value: boolean) => cb(value);
       ipcRenderer.on(IPC.WINDOW_MAXIMIZED_CHANGED, listener);
@@ -178,6 +180,10 @@ const launcherApi = {
     openLogLocation: (installationPath: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke(IPC.GAME_OPEN_LOG_LOCATION, installationPath),
 
+    /** Delete all files in an installation's logs folder. */
+    clearLogFiles: (installationPath: string): Promise<{ success: boolean; deletedCount: number; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_CLEAR_LOG_FILES, installationPath),
+
     /** Get GraphicsInfo.txt content if it exists. */
     getGraphicsInfo: (installationPath: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.GAME_GET_GRAPHICS_INFO, installationPath),
@@ -209,6 +215,8 @@ const launcherApi = {
       isDirectory: boolean;
       sizeBytes: number;
       modifiedMs: number;
+      isEditableText: boolean;
+      nonEditableReason?: string;
     }>> => ipcRenderer.invoke(IPC.GAME_FILES_LIST, installationPath, relativeDir),
 
     /** Read a text file from an installation directory. */
@@ -237,6 +245,51 @@ const launcherApi = {
       const listener = (_event: Electron.IpcRendererEvent, data: { installationId: string; level: string; message: string }) => cb(data);
       ipcRenderer.on(IPC.GAME_LOG, listener);
       return () => ipcRenderer.removeListener(IPC.GAME_LOG, listener);
+    },
+
+    /**
+     * Send a line of text to a running server's stdin (console input).
+     * Used to submit admin commands such as server_message_broadcast.
+     */
+    sendServerCommand: (installationId: string, line: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_SERVER_STDIN, installationId, line),
+
+    /** List chat log files from an installation's chatlogs directory. */
+    listChatFiles: (installationPath: string): Promise<Array<{
+      fileName: string;
+      channelId: string;
+      channelLabel: string;
+      channelType: 'general' | 'faction' | 'direct' | 'custom';
+      sizeBytes: number;
+      modifiedMs: number;
+    }>> => ipcRenderer.invoke(IPC.GAME_LIST_CHAT_FILES, installationPath),
+
+    /** Read the tail of a chat log file from the chatlogs directory. */
+    readChatFile: (installationPath: string, fileName: string, maxBytes?: number): Promise<{
+      content: string;
+      truncated: boolean;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.GAME_READ_CHAT_FILE, installationPath, fileName, maxBytes),
+
+    /** Subscribe to live chat message events from a running server. Returns a cleanup function. */
+    onChatMessage: (cb: (data: {
+      installationId: string;
+      sender: string;
+      receiverType: string;
+      receiver: string;
+      text: string;
+      timestamp: string;
+    }) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, data: {
+        installationId: string;
+        sender: string;
+        receiverType: string;
+        receiver: string;
+        text: string;
+        timestamp: string;
+      }) => cb(data);
+      ipcRenderer.on(IPC.GAME_CHAT_MESSAGE, listener);
+      return () => ipcRenderer.removeListener(IPC.GAME_CHAT_MESSAGE, listener);
     },
   },
 
@@ -313,6 +366,9 @@ const launcherApi = {
     /** List available icon image paths (file:// URLs). */
     list: (): Promise<string[]> =>
       ipcRenderer.invoke(IPC.ICONS_LIST),
+    /** Import a custom icon into the user icons folder. */
+    import: (sourcePath: string): Promise<{ success: boolean; path?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.ICONS_IMPORT, sourcePath),
   },
 
   /** Legacy installation detection APIs */

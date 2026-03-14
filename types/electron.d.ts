@@ -21,6 +21,8 @@ declare global {
         maximize: () => void;
         /** Close the application window */
         close: () => void;
+        /** Open Server Panel in a dedicated pop-out window. */
+        openServerPanel: (serverId?: string, serverName?: string) => Promise<{ success: boolean; error?: string }>;
         /**
          * Subscribe to maximized-state changes.
          * @returns A cleanup function that removes the listener when called.
@@ -140,6 +142,8 @@ declare global {
         }>;
         /** Open log directory in file manager. */
         openLogLocation: (installationPath: string) => Promise<{ success: boolean }>;
+        /** Delete all files/directories inside an installation's logs folder. */
+        clearLogFiles: (installationPath: string) => Promise<{ success: boolean; deletedCount: number; error?: string }>;
         /** Get GraphicsInfo.txt content if it exists. */
         getGraphicsInfo: (installationPath: string) => Promise<string | null>;
         /** Read a value from server.cfg by key (e.g. MAX_CLIENTS). */
@@ -159,6 +163,8 @@ declare global {
           isDirectory: boolean;
           sizeBytes: number;
           modifiedMs: number;
+          isEditableText: boolean;
+          nonEditableReason?: string;
         }>>;
         /** Read a text file from an installation directory. */
         readInstallationFile: (installationPath: string, relativePath: string) => Promise<{ content: string; error?: string }>;
@@ -166,6 +172,35 @@ declare global {
         writeInstallationFile: (installationPath: string, relativePath: string, content: string) => Promise<{ success: boolean; error?: string }>;
         /** Subscribe to game log events. Returns a cleanup function. */
         onLog: (cb: (data: { installationId: string; level: string; message: string }) => void) => () => void;
+        /**
+         * Send a line of text to a running server's stdin (console input).
+         * Used to send admin commands such as server_message_broadcast.
+         */
+        sendServerCommand: (installationId: string, line: string) => Promise<{ success: boolean; error?: string }>;
+        /** List chat log files from an installation's chatlogs directory. */
+        listChatFiles: (installationPath: string) => Promise<Array<{
+          fileName: string;
+          channelId: string;
+          channelLabel: string;
+          channelType: 'general' | 'faction' | 'direct' | 'custom';
+          sizeBytes: number;
+          modifiedMs: number;
+        }>>;
+        /** Read the tail of a chat log file from the chatlogs directory. */
+        readChatFile: (installationPath: string, fileName: string, maxBytes?: number) => Promise<{
+          content: string;
+          truncated: boolean;
+          error?: string;
+        }>;
+        /** Subscribe to live chat messages from a running server. Returns a cleanup function. */
+        onChatMessage: (cb: (data: {
+          installationId: string;
+          sender: string;
+          receiverType: string;
+          receiver: string;
+          text: string;
+          timestamp: string;
+        }) => void) => () => void;
         /**
          * Read the `launcher-session.json` file written by the game into the
          * installation directory.  Returns the parsed object or `null` when the
@@ -239,6 +274,8 @@ declare global {
       icons: {
         /** List available icon image paths (file:// URLs). */
         list: () => Promise<string[]>;
+        /** Import a custom icon into the user icons folder. */
+        import: (sourcePath: string) => Promise<{ success: boolean; path?: string; error?: string }>;
       };
 
       /** Account authentication APIs */
