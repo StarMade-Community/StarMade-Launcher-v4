@@ -39,8 +39,8 @@ const availableIcons: { icon: string; name: string }[] = [
     { icon: 'star', name: 'Star' },
     { icon: 'server', name: 'Server' },
     { icon: 'code', name: 'Code' },
+    { icon: 'gamepad', name: 'Gamepad' },
     { icon: 'bolt', name: 'Bolt' },
-    { icon: 'beaker', name: 'Beaker' },
     { icon: 'cube', name: 'Cube' },
 ];
 
@@ -62,7 +62,7 @@ interface IconPickerModalProps {
 const IconPickerModal: React.FC<IconPickerModalProps> = ({ onSelect, onClose }) => {
     const [folderIcons, setFolderIcons] = useState<{ path: string; name: string }[]>([]);
 
-    useEffect(() => {
+    const loadFolderIcons = () => {
         if (typeof window === 'undefined' || !window.launcher?.icons) return;
         window.launcher.icons.list().then(paths => {
             setFolderIcons(paths.map(p => ({
@@ -71,16 +71,34 @@ const IconPickerModal: React.FC<IconPickerModalProps> = ({ onSelect, onClose }) 
                 name: p.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, ''),
             })));
         }).catch(() => { /* silently ignore if unavailable */ });
+    };
+
+    useEffect(() => {
+        loadFolderIcons();
     }, []);
 
     const handleBrowse = async () => {
-        if (typeof window === 'undefined' || !window.launcher?.dialog) return;
+        if (typeof window === 'undefined' || !window.launcher?.dialog || !window.launcher?.icons) return;
         const filePath = await window.launcher.dialog.openFile(undefined, 'image');
-        if (filePath) {
-            onSelect(filePath);
+        if (!filePath) return;
+
+        const imported = await window.launcher.icons.import(filePath).catch(() => ({ success: false as const }));
+        if (imported.success && imported.path) {
+            onSelect(imported.path);
+            loadFolderIcons();
             onClose();
+            return;
         }
+
+        // Fallback for environments that do not support icon importing yet.
+        onSelect(filePath);
+        onClose();
     };
+
+    const iconChoices: Array<{ icon: string; name: string; isCustom: boolean }> = [
+        ...availableIcons.map((entry) => ({ ...entry, isCustom: false })),
+        ...folderIcons.map(({ path, name }) => ({ icon: path, name, isCustom: true })),
+    ];
 
     return (
         <div 
@@ -99,43 +117,26 @@ const IconPickerModal: React.FC<IconPickerModalProps> = ({ onSelect, onClose }) 
                 </div>
 
                 <div className="overflow-y-auto flex-grow space-y-6 pr-1">
-                    {/* ── Icons from folder ── */}
-                    {folderIcons.length > 0 && (
-                        <div>
-                            <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">From Icons Folder</p>
-                            <div className="grid grid-cols-4 gap-4">
-                                {folderIcons.map(({ path: iconPath, name }) => (
-                                    <button
-                                        key={iconPath}
-                                        onClick={() => { onSelect(iconPath); onClose(); }}
-                                        className="flex flex-col items-center justify-center gap-3 p-4 bg-black/20 rounded-lg border border-white/10 hover:border-starmade-accent hover:bg-starmade-accent/10 transition-all group"
-                                    >
-                                        <div className="w-20 h-20 flex items-center justify-center">
-                                            {getIconComponent(iconPath, 'large')}
-                                        </div>
-                                        <span className="text-sm font-semibold text-gray-300 group-hover:text-white truncate w-full text-center">{name}</span>
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* ── Built-in icons ── */}
                     <div>
-                        {folderIcons.length > 0 && (
-                            <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">Built-in</p>
-                        )}
+                        <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">
+                            Icons (Built-in + Custom)
+                        </p>
                         <div className="grid grid-cols-4 gap-4">
-                            {availableIcons.map(({ icon, name }) => (
-                                <button 
-                                    key={icon} 
+                            {iconChoices.map(({ icon, name, isCustom }) => (
+                                <button
+                                    key={icon}
                                     onClick={() => { onSelect(icon); onClose(); }}
                                     className="flex flex-col items-center justify-center gap-3 p-4 bg-black/20 rounded-lg border border-white/10 hover:border-starmade-accent hover:bg-starmade-accent/10 transition-all group"
                                 >
                                     <div className="w-20 h-20 flex items-center justify-center">
                                         {getIconComponent(icon, 'large')}
                                     </div>
-                                    <span className="text-sm font-semibold text-gray-300 group-hover:text-white">{name}</span>
+                                    <div className="w-full text-center">
+                                        <span className="block text-sm font-semibold text-gray-300 group-hover:text-white truncate">{name}</span>
+                                        {isCustom && (
+                                            <span className="text-[10px] uppercase tracking-wider text-gray-500">Custom</span>
+                                        )}
+                                    </div>
                                 </button>
                             ))}
                         </div>
@@ -196,6 +197,8 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
 
   const [name, setName] = useState(item.name);
   const [port, setPort] = useState(item.port ?? '4242');
+  const [serverIp, setServerIp] = useState(item.serverIp ?? '127.0.0.1');
+  const [maxPlayers, setMaxPlayers] = useState(item.maxPlayers ?? 32);
   const [icon, setIcon] = useState(item.icon);
   const [type, setType] = useState<ItemType>(item.type === 'latest' ? 'release' : item.type);
   const [version, setVersion] = useState(item.version);
@@ -230,6 +233,8 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
       const defaults = (stored && typeof stored === 'object') ? stored as {
         gameDir?: string;
         port?: string;
+        serverIp?: string;
+        maxPlayers?: number;
         javaMemory?: number;
         jvmArgs?: string;
         javaPath8?: string;
@@ -238,6 +243,8 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
 
       if (defaults.gameDir) setGameDir(defaults.gameDir);
       if (defaults.port && itemTypeName === 'Server') setPort(defaults.port);
+      if (defaults.serverIp && itemTypeName === 'Server') setServerIp(defaults.serverIp);
+      if (typeof defaults.maxPlayers === 'number' && itemTypeName === 'Server') setMaxPlayers(Math.max(0, Math.round(defaults.maxPlayers)));
       if (defaults.javaMemory) setJavaMemory(defaults.javaMemory);
       if (defaults.jvmArgs) setJvmArgs(defaults.jvmArgs);
 
@@ -359,7 +366,11 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         maxMemory: javaMemory,
         jvmArgs: extraJvmArgs || undefined,
         customJavaPath: javaPath || undefined,
-        ...(itemTypeName === 'Server' && { port }),
+        ...(itemTypeName === 'Server' && {
+          port,
+          serverIp: serverIp.trim() || '127.0.0.1',
+          maxPlayers: Math.max(0, Math.round(maxPlayers || 0)),
+        }),
     });
   };
 
@@ -403,11 +414,24 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
           <div className="flex-1 grid grid-cols-2 gap-x-6 gap-y-4">
             {itemTypeName === 'Server' ? (
               <>
-                <FormField label="Name" htmlFor="itemName">
+                <FormField label="Name" htmlFor="itemName" className="col-span-2">
                   <input id="itemName" type="text" value={name} onChange={e => setName(e.target.value)} className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
                 </FormField>
                 <FormField label="Port" htmlFor="itemPort">
                   <input id="itemPort" type="text" value={port} onChange={e => setPort(e.target.value)} className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
+                </FormField>
+                <FormField label="Server IP" htmlFor="itemServerIp">
+                  <input id="itemServerIp" type="text" value={serverIp} onChange={e => setServerIp(e.target.value)} className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
+                </FormField>
+                <FormField label="Max Players" htmlFor="itemMaxPlayers">
+                  <input
+                    id="itemMaxPlayers"
+                    type="number"
+                    min={0}
+                    value={maxPlayers}
+                    onChange={e => setMaxPlayers(Math.max(0, Number(e.target.value) || 0))}
+                    className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+                  />
                 </FormField>
               </>
             ) : (

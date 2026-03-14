@@ -258,12 +258,20 @@ const SciFiPlayButton: React.FC<SciFiPlayButtonProps> = ({ isUpdating, statusLab
 
 const Footer: React.FC = () => {
   const { navigate, isLaunching, launchStatus, openLaunchModal, completeLaunching } = useApp();
-  const { installations } = useData();
+  const { installations, servers, selectedServer, setSelectedServerId, lastPlayedSession } = useData();
 
-  const [selectedInstallationId, setSelectedInstallationId] = useState<string | null>(null);
-
-  // Resolve the effective installation — prefer the user's selection, fall back to first installed
+  // Resolve installed installations first so we can validate the last-used id
   const installedInstallations = installations.filter(inst => inst.installed !== false);
+
+  // Default to the last-used installation (if it still exists and is installed)
+  const lastUsedId = lastPlayedSession?.installationId ?? null;
+  const lastUsedStillInstalled = lastUsedId
+    ? installedInstallations.some(i => i.id === lastUsedId)
+    : false;
+
+  const [selectedInstallationId, setSelectedInstallationId] = useState<string | null>(
+    lastUsedStillInstalled ? lastUsedId : null,
+  );
   const activeInstallation =
       (selectedInstallationId ? installedInstallations.find(i => i.id === selectedInstallationId) : null)
       ?? installedInstallations[0]
@@ -299,10 +307,23 @@ const Footer: React.FC = () => {
             />
 
             <button 
-                onClick={() => navigate('Installations', { initialTab: 'servers' })}
-                className="flex items-center gap-2 text-gray-300 hover:text-white transition-colors text-sm font-semibold uppercase tracking-wider">
-                <span>Start Server</span>
-                <ChevronRightIcon className="w-4 h-4" />
+                onClick={() => {
+                    const targetServer = selectedServer ?? servers[0] ?? null;
+                    if (targetServer) {
+                        setSelectedServerId(targetServer.id);
+                    }
+                    navigate('ServerPanel', {
+                        serverId: targetServer?.id,
+                        serverName: targetServer?.name,
+                    });
+                }}
+                className="flex items-center gap-3 px-4 py-2 bg-black/20 rounded-md hover:bg-black/40 transition-colors border border-white/10 group"
+            >
+                <div className="text-left">
+                    <p className="text-sm font-medium text-white">Start Server</p>
+                    <p className="text-xs text-gray-400 group-hover:text-gray-300 transition-colors">Open Server Panel</p>
+                </div>
+                <ChevronRightIcon className="w-4 h-4 text-gray-400 group-hover:text-white transition-colors" />
             </button>
         </div>
 

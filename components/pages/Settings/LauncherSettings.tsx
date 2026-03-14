@@ -80,6 +80,10 @@ const LauncherSettings: React.FC = () => {
     const [betaConfirmOpen, setBetaConfirmOpen] = useState(false);
     const [pendingBetaValue, setPendingBetaValue] = useState<boolean>(false);
 
+    // ── Clear all data confirmation state ────────────────────────────────────
+    const [clearDataConfirmOpen, setClearDataConfirmOpen] = useState(false);
+    const [isClearingData, setIsClearingData] = useState(false);
+
     // ── Backup state ─────────────────────────────────────────────────────────
     const [isCreatingBackup, setIsCreatingBackup] = useState(false);
     const [backupResult, setBackupResult] = useState<string | null>(null);
@@ -372,7 +376,6 @@ const LauncherSettings: React.FC = () => {
 
     const handleRestoreBackup = async (backupPath: string) => {
         if (typeof window === 'undefined' || !window.launcher?.backup) return;
-        if (!window.confirm('Restoring this backup will overwrite your current launcher data and restart the launcher. Continue?')) return;
         setIsRestoringBackup(true);
         try {
             const result = await window.launcher.backup.restore(backupPath);
@@ -387,6 +390,18 @@ const LauncherSettings: React.FC = () => {
         }
     };
 
+    const handleClearAllData = async () => {
+        if (typeof window === 'undefined' || !window.launcher?.store) return;
+        setIsClearingData(true);
+        try {
+            await window.launcher.store.clearAll();
+            // The main process will relaunch; nothing more to do here.
+        } catch (error) {
+            alert(`Failed to clear data: ${String(error)}`);
+            setIsClearingData(false);
+        }
+    };
+
     return (
         <div className="h-full flex flex-col">
             <UpdateAvailableModal
@@ -394,6 +409,47 @@ const LauncherSettings: React.FC = () => {
                 updateInfo={updateModalInfo}
                 onDismiss={() => setIsUpdateModalOpen(false)}
             />
+
+            {/* ── Clear-all-data confirmation dialog ──────────────────────────────── */}
+            {clearDataConfirmOpen && (
+                <div
+                    className="fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center"
+                    aria-modal="true"
+                    role="dialog"
+                    aria-labelledby="clear-data-confirm-title"
+                >
+                    <div className="relative bg-starmade-bg/90 border border-red-500/40 rounded-xl shadow-2xl w-full max-w-md p-8">
+                        <h2
+                            id="clear-data-confirm-title"
+                            className="font-display text-xl font-bold uppercase text-red-400 tracking-wider mb-3"
+                        >
+                            Clear All Data?
+                        </h2>
+                        <p className="text-sm text-gray-300 mb-2">
+                            This will permanently delete <span className="text-white font-semibold">all</span> launcher data — accounts, installations, sessions, settings, and pinned items.
+                        </p>
+                        <p className="text-sm text-gray-400 mb-6">
+                            The launcher will restart with a clean slate. <span className="text-white font-semibold">This cannot be undone.</span>
+                        </p>
+                        <div className="flex flex-col gap-3">
+                            <button
+                                onClick={() => { setClearDataConfirmOpen(false); void handleClearAllData(); }}
+                                disabled={isClearingData}
+                                className="w-full px-4 py-2 rounded-md bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-bold uppercase tracking-wider"
+                            >
+                                {isClearingData ? 'Clearing…' : 'Yes, Clear Everything & Restart'}
+                            </button>
+                            <button
+                                onClick={() => setClearDataConfirmOpen(false)}
+                                disabled={isClearingData}
+                                className="w-full px-4 py-2 rounded-md bg-transparent hover:bg-white/10 border border-white/10 transition-colors text-sm font-semibold uppercase tracking-wider text-gray-400"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* ── Beta channel confirmation dialog ─────────────────────────────── */}
             {betaConfirmOpen && (
@@ -714,6 +770,25 @@ const LauncherSettings: React.FC = () => {
                             })}
                         </div>
                     )}
+                </div>
+
+                <div className="mt-8">
+                    <h2 className="font-display text-xl font-bold uppercase tracking-wider text-red-400 mb-4 pb-2 border-b-2 border-red-500/30">
+                        Danger Zone
+                    </h2>
+                    <div className="space-y-4">
+                        <SettingRow
+                            title="Reset All Data"
+                            description="Permanently wipe all accounts, installations, sessions, and settings, then restart the launcher."
+                        >
+                            <button
+                                onClick={() => setClearDataConfirmOpen(true)}
+                                className="px-4 py-2 rounded-md bg-red-700/60 hover:bg-red-600/80 border border-red-500/40 text-red-200 transition-colors text-sm font-semibold uppercase tracking-wider"
+                            >
+                                Clear All Data
+                            </button>
+                        </SettingRow>
+                    </div>
                 </div>
             </div>
         </div>

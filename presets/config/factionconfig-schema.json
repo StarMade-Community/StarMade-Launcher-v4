@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "factionConfig": {
+    "categoryLabels": {
+      "activity": "Activity",
+      "system-bonus": "System Bonus",
+      "points": "Faction Points",
+      "other": "Other"
+    },
+    "categoryOrder": [
+      "activity",
+      "system-bonus",
+      "points",
+      "other"
+    ],
+    "hiddenPathPrefixes": [],
+    "categoryRules": [
+      {
+        "category": "activity",
+        "includes": "activity"
+      },
+      {
+        "category": "system-bonus",
+        "includes": "ownerbonus"
+      },
+      {
+        "category": "points",
+        "includes": "factionpoint"
+      }
+    ],
+    "fieldMeta": {
+      "Faction/FactionActivity/BasicValues/SetInactiveAfterHours": {
+        "label": "Inactive Timeout (Hours)",
+        "description": "Time after which factions become inactive when offline.",
+        "category": "activity",
+        "type": "number",
+        "min": 0,
+        "validation": {
+          "integer": true,
+          "message": "Inactive timeout must be a whole number."
+        }
+      },
+      "Faction/FactionActivity/BasicValues/SetActiveAfterOnlineForMin": {
+        "label": "Reactivate After Minutes Online",
+        "description": "Minutes online needed to set a faction active again.",
+        "category": "activity",
+        "type": "number",
+        "min": 0,
+        "validation": {
+          "integer": true,
+          "message": "Reactivate time must be a whole number."
+        }
+      }
+    }
+  }
+}

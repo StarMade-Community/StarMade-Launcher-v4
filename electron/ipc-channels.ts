@@ -9,6 +9,8 @@ export const IPC = {
   WINDOW_MAXIMIZE: 'window:maximize',
   /** Renderer → Main: close the application window */
   WINDOW_CLOSE: 'window:close',
+  /** Renderer → Main (invoke): open the Server Panel in a dedicated pop-out window. */
+  WINDOW_OPEN_SERVER_PANEL: 'window:open-server-panel',
   /** Main → Renderer: whether the window is currently maximized */
   WINDOW_MAXIMIZED_CHANGED: 'window:maximized-changed',
 
@@ -18,6 +20,12 @@ export const IPC = {
   STORE_SET: 'store:set',
   /** Renderer → Main: delete a key from the persistent JSON store */
   STORE_DELETE: 'store:delete',
+  /**
+   * Renderer → Main (invoke): clear all persisted store data and restart the
+   * launcher.  This is the "factory reset" / "clear all client data" action.
+   * Returns: { success: boolean; error?: string }
+   */
+  STORE_CLEAR_ALL: 'store:clear-all',
 
   // ─── Phase 3: Version manifest ────────────────────────────────────────────
 
@@ -64,10 +72,59 @@ export const IPC = {
   GAME_LOG: 'game:log',
   /** Renderer → Main (invoke): get log file path for a running game. */
   GAME_GET_LOG_PATH: 'game:get-log-path',
+  /** Renderer → Main (invoke): list categorized log files in an installation logs directory. */
+  GAME_LIST_LOG_FILES: 'game:list-log-files',
+  /** Renderer → Main (invoke): read the tail of a specific log file from an installation logs directory. */
+  GAME_READ_LOG_FILE: 'game:read-log-file',
   /** Renderer → Main (invoke): open log directory in file manager. */
   GAME_OPEN_LOG_LOCATION: 'game:open-log-location',
+  /** Renderer → Main (invoke): delete all files/directories inside an installation logs folder. */
+  GAME_CLEAR_LOG_FILES: 'game:clear-log-files',
   /** Renderer → Main (invoke): get GraphicsInfo.txt content if it exists. */
   GAME_GET_GRAPHICS_INFO: 'game:get-graphics-info',
+
+  // ─── Server chat ────────────────────────────────────────────────────────────
+
+  /**
+   * Renderer → Main (invoke): send a line of text to a running server's stdin.
+   * Payload: { installationId: string; line: string }
+   * Returns: { success: boolean; error?: string }
+   */
+  GAME_SERVER_STDIN: 'game:server-stdin',
+
+  /** Main → Renderer: live parsed chat message from a running server. */
+  GAME_CHAT_MESSAGE: 'game:chat-message',
+
+  /**
+   * Renderer → Main (invoke): list chat log files from an installation's
+   * chatlogs directory.
+   * Payload: installationPath: string
+   * Returns: ChatFileInfo[]
+   */
+  GAME_LIST_CHAT_FILES: 'game:list-chat-files',
+
+  /**
+   * Renderer → Main (invoke): read a chat log file from the chatlogs directory.
+   * Payload: installationPath: string, fileName: string, maxBytes?: number
+   * Returns: { content: string; truncated: boolean; error?: string }
+   */
+  GAME_READ_CHAT_FILE: 'game:read-chat-file',
+  /** Renderer → Main (invoke): read a key from installation server.cfg. */
+  GAME_SERVER_CFG_GET: 'game:server-cfg-get',
+  /** Renderer → Main (invoke): list parsed key/value entries from installation server.cfg. */
+  GAME_SERVER_CFG_LIST: 'game:server-cfg-list',
+  /** Renderer → Main (invoke): set a key in installation server.cfg. */
+  GAME_SERVER_CFG_SET: 'game:server-cfg-set',
+  /** Renderer → Main (invoke): read installation GameConfig.xml content. */
+  GAME_CONFIG_XML_GET: 'game:config-xml-get',
+  /** Renderer → Main (invoke): write installation GameConfig.xml content. */
+  GAME_CONFIG_XML_SET: 'game:config-xml-set',
+  /** Renderer → Main (invoke): list files/directories inside an installation path. */
+  GAME_FILES_LIST: 'game:files-list',
+  /** Renderer → Main (invoke): read a text file from an installation path. */
+  GAME_FILE_READ: 'game:file-read',
+  /** Renderer → Main (invoke): write a text file to an installation path. */
+  GAME_FILE_WRITE: 'game:file-write',
   /**
    * Renderer → Main (invoke): read the `launcher-session.json` file written by
    * the game into an installation directory.  Returns the parsed object or
@@ -88,6 +145,8 @@ export const IPC = {
   APP_GET_USER_DATA: 'app:get-user-data',
   /** Renderer → Main (invoke): get total system RAM in MB. */
   APP_GET_SYSTEM_MEMORY: 'app:get-system-memory',
+  /** Renderer → Main (invoke): get server panel schema JSON used by config editors. */
+  APP_GET_SERVER_PANEL_SCHEMA: 'app:get-server-panel-schema',
 
   // ─── Installation file management ───────────────────────────────────────────
 
@@ -137,6 +196,8 @@ export const IPC = {
 
   /** Renderer → Main (invoke): list available icon image paths. */
   ICONS_LIST: 'icons:list',
+  /** Renderer → Main (invoke): import an icon image into the user icons directory. */
+  ICONS_IMPORT: 'icons:import',
 
   // ─── Legacy installation detection ──────────────────────────────────────────
 

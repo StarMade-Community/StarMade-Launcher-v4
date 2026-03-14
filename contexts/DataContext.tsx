@@ -7,6 +7,7 @@ const SK_ACCOUNTS          = 'accounts';
 const SK_ACTIVE_ACCOUNT_ID = 'activeAccountId';
 const SK_INSTALLATIONS     = 'installations';
 const SK_SERVERS           = 'servers';
+const SK_SELECTED_SERVER_ID = 'selectedServerId';
 const SK_SELECTED_VER_ID   = 'selectedVersionId';
 const SK_PINNED_SESSIONS   = 'pinnedSessions';
 const SK_LAST_PLAYED       = 'lastPlayedSession';
@@ -32,6 +33,7 @@ const DEFAULT_SERVER: Omit<ManagedItem, 'id'> = {
   lastPlayed: 'Never',
   installed: false,
   port: '4242',
+    maxPlayers: 32,
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -42,6 +44,20 @@ const hasVersions = (): boolean => typeof window !== 'undefined' && typeof windo
 const hasDownload = (): boolean => typeof window !== 'undefined' && typeof window.launcher?.download !== 'undefined';
 const hasAuth     = (): boolean => typeof window !== 'undefined' && typeof window.launcher?.auth     !== 'undefined';
 
+const areDownloadStatusesEqual = (a?: DownloadStatus, b?: DownloadStatus): boolean => {
+    if (!a || !b) return false;
+    return (
+        a.state === b.state &&
+        a.percent === b.percent &&
+        a.bytesReceived === b.bytesReceived &&
+        a.totalBytes === b.totalBytes &&
+        a.filesDownloaded === b.filesDownloaded &&
+        a.totalFiles === b.totalFiles &&
+        a.currentFile === b.currentFile &&
+        a.error === b.error
+    );
+};
+
 // ─── Context ─────────────────────────────────────────────────────────────────
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -51,6 +67,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const [activeAccount,  setActiveAccount]  = useState<Account | null>(null);
     const [installations,  setInstallations]  = useState<ManagedItem[]>([]);
     const [servers,        setServers]        = useState<ManagedItem[]>([]);
+    const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
     const [versions,       setVersions]       = useState<Version[]>([]);
     const [selectedVersion, setSelectedVersion] = useState<Version | null>(null);
     const [isLoaded,       setIsLoaded]       = useState(false);
@@ -69,6 +86,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             window.launcher.store.get(SK_ACTIVE_ACCOUNT_ID),
             window.launcher.store.get(SK_INSTALLATIONS),
             window.launcher.store.get(SK_SERVERS),
+            window.launcher.store.get(SK_SELECTED_SERVER_ID),
             window.launcher.store.get(SK_SELECTED_VER_ID),
             window.launcher.store.get(SK_PINNED_SESSIONS),
             window.launcher.store.get(SK_LAST_PLAYED),
@@ -77,6 +95,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             storedActiveAccountId,
             storedInstallations,
             storedServers,
+            storedSelectedServerId,
             storedSelectedVersionId,
             storedPinnedSessions,
             storedLastPlayed,
@@ -102,6 +121,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             // Load servers
             if (Array.isArray(storedServers)) {
                 setServers(storedServers as ManagedItem[]);
+            }
+
+            if (typeof storedSelectedServerId === 'string') {
+                setSelectedServerId(storedSelectedServerId);
             }
 
             // Selected version ID (we'll resolve it after fetching versions)
@@ -169,30 +192,46 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (!hasDownload()) return;
 
         const removeProgress = window.launcher.download.onProgress((progress: DownloadProgress) => {
-            setDownloadStatuses(prev => ({
-                ...prev,
-                [progress.installationId]: {
-                    state:           progress.phase,
-                    percent:         progress.percent,
-                    bytesReceived:   progress.bytesReceived,
-                    totalBytes:      progress.totalBytes,
-                    filesDownloaded: progress.filesDownloaded,
-                    totalFiles:      progress.totalFiles,
-                    currentFile:     progress.currentFile,
-                },
-            }));
+            const nextStatus: DownloadStatus = {
+                state:           progress.phase,
+                percent:         progress.percent,
+                bytesReceived:   progress.bytesReceived,
+                totalBytes:      progress.totalBytes,
+                filesDownloaded: progress.filesDownloaded,
+                totalFiles:      progress.totalFiles,
+                currentFile:     progress.currentFile,
+            };
+
+            setDownloadStatuses(prev => {
+                const current = prev[progress.installationId];
+                if (areDownloadStatusesEqual(current, nextStatus)) {
+                    return prev;
+                }
+                return {
+                    ...prev,
+                    [progress.installationId]: nextStatus,
+                };
+            });
         });
 
         const removeComplete = window.launcher.download.onComplete(({ installationId }) => {
-            setDownloadStatuses(prev => ({
-                ...prev,
-                [installationId]: {
-                    state: 'complete', percent: 100,
-                    bytesReceived: 0, totalBytes: 0,
-                    filesDownloaded: 0, totalFiles: 0,
-                    currentFile: 'Download complete',
-                },
-            }));
+            const nextStatus: DownloadStatus = {
+                state: 'complete', percent: 100,
+                bytesReceived: 0, totalBytes: 0,
+                filesDownloaded: 0, totalFiles: 0,
+                currentFile: 'Download complete',
+            };
+
+            setDownloadStatuses(prev => {
+                const current = prev[installationId];
+                if (areDownloadStatusesEqual(current, nextStatus)) {
+                    return prev;
+                }
+                return {
+                    ...prev,
+                    [installationId]: nextStatus,
+                };
+            });
             // Persist the installed flag so "Play" is shown after restart
             setInstallations(prev =>
                 prev.map(i => i.id === installationId ? { ...i, installed: true } : i)
@@ -203,15 +242,23 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         });
 
         const removeError = window.launcher.download.onError(({ installationId, error }) => {
-            setDownloadStatuses(prev => ({
-                ...prev,
-                [installationId]: {
-                    state: 'error', percent: 0,
-                    bytesReceived: 0, totalBytes: 0,
-                    filesDownloaded: 0, totalFiles: 0,
-                    currentFile: '', error,
-                },
-            }));
+            const nextStatus: DownloadStatus = {
+                state: 'error', percent: 0,
+                bytesReceived: 0, totalBytes: 0,
+                filesDownloaded: 0, totalFiles: 0,
+                currentFile: '', error,
+            };
+
+            setDownloadStatuses(prev => {
+                const current = prev[installationId];
+                if (areDownloadStatusesEqual(current, nextStatus)) {
+                    return prev;
+                }
+                return {
+                    ...prev,
+                    [installationId]: nextStatus,
+                };
+            });
         });
 
         return () => { removeProgress(); removeComplete(); removeError(); };
@@ -243,6 +290,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (isLoaded && hasStore()) window.launcher.store.set(SK_SERVERS, servers);
     }, [servers, isLoaded]);
 
+    useEffect(() => {
+        if (isLoaded && hasStore()) window.launcher.store.set(SK_SELECTED_SERVER_ID, selectedServerId);
+    }, [selectedServerId, isLoaded]);
+
 
     useEffect(() => {
         if (isLoaded && hasStore()) window.launcher.store.set(SK_SELECTED_VER_ID, selectedVersion?.id ?? null);
@@ -255,6 +306,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     useEffect(() => {
         if (isLoaded && hasStore()) window.launcher.store.set(SK_LAST_PLAYED, lastPlayedSession);
     }, [lastPlayedSession, isLoaded]);
+
+    // Keep the selected server id valid as the server list changes.
+    useEffect(() => {
+        if (!isLoaded) return;
+        setSelectedServerId(prev => {
+            if (prev && servers.some(server => server.id === prev)) {
+                return prev;
+            }
+            return servers[0]?.id ?? null;
+        });
+    }, [servers, isLoaded]);
 
     // ── Mutations ────────────────────────────────────────────────────────────
 
@@ -269,6 +331,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const getInstallationDefaults = () => ({ ...DEFAULT_INSTALLATION, id: Date.now().toString() });
     const getServerDefaults       = () => ({ ...DEFAULT_SERVER,       id: Date.now().toString() });
 
+    const selectedServer = selectedServerId
+        ? (servers.find(server => server.id === selectedServerId) ?? null)
+        : (servers[0] ?? null);
+
     // ── Download actions ──────────────────────────────────────────────────────
 
     const downloadVersion = useCallback((itemId: string) => {
@@ -277,15 +343,22 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             return;
         }
 
-        setDownloadStatuses(prev => ({
-            ...prev,
-            [itemId]: {
-                state: 'checksums', percent: 0,
-                bytesReceived: 0, totalBytes: 0,
-                filesDownloaded: 0, totalFiles: 0,
-                currentFile: 'Starting…',
-            },
-        }));
+        const nextStartStatus: DownloadStatus = {
+            state: 'checksums', percent: 0,
+            bytesReceived: 0, totalBytes: 0,
+            filesDownloaded: 0, totalFiles: 0,
+            currentFile: 'Starting…',
+        };
+        setDownloadStatuses(prev => {
+            const current = prev[itemId];
+            if (areDownloadStatusesEqual(current, nextStartStatus)) {
+                return prev;
+            }
+            return {
+                ...prev,
+                [itemId]: nextStartStatus,
+            };
+        });
 
         // Helper: resolve buildPath and start the download for the given item
         const beginDownload = (item: ManagedItem) => {
@@ -299,16 +372,23 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             }
 
             if (!buildPath) {
-                setDownloadStatuses(ds => ({
-                    ...ds,
-                    [itemId]: {
-                        state: 'error', percent: 0,
-                        bytesReceived: 0, totalBytes: 0,
-                        filesDownloaded: 0, totalFiles: 0,
-                        currentFile: '',
-                        error: 'Version not available for download — build path unknown.',
-                    },
-                }));
+                const nextErrorStatus: DownloadStatus = {
+                    state: 'error', percent: 0,
+                    bytesReceived: 0, totalBytes: 0,
+                    filesDownloaded: 0, totalFiles: 0,
+                    currentFile: '',
+                    error: 'Version not available for download — build path unknown.',
+                };
+                setDownloadStatuses(ds => {
+                    const current = ds[itemId];
+                    if (areDownloadStatusesEqual(current, nextErrorStatus)) {
+                        return ds;
+                    }
+                    return {
+                        ...ds,
+                        [itemId]: nextErrorStatus,
+                    };
+                });
                 return;
             }
 
@@ -339,7 +419,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setDownloadStatuses(prev => {
             const entry = prev[installationId];
             if (!entry) return prev;
-            return { ...prev, [installationId]: { ...entry, state: 'cancelled' } };
+            const nextStatus: DownloadStatus = { ...entry, state: 'cancelled' };
+            if (areDownloadStatusesEqual(entry, nextStatus)) {
+                return prev;
+            }
+            return { ...prev, [installationId]: nextStatus };
         });
     }, []);
 
@@ -427,6 +511,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         activeAccount,
         installations,
         servers,
+        selectedServerId,
+        selectedServer,
         versions,
         selectedVersion,
         downloadStatuses,
@@ -444,6 +530,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         addServer,
         updateServer,
         deleteServer,
+        setSelectedServerId,
         getInstallationDefaults,
         getServerDefaults,
         downloadVersion,

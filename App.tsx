@@ -5,6 +5,7 @@ import News from './components/pages/News';
 import Installations from './components/pages/Installations';
 import Play from './components/pages/Play';
 import Settings from './components/pages/Settings';
+import ServerPanel from './components/pages/ServerPanel';
 import LaunchConfirmModal from './components/common/LaunchConfirmModal';
 import GameLogViewer from './components/common/GameLogViewer';
 import UpdateAvailableModal from './components/common/UpdateAvailableModal';
@@ -23,7 +24,10 @@ interface UpdateInfo {
 }
 
 const App: React.FC = () => {
-  const { 
+  const [isShortViewport, setIsShortViewport] = useState<boolean>(false);
+  const [isWindowMaximized, setIsWindowMaximized] = useState<boolean>(false);
+
+  const {
     activePage, 
     pageProps, 
     isLaunchModalOpen, 
@@ -33,6 +37,7 @@ const App: React.FC = () => {
     logViewerOpen,
     logViewerInstallation,
     closeLogViewer,
+    navigate,
   } = useApp();
 
   const { url: bgUrl, loaded: bgLoaded } = useRandomBackground();
@@ -53,6 +58,53 @@ const App: React.FC = () => {
     return cleanup;
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleViewportResize = () => {
+      setIsShortViewport(window.innerHeight < 720);
+    };
+
+    handleViewportResize();
+    window.addEventListener('resize', handleViewportResize);
+    return () => window.removeEventListener('resize', handleViewportResize);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('page') !== 'ServerPanel') return;
+
+    const serverId = params.get('serverId') ?? undefined;
+    const serverName = params.get('serverName') ?? undefined;
+    navigate('ServerPanel', { serverId, serverName });
+  }, [navigate]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') return;
+
+    const channel = new BroadcastChannel('starmade-launcher-navigation');
+    channel.onmessage = (event: MessageEvent<unknown>) => {
+      const payload = event.data as { type?: string; serverId?: string; serverName?: string } | null;
+      if (!payload || payload.type !== 'open-server-panel') return;
+      navigate('ServerPanel', {
+        serverId: payload.serverId,
+        serverName: payload.serverName,
+      });
+      window.focus();
+    };
+
+    return () => {
+      channel.close();
+    };
+  }, [navigate]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.launcher?.window?.onMaximizedChanged) return;
+    return window.launcher.window.onMaximizedChanged((value) => setIsWindowMaximized(value));
+  }, []);
+
 
   const handleDismissUpdate = () => {
     setIsUpdateModalOpen(false);
@@ -61,6 +113,11 @@ const App: React.FC = () => {
   // ─── Page rendering ───────────────────────────────────────────────────────
 
   const renderContent = () => {
+    const initialSection = 'initialSection' in pageProps ? pageProps.initialSection : undefined;
+    const initialTab = 'initialTab' in pageProps ? pageProps.initialTab : undefined;
+    const serverId = 'serverId' in pageProps ? pageProps.serverId : undefined;
+    const serverName = 'serverName' in pageProps ? pageProps.serverName : undefined;
+
     switch (activePage) {
       case 'Installations': {
         const installationProps = 'initialTab' in pageProps ? pageProps : {};
@@ -72,6 +129,8 @@ const App: React.FC = () => {
         const settingsProps = 'initialSection' in pageProps ? pageProps : {};
         return <Settings {...settingsProps} />;
       }
+      case 'ServerPanel':
+        return <ServerPanel serverId={serverId} serverName={serverName} />;
       case 'Play':
       default:
         return <Play />;
@@ -79,7 +138,9 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="bg-starmade-bg text-gray-200 font-sans h-screen w-screen flex flex-col antialiased">
+    <div className={`bg-starmade-bg text-gray-200 font-sans h-screen w-screen flex flex-col antialiased overflow-x-hidden ${
+      isShortViewport ? 'overflow-y-auto' : 'overflow-y-hidden'
+    } ${isWindowMaximized ? 'rounded-none p-0 border-0 shadow-none' : 'rounded-3xl p-[3px] border border-white/10 shadow-[0_0_0_1px_rgba(0,0,0,0.6),0_24px_64px_rgba(0,0,0,0.8)]'} overflow-hidden`}>
       <LaunchConfirmModal
         isOpen={isLaunchModalOpen}
         onConfirm={startLaunchingAndTerminate}

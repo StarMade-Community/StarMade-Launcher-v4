@@ -92,3 +92,14 @@ export function storeDelete(key: string): void {
   delete _data[key];
   save();
 }
+
+/**
+ * Wipe all persisted data and write an empty (version-only) store to disk.
+ * The caller is responsible for relaunching the app afterwards so that all
+ * in-memory module state is also reset.
+ */
+export function storeClearAll(): void {
+  _data = { __version: STORE_VERSION };
+  save();
+}
+

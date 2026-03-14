@@ -10,6 +10,8 @@ declare global {
         getUserDataPath: () => Promise<string>;
         /** Returns total system RAM in MB. */
         getSystemMemory: () => Promise<number>;
+        /** Returns server panel schema JSON used by config editors. */
+        getServerPanelSchema: () => Promise<unknown>;
       };
 
       window: {
@@ -19,6 +21,8 @@ declare global {
         maximize: () => void;
         /** Close the application window */
         close: () => void;
+        /** Open Server Panel in a dedicated pop-out window. */
+        openServerPanel: (serverId?: string, serverName?: string) => Promise<{ success: boolean; error?: string }>;
         /**
          * Subscribe to maximized-state changes.
          * @returns A cleanup function that removes the listener when called.
@@ -34,6 +38,11 @@ declare global {
         set: (key: string, value: unknown) => Promise<void>;
         /** Remove a key from the store. */
         delete: (key: string) => Promise<void>;
+        /**
+         * Wipe all persisted data (accounts, installations, settings, etc.) and
+         * restart the launcher.  This is a destructive / factory-reset operation.
+         */
+        clearAll: () => Promise<{ success: boolean; error?: string }>;
       };
 
       /** Version manifest API — Phase 3. */
@@ -109,12 +118,89 @@ declare global {
         listRunning: () => Promise<Array<{ installationId: string; pid?: number; isServer: boolean; uptime: number }>>;
         /** Get log file path for a running game. */
         getLogPath: (installationId: string) => Promise<string | null>;
+        /** List categorized log files from an installation's logs folder. */
+        listLogFiles: (installationPath: string) => Promise<{
+          categories: Array<{
+            id: string;
+            label: string;
+            files: Array<{
+              fileName: string;
+              relativePath: string;
+              sizeBytes: number;
+              modifiedMs: number;
+              categoryId: string;
+              categoryLabel: string;
+            }>;
+          }>;
+          defaultRelativePath: string | null;
+        }>;
+        /** Read the tail of one log file from an installation's logs folder. */
+        readLogFile: (installationPath: string, relativePath: string, maxBytes?: number) => Promise<{
+          content: string;
+          truncated: boolean;
+          error?: string;
+        }>;
         /** Open log directory in file manager. */
         openLogLocation: (installationPath: string) => Promise<{ success: boolean }>;
+        /** Delete all files/directories inside an installation's logs folder. */
+        clearLogFiles: (installationPath: string) => Promise<{ success: boolean; deletedCount: number; error?: string }>;
         /** Get GraphicsInfo.txt content if it exists. */
         getGraphicsInfo: (installationPath: string) => Promise<string | null>;
+        /** Read a value from server.cfg by key (e.g. MAX_CLIENTS). */
+        readServerConfigValue: (installationPath: string, key: string) => Promise<string | null>;
+        /** List parsed key/value entries from server.cfg. */
+        listServerConfigValues: (installationPath: string) => Promise<Array<{ key: string; value: string; comment: string | null }>>;
+        /** Set a value in server.cfg by key (e.g. MAX_CLIENTS). */
+        writeServerConfigValue: (installationPath: string, key: string, value: string) => Promise<{ success: boolean; error?: string }>;
+        /** Read installation GameConfig.xml file content. */
+        readGameConfigXml: (installationPath: string) => Promise<string | null>;
+        /** Write installation GameConfig.xml file content. */
+        writeGameConfigXml: (installationPath: string, xmlContent: string) => Promise<{ success: boolean; error?: string }>;
+        /** List entries in an installation directory (relative path). */
+        listInstallationFiles: (installationPath: string, relativeDir?: string) => Promise<Array<{
+          name: string;
+          relativePath: string;
+          isDirectory: boolean;
+          sizeBytes: number;
+          modifiedMs: number;
+          isEditableText: boolean;
+          nonEditableReason?: string;
+        }>>;
+        /** Read a text file from an installation directory. */
+        readInstallationFile: (installationPath: string, relativePath: string) => Promise<{ content: string; error?: string }>;
+        /** Write a text file in an installation directory. */
+        writeInstallationFile: (installationPath: string, relativePath: string, content: string) => Promise<{ success: boolean; error?: string }>;
         /** Subscribe to game log events. Returns a cleanup function. */
         onLog: (cb: (data: { installationId: string; level: string; message: string }) => void) => () => void;
+        /**
+         * Send a line of text to a running server's stdin (console input).
+         * Used to send admin commands such as server_message_broadcast.
+         */
+        sendServerCommand: (installationId: string, line: string) => Promise<{ success: boolean; error?: string }>;
+        /** List chat log files from an installation's chatlogs directory. */
+        listChatFiles: (installationPath: string) => Promise<Array<{
+          fileName: string;
+          channelId: string;
+          channelLabel: string;
+          channelType: 'general' | 'faction' | 'direct' | 'custom';
+          sizeBytes: number;
+          modifiedMs: number;
+        }>>;
+        /** Read the tail of a chat log file from the chatlogs directory. */
+        readChatFile: (installationPath: string, fileName: string, maxBytes?: number) => Promise<{
+          content: string;
+          truncated: boolean;
+          error?: string;
+        }>;
+        /** Subscribe to live chat messages from a running server. Returns a cleanup function. */
+        onChatMessage: (cb: (data: {
+          installationId: string;
+          sender: string;
+          receiverType: string;
+          receiver: string;
+          text: string;
+          timestamp: string;
+        }) => void) => () => void;
         /**
          * Read the `launcher-session.json` file written by the game into the
          * installation directory.  Returns the parsed object or `null` when the
@@ -188,6 +274,8 @@ declare global {
       icons: {
         /** List available icon image paths (file:// URLs). */
         list: () => Promise<string[]>;
+        /** Import a custom icon into the user icons folder. */
+        import: (sourcePath: string) => Promise<{ success: boolean; path?: string; error?: string }>;
       };
 
       /** Account authentication APIs */

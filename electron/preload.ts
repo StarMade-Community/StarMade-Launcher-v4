@@ -15,12 +15,17 @@ const launcherApi = {
       ipcRenderer.invoke(IPC.APP_GET_USER_DATA), /** Returns total system RAM in MB. */
     getSystemMemory: (): Promise<number> =>
       ipcRenderer.invoke(IPC.APP_GET_SYSTEM_MEMORY),
+    /** Returns the server panel schema JSON used to drive config editor metadata. */
+    getServerPanelSchema: (): Promise<unknown> =>
+      ipcRenderer.invoke(IPC.APP_GET_SERVER_PANEL_SCHEMA),
   },
 
   window: {
     minimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
     maximize: () => ipcRenderer.send(IPC.WINDOW_MAXIMIZE),
     close:    () => ipcRenderer.send(IPC.WINDOW_CLOSE),
+    openServerPanel: (serverId?: string, serverName?: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.WINDOW_OPEN_SERVER_PANEL, { serverId, serverName }),
     onMaximizedChanged: (cb: (isMaximized: boolean) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, value: boolean) => cb(value);
       ipcRenderer.on(IPC.WINDOW_MAXIMIZED_CHANGED, listener);
@@ -29,9 +34,11 @@ const launcherApi = {
   },
 
   store: {
-    get:    (key: string): Promise<unknown>  => ipcRenderer.invoke(IPC.STORE_GET, key),
-    set:    (key: string, value: unknown): Promise<void> => ipcRenderer.invoke(IPC.STORE_SET, key, value),
-    delete: (key: string): Promise<void>     => ipcRenderer.invoke(IPC.STORE_DELETE, key),
+    get:      (key: string): Promise<unknown>  => ipcRenderer.invoke(IPC.STORE_GET, key),
+    set:      (key: string, value: unknown): Promise<void> => ipcRenderer.invoke(IPC.STORE_SET, key, value),
+    delete:   (key: string): Promise<void>     => ipcRenderer.invoke(IPC.STORE_DELETE, key),
+    /** Wipe all persisted data and restart the launcher. */
+    clearAll: (): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke(IPC.STORE_CLEAR_ALL),
   },
 
   // ─── Phase 3: Version manifest ─────────────────────────────────────────────
@@ -145,13 +152,80 @@ const launcherApi = {
     getLogPath: (installationId: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.GAME_GET_LOG_PATH, installationId),
 
+    /** List categorized log files from an installation's logs folder. */
+    listLogFiles: (installationPath: string): Promise<{
+      categories: Array<{
+        id: string;
+        label: string;
+        files: Array<{
+          fileName: string;
+          relativePath: string;
+          sizeBytes: number;
+          modifiedMs: number;
+          categoryId: string;
+          categoryLabel: string;
+        }>;
+      }>;
+      defaultRelativePath: string | null;
+    }> => ipcRenderer.invoke(IPC.GAME_LIST_LOG_FILES, installationPath),
+
+    /** Read the tail of one log file from an installation's logs folder. */
+    readLogFile: (installationPath: string, relativePath: string, maxBytes?: number): Promise<{
+      content: string;
+      truncated: boolean;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.GAME_READ_LOG_FILE, installationPath, relativePath, maxBytes),
+
     /** Open log directory in file manager. */
     openLogLocation: (installationPath: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke(IPC.GAME_OPEN_LOG_LOCATION, installationPath),
 
+    /** Delete all files in an installation's logs folder. */
+    clearLogFiles: (installationPath: string): Promise<{ success: boolean; deletedCount: number; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_CLEAR_LOG_FILES, installationPath),
+
     /** Get GraphicsInfo.txt content if it exists. */
     getGraphicsInfo: (installationPath: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.GAME_GET_GRAPHICS_INFO, installationPath),
+
+    /** Read a value from server.cfg by key (e.g. MAX_CLIENTS). */
+    readServerConfigValue: (installationPath: string, key: string): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.GAME_SERVER_CFG_GET, installationPath, key),
+
+    /** List parsed key/value entries from server.cfg. */
+    listServerConfigValues: (installationPath: string): Promise<Array<{ key: string; value: string; comment: string | null }>> =>
+      ipcRenderer.invoke(IPC.GAME_SERVER_CFG_LIST, installationPath),
+
+    /** Set a value in server.cfg by key (e.g. MAX_CLIENTS). */
+    writeServerConfigValue: (installationPath: string, key: string, value: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_SERVER_CFG_SET, installationPath, key, value),
+
+    /** Read installation GameConfig.xml file content. */
+    readGameConfigXml: (installationPath: string): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.GAME_CONFIG_XML_GET, installationPath),
+
+    /** Write installation GameConfig.xml file content. */
+    writeGameConfigXml: (installationPath: string, xmlContent: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_CONFIG_XML_SET, installationPath, xmlContent),
+
+    /** List entries in an installation directory (relative path). */
+    listInstallationFiles: (installationPath: string, relativeDir?: string): Promise<Array<{
+      name: string;
+      relativePath: string;
+      isDirectory: boolean;
+      sizeBytes: number;
+      modifiedMs: number;
+      isEditableText: boolean;
+      nonEditableReason?: string;
+    }>> => ipcRenderer.invoke(IPC.GAME_FILES_LIST, installationPath, relativeDir),
+
+    /** Read a text file from an installation directory. */
+    readInstallationFile: (installationPath: string, relativePath: string): Promise<{ content: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_FILE_READ, installationPath, relativePath),
+
+    /** Write a text file in an installation directory. */
+    writeInstallationFile: (installationPath: string, relativePath: string, content: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_FILE_WRITE, installationPath, relativePath, content),
 
     /**
      * Read the `launcher-session.json` file written by the game into the
@@ -171,6 +245,51 @@ const launcherApi = {
       const listener = (_event: Electron.IpcRendererEvent, data: { installationId: string; level: string; message: string }) => cb(data);
       ipcRenderer.on(IPC.GAME_LOG, listener);
       return () => ipcRenderer.removeListener(IPC.GAME_LOG, listener);
+    },
+
+    /**
+     * Send a line of text to a running server's stdin (console input).
+     * Used to submit admin commands such as server_message_broadcast.
+     */
+    sendServerCommand: (installationId: string, line: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_SERVER_STDIN, installationId, line),
+
+    /** List chat log files from an installation's chatlogs directory. */
+    listChatFiles: (installationPath: string): Promise<Array<{
+      fileName: string;
+      channelId: string;
+      channelLabel: string;
+      channelType: 'general' | 'faction' | 'direct' | 'custom';
+      sizeBytes: number;
+      modifiedMs: number;
+    }>> => ipcRenderer.invoke(IPC.GAME_LIST_CHAT_FILES, installationPath),
+
+    /** Read the tail of a chat log file from the chatlogs directory. */
+    readChatFile: (installationPath: string, fileName: string, maxBytes?: number): Promise<{
+      content: string;
+      truncated: boolean;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.GAME_READ_CHAT_FILE, installationPath, fileName, maxBytes),
+
+    /** Subscribe to live chat message events from a running server. Returns a cleanup function. */
+    onChatMessage: (cb: (data: {
+      installationId: string;
+      sender: string;
+      receiverType: string;
+      receiver: string;
+      text: string;
+      timestamp: string;
+    }) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, data: {
+        installationId: string;
+        sender: string;
+        receiverType: string;
+        receiver: string;
+        text: string;
+        timestamp: string;
+      }) => cb(data);
+      ipcRenderer.on(IPC.GAME_CHAT_MESSAGE, listener);
+      return () => ipcRenderer.removeListener(IPC.GAME_CHAT_MESSAGE, listener);
     },
   },
 
@@ -247,6 +366,9 @@ const launcherApi = {
     /** List available icon image paths (file:// URLs). */
     list: (): Promise<string[]> =>
       ipcRenderer.invoke(IPC.ICONS_LIST),
+    /** Import a custom icon into the user icons folder. */
+    import: (sourcePath: string): Promise<{ success: boolean; path?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.ICONS_IMPORT, sourcePath),
   },
 
   /** Legacy installation detection APIs */
