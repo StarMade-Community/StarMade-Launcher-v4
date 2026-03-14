@@ -27,6 +27,7 @@ import { isRunningOnWayland } from './wayland-detect.js';
 import { isRunningAsAppImage } from './appimage-detect.js';
 import { registerAppImageDesktopIntegration } from './desktop-integration.js';
 import { parseVersionTxt } from './legacy.js';
+import { getManagedPathCandidates } from './install-paths.js';
 
 // ─── ES Module compatibility ─────────────────────────────────────────────────
 
@@ -934,24 +935,35 @@ ipcMain.handle(IPC.INSTALLATION_DELETE_FILES, async (_event, targetPath: string)
   if (typeof targetPath !== 'string' || targetPath.trim() === '') {
     return { success: false, error: 'Invalid path.' };
   }
-  /*if (!isSafeDeletionPath(targetPath)) {
+
+  const candidatePaths = getManagedPathCandidates(targetPath, getLauncherDir());
+  const resolvedTargetPath = candidatePaths.find(candidate => fs.existsSync(candidate)) ?? candidatePaths[0];
+
+  if (!resolvedTargetPath) {
+    return { success: false, error: 'Invalid path.' };
+  }
+
+  if (!isSafeDeletionPath(resolvedTargetPath)) {
     return { success: false, error: 'Path is not safe to delete.' };
-  }*/
+  }
 
   // Directory already absent – nothing to do.
-  if (!fs.existsSync(targetPath)) {
+  if (!fs.existsSync(resolvedTargetPath)) {
     return { success: true };
   }
 
-  /*if (!isStarMadeInstallDir(targetPath)) {
+  if (!isStarMadeInstallDir(resolvedTargetPath)) {
     return {
       success: false,
-      error: `The directory does not appear to be a StarMade installation: ${targetPath}`,
+      error: `The directory does not appear to be a StarMade installation: ${resolvedTargetPath}`,
     };
-  }*/
+  }
 
   try {
-    await fs.promises.rm(targetPath, { recursive: true, force: true });
+    await fs.promises.rm(resolvedTargetPath, { recursive: true, force: true });
+    if (fs.existsSync(resolvedTargetPath)) {
+      return { success: false, error: `Directory still exists after deletion: ${resolvedTargetPath}` };
+    }
     return { success: true };
   } catch (err) {
     return { success: false, error: String(err) };
