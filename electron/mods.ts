@@ -25,6 +25,14 @@ export interface SmdModResource {
   latestVersion?: string;
 }
 
+export interface SmdInstalledUpdateStatus {
+  resourceId: number;
+  currentVersion: string;
+  latestVersion?: string;
+  hasUpdate: boolean;
+  error?: string;
+}
+
 export interface ModsListResult {
   modsDir: string;
   disabledModsDir: string;
@@ -327,6 +335,38 @@ async function fetchLatestSmdDownload(resourceId: number): Promise<{ version: st
   }
 
   return { version, downloadUrl };
+}
+
+export async function checkSmdUpdatesForInstalled(
+  installed: Array<{ resourceId: number; smdVersion: string }>,
+): Promise<SmdInstalledUpdateStatus[]> {
+  const unique = new Map<number, string>();
+  for (const item of installed) {
+    if (!Number.isFinite(item.resourceId) || item.resourceId <= 0) continue;
+    if (typeof item.smdVersion !== 'string' || item.smdVersion.trim().length === 0) continue;
+    unique.set(item.resourceId, item.smdVersion.trim());
+  }
+
+  const checks = Array.from(unique.entries()).map(async ([resourceId, currentVersion]) => {
+    try {
+      const latest = await fetchLatestSmdDownload(resourceId);
+      return {
+        resourceId,
+        currentVersion,
+        latestVersion: latest.version,
+        hasUpdate: latest.version !== currentVersion,
+      } satisfies SmdInstalledUpdateStatus;
+    } catch (error) {
+      return {
+        resourceId,
+        currentVersion,
+        hasUpdate: false,
+        error: error instanceof Error ? error.message : String(error),
+      } satisfies SmdInstalledUpdateStatus;
+    }
+  });
+
+  return Promise.all(checks);
 }
 
 function createModRecordFromFile(

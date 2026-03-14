@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { parseModpackManifest, sanitizeModFileName } from '../../electron/mods.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { listSmdMods, parseModpackManifest, sanitizeModFileName } from '../../electron/mods.js';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('sanitizeModFileName', () => {
   it('ensures .jar extension and strips path separators', () => {
@@ -69,6 +73,52 @@ describe('parseModpackManifest', () => {
       createdAt: '2026-03-14T00:00:00.000Z',
       entries: [{ name: 'Bad', downloadUrl: 'file:///tmp/bad.jar' }],
     })).toThrow('must use an http/https downloadUrl');
+  });
+});
+
+describe('listSmdMods', () => {
+  it('returns only StarLoader-tagged mods and filters out the core StarLoader entry', async () => {
+    const mockResponse = {
+      ok: true,
+      json: async () => ({
+        resources: [
+          {
+            resource_id: 1,
+            title: 'StarLoader',
+            username: 'System',
+            tags: ['api/starloader'],
+            download_count: 100,
+            rating_avg: 4.0,
+          },
+          {
+            resource_id: 2,
+            title: 'Alpha Weapons',
+            username: 'Duke',
+            tag_line: 'Adds weapons',
+            tags: ['api/starloader', 'weapons'],
+            download_count: 50,
+            rating_avg: 4.8,
+            custom_fields: { Gameversion: '0.205.1' },
+          },
+          {
+            resource_id: 3,
+            title: 'Not StarLoader Mod',
+            username: 'Other',
+            tags: ['vanilla'],
+            download_count: 5,
+            rating_avg: 3.0,
+          },
+        ],
+      }),
+    };
+
+    vi.stubGlobal('fetch', vi.fn(async () => mockResponse as unknown as Response));
+
+    const mods = await listSmdMods('alpha');
+    expect(mods).toHaveLength(1);
+    expect(mods[0].resourceId).toBe(2);
+    expect(mods[0].name).toBe('Alpha Weapons');
+    expect(mods[0].gameVersion).toBe('0.205.1');
   });
 });
 
