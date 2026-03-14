@@ -229,7 +229,7 @@ const WindowControls: React.FC = () => {
 
 const Navigation: React.FC = () => {
     const { activePage, navigate } = useApp();
-    const navItems: Page[] = ['Play', 'Installations', 'News', 'Screenshots'];
+    const navItems: Page[] = ['Play', 'Installations', 'News', 'Screenshots', 'Mods'];
 
     return (
         <nav className="flex items-center gap-10">

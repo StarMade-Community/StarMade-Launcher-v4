@@ -316,7 +316,7 @@ const launcherApi = {
     openFolder: (defaultPath?: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.DIALOG_OPEN_FOLDER, defaultPath),
     /** Open file picker dialog. Returns selected path or null if canceled. */
-    openFile: (defaultPath?: string, type?: 'image'): Promise<string | null> =>
+    openFile: (defaultPath?: string, type?: 'image' | 'java' | 'modpack'): Promise<string | null> =>
       ipcRenderer.invoke(IPC.DIALOG_OPEN_FILE, defaultPath, type),
   },
 
@@ -435,6 +435,77 @@ const launcherApi = {
         screenshotPath,
         targetInstallationPath,
       ),
+  },
+
+  /** Mods management APIs */
+  mods: {
+    /** List mod jars in both mods and mods-disabled directories. */
+    list: (installationPath: string): Promise<{
+      modsDir: string;
+      disabledModsDir: string;
+      mods: Array<{
+        fileName: string;
+        absolutePath: string;
+        relativePath: string;
+        sizeBytes: number;
+        modifiedMs: number;
+        enabled: boolean;
+        downloadUrl?: string;
+      }>;
+    }> => ipcRenderer.invoke(IPC.MODS_LIST, installationPath),
+
+    /** Download a mod jar from URL into an installation. */
+    download: (
+      installationPath: string,
+      downloadUrl: string,
+      preferredFileName?: string,
+      enabled = true,
+    ): Promise<{
+      success: boolean;
+      mod?: {
+        fileName: string;
+        absolutePath: string;
+        relativePath: string;
+        sizeBytes: number;
+        modifiedMs: number;
+        enabled: boolean;
+        downloadUrl?: string;
+      };
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.MODS_DOWNLOAD, installationPath, downloadUrl, preferredFileName, enabled),
+
+    /** Remove a mod jar from an installation. */
+    remove: (installationPath: string, relativePath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.MODS_REMOVE, installationPath, relativePath),
+
+    /** Enable/disable a mod by moving it between mods and mods-disabled. */
+    setEnabled: (
+      installationPath: string,
+      relativePath: string,
+      enabled: boolean,
+    ): Promise<{ success: boolean; relativePath?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.MODS_SET_ENABLED, installationPath, relativePath, enabled),
+
+    /** Export a link-only modpack manifest JSON. */
+    exportModpack: (
+      installationPath: string,
+      outputPath: string,
+      options?: { name?: string; sourceInstallation?: { id?: string; name?: string; version?: string } },
+    ): Promise<{ success: boolean; outputPath?: string; exportedCount?: number; skippedCount?: number; error?: string }> =>
+      ipcRenderer.invoke(IPC.MODS_EXPORT_MODPACK, installationPath, outputPath, options),
+
+    /** Import a modpack manifest and download all listed mods. */
+    importModpack: (
+      installationPath: string,
+      manifestPath: string,
+    ): Promise<{
+      success: boolean;
+      downloadedCount?: number;
+      skippedCount?: number;
+      failedCount?: number;
+      failures?: string[];
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.MODS_IMPORT_MODPACK, installationPath, manifestPath),
   },
 
   /** Legacy installation detection APIs */

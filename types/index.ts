@@ -140,6 +140,58 @@ export interface DownloadStatus {
   error?: string;
 }
 
+// ─── Mod management types ───────────────────────────────────────────────────
+
+export interface ModRecord {
+  fileName: string;
+  absolutePath: string;
+  relativePath: string;
+  sizeBytes: number;
+  modifiedMs: number;
+  enabled: boolean;
+  /** Original URL used by launcher-managed downloads/imports, when known. */
+  downloadUrl?: string;
+  /** SMD resource id when this jar was installed via launcher-managed SMD flow. */
+  resourceId?: number;
+  /** SMD version string recorded at install/update time. */
+  smdVersion?: string;
+}
+
+export interface SmdModResource {
+  resourceId: number;
+  name: string;
+  author: string;
+  tagLine?: string;
+  gameVersion?: string;
+  downloadCount: number;
+  ratingAverage: number;
+  latestVersion?: string;
+}
+
+export interface ModpackEntry {
+  /** Display name of the mod entry. */
+  name: string;
+  /** Preferred file name to save as (optional; launcher will sanitize). */
+  fileName?: string;
+  /** Direct download link for the mod JAR. */
+  downloadUrl: string;
+  /** Whether this mod should be enabled after import. Defaults to true. */
+  enabled?: boolean;
+}
+
+export interface ModpackManifest {
+  format: 'starmade-modpack';
+  version: 1;
+  name: string;
+  createdAt: string;
+  sourceInstallation?: {
+    id?: string;
+    name?: string;
+    version?: string;
+  };
+  entries: ModpackEntry[];
+}
+
 export type ServerLifecycleState = 'starting' | 'running' | 'stopping' | 'stopped' | 'error';
 export type ServerLogLevel = 'INFO' | 'WARNING' | 'ERROR' | 'FATAL' | 'DEBUG' | 'stdout' | 'stderr';
 
@@ -153,7 +205,7 @@ export interface LauncherSettingsData {
   closeBehavior: LauncherCloseBehavior;
 }
 
-export type Page = 'Play' | 'Installations' | 'News' | 'Screenshots' | 'Settings' | 'ServerPanel';
+export type Page = 'Play' | 'Installations' | 'News' | 'Screenshots' | 'Mods' | 'Settings' | 'ServerPanel';
 export type SettingsSection = 'launcher' | 'accounts' | 'about' | 'defaults';
 export type InstallationsTab = 'installations' | 'servers';
 

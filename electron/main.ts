@@ -30,6 +30,15 @@ import { isRunningAsAppImage } from './appimage-detect.js';
 import { registerAppImageDesktopIntegration } from './desktop-integration.js';
 import { parseVersionTxt } from './legacy.js';
 import { getManagedPathCandidates } from './install-paths.js';
+import {
+  listModsForInstallation,
+  downloadModForInstallation,
+  removeModForInstallation,
+  setModEnabledForInstallation,
+  createModpackManifest,
+  importModpackFromFile,
+  writeModpackManifest,
+} from './mods.js';
 
 // ─── ES Module compatibility ─────────────────────────────────────────────────
 
@@ -968,7 +977,7 @@ ipcMain.handle(IPC.DIALOG_OPEN_FOLDER, async (_event, defaultPath?: string) => {
   return result.filePaths[0];
 });
 
-ipcMain.handle(IPC.DIALOG_OPEN_FILE, async (_event, defaultPath?: string, type?: 'image') => {
+ipcMain.handle(IPC.DIALOG_OPEN_FILE, async (_event, defaultPath?: string, type?: 'image' | 'java' | 'modpack') => {
   const imageFilters = [
     { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'] },
     { name: 'All Files', extensions: ['*'] },
@@ -977,11 +986,16 @@ ipcMain.handle(IPC.DIALOG_OPEN_FILE, async (_event, defaultPath?: string, type?:
     { name: 'Java Executable', extensions: process.platform === 'win32' ? ['exe'] : ['*'] },
     { name: 'All Files', extensions: ['*'] },
   ];
+  const modpackFilters = [
+    { name: 'StarMade Modpack', extensions: ['json'] },
+    { name: 'JSON', extensions: ['json'] },
+    { name: 'All Files', extensions: ['*'] },
+  ];
 
   const result = await dialog.showOpenDialog({
     properties: ['openFile'],
     defaultPath: defaultPath || app.getPath('home'),
-    filters: type === 'image' ? imageFilters : exeFilters,
+    filters: type === 'image' ? imageFilters : type === 'modpack' ? modpackFilters : exeFilters,
   });
 
   if (result.canceled || result.filePaths.length === 0) {
@@ -1524,6 +1538,12 @@ ipcMain.handle(IPC.SHELL_OPEN_EXTERNAL, async (_event, url: string) => {
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
 const SCREENSHOT_EXTS = new Set(['.png']);
 const LAUNCHER_BACKGROUND_KEY = 'launcherBackgroundUrl';
+const MODS_METADATA_KEY = 'modsMetadataV1';
+
+const modMetadataStore = {
+  get: () => storeGet(MODS_METADATA_KEY),
+  set: (value: unknown) => storeSet(MODS_METADATA_KEY, value),
+};
 
 function listImagesInDir(dir: string): string[] {
   try {
@@ -1818,6 +1838,128 @@ ipcMain.handle(
     }
 
     return { success: true, destinationPath: copied.path };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// ─── Mods handlers ───────────────────────────────────────────────────────────
+
+ipcMain.handle(IPC.MODS_LIST, async (_event, installationPath: string) => {
+  try {
+    return listModsForInstallation(installationPath, getLauncherDir(), modMetadataStore);
+  } catch (error) {
+    return {
+      modsDir: path.join(installationPath || '', 'mods'),
+      disabledModsDir: path.join(installationPath || '', 'mods-disabled'),
+      mods: [],
+      error: String(error),
+    };
+  }
+});
+
+ipcMain.handle(
+  IPC.MODS_DOWNLOAD,
+  async (
+    _event,
+    installationPath: string,
+    downloadUrl: string,
+    preferredFileName?: string,
+    enabled = true,
+  ) => {
+    try {
+      const mod = await downloadModForInstallation({
+        installationPath,
+        launcherDir: getLauncherDir(),
+        downloadUrl,
+        preferredFileName,
+        enabled,
+        source: 'manual-url',
+        metadataStore: modMetadataStore,
+      });
+      return { success: true, mod };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  },
+);
+
+ipcMain.handle(IPC.MODS_REMOVE, async (_event, installationPath: string, relativePath: string) => {
+  try {
+    removeModForInstallation({
+      installationPath,
+      launcherDir: getLauncherDir(),
+      relativePath,
+      metadataStore: modMetadataStore,
+    });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.MODS_SET_ENABLED, async (_event, installationPath: string, relativePath: string, enabled: boolean) => {
+  try {
+    const result = setModEnabledForInstallation({
+      installationPath,
+      launcherDir: getLauncherDir(),
+      relativePath,
+      enabled,
+    });
+    return { success: true, relativePath: result.relativePath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(
+  IPC.MODS_EXPORT_MODPACK,
+  async (
+    _event,
+    installationPath: string,
+    outputPath: string,
+    options?: {
+      name?: string;
+      sourceInstallation?: { id?: string; name?: string; version?: string };
+    },
+  ) => {
+    try {
+      const name = typeof options?.name === 'string' ? options.name : 'StarMade Modpack';
+      const result = createModpackManifest({
+        installationPath,
+        launcherDir: getLauncherDir(),
+        manifestName: name,
+        sourceInstallation: options?.sourceInstallation,
+        metadataStore: modMetadataStore,
+      });
+      writeModpackManifest(outputPath, result.manifest);
+      return {
+        success: true,
+        outputPath,
+        exportedCount: result.exportedCount,
+        skippedCount: result.skippedCount,
+      };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  },
+);
+
+ipcMain.handle(IPC.MODS_IMPORT_MODPACK, async (_event, installationPath: string, manifestPath: string) => {
+  try {
+    const result = await importModpackFromFile({
+      installationPath,
+      launcherDir: getLauncherDir(),
+      manifestPath,
+      metadataStore: modMetadataStore,
+    });
+    return {
+      success: true,
+      downloadedCount: result.downloadedCount,
+      skippedCount: result.skippedCount,
+      failedCount: result.failedCount,
+      failures: result.failures,
+    };
   } catch (error) {
     return { success: false, error: String(error) };
   }
