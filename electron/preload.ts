@@ -24,6 +24,8 @@ const launcherApi = {
     minimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
     maximize: () => ipcRenderer.send(IPC.WINDOW_MAXIMIZE),
     close:    () => ipcRenderer.send(IPC.WINDOW_CLOSE),
+    openServerPanel: (serverId?: string, serverName?: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.WINDOW_OPEN_SERVER_PANEL, { serverId, serverName }),
     onMaximizedChanged: (cb: (isMaximized: boolean) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, value: boolean) => cb(value);
       ipcRenderer.on(IPC.WINDOW_MAXIMIZED_CHANGED, listener);
@@ -319,6 +321,9 @@ const launcherApi = {
     /** List available icon image paths (file:// URLs). */
     list: (): Promise<string[]> =>
       ipcRenderer.invoke(IPC.ICONS_LIST),
+    /** Import a custom icon into the user icons folder. */
+    import: (sourcePath: string): Promise<{ success: boolean; path?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.ICONS_IMPORT, sourcePath),
   },
 
   /** Legacy installation detection APIs */

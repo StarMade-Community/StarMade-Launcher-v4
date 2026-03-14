@@ -21,6 +21,8 @@ declare global {
         maximize: () => void;
         /** Close the application window */
         close: () => void;
+        /** Open Server Panel in a dedicated pop-out window. */
+        openServerPanel: (serverId?: string, serverName?: string) => Promise<{ success: boolean; error?: string }>;
         /**
          * Subscribe to maximized-state changes.
          * @returns A cleanup function that removes the listener when called.
@@ -243,6 +245,8 @@ declare global {
       icons: {
         /** List available icon image paths (file:// URLs). */
         list: () => Promise<string[]>;
+        /** Import a custom icon into the user icons folder. */
+        import: (sourcePath: string) => Promise<{ success: boolean; path?: string; error?: string }>;
       };
 
       /** Account authentication APIs */

@@ -9,6 +9,8 @@ export const IPC = {
   WINDOW_MAXIMIZE: 'window:maximize',
   /** Renderer → Main: close the application window */
   WINDOW_CLOSE: 'window:close',
+  /** Renderer → Main (invoke): open the Server Panel in a dedicated pop-out window. */
+  WINDOW_OPEN_SERVER_PANEL: 'window:open-server-panel',
   /** Main → Renderer: whether the window is currently maximized */
   WINDOW_MAXIMIZED_CHANGED: 'window:maximized-changed',
 
@@ -167,6 +169,8 @@ export const IPC = {
 
   /** Renderer → Main (invoke): list available icon image paths. */
   ICONS_LIST: 'icons:list',
+  /** Renderer → Main (invoke): import an icon image into the user icons directory. */
+  ICONS_IMPORT: 'icons:import',
 
   // ─── Legacy installation detection ──────────────────────────────────────────
 

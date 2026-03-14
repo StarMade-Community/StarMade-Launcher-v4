@@ -354,8 +354,8 @@ interface ServerConfigEntry {
 type ConfigFieldValidation = import('../../common/ConfigPanel').ConfigFieldValidation;
 
 type GameConfigFieldType = 'string' | 'number' | 'boolean';
-type GameConfigCategory = 'economy' | 'environment' | 'limits' | 'other';
-type FactionConfigCategory = 'activity' | 'system-bonus' | 'points' | 'other';
+type GameConfigCategory = 'economy' | 'environment' | 'limits';
+type FactionConfigCategory = 'activity' | 'system-bonus' | 'points';
 
 interface GameConfigFieldMeta {
   label: string;
@@ -474,19 +474,17 @@ const GAME_CONFIG_CATEGORY_LABELS: Record<GameConfigCategory, string> = {
   economy: 'Economy',
   environment: 'Environment',
   limits: 'Limits',
-  other: 'Other',
 };
 
-const GAME_CONFIG_CATEGORY_ORDER: GameConfigCategory[] = ['economy', 'environment', 'limits', 'other'];
+const GAME_CONFIG_CATEGORY_ORDER: GameConfigCategory[] = ['economy', 'environment', 'limits'];
 
 const FACTION_CONFIG_CATEGORY_LABELS: Record<FactionConfigCategory, string> = {
   activity: 'Activity',
   'system-bonus': 'System Bonus',
   points: 'Faction Points',
-  other: 'Other',
 };
 
-const FACTION_CONFIG_CATEGORY_ORDER: FactionConfigCategory[] = ['activity', 'system-bonus', 'points', 'other'];
+const FACTION_CONFIG_CATEGORY_ORDER: FactionConfigCategory[] = ['activity', 'system-bonus', 'points'];
 
 const FACTION_CONFIG_FIELD_META: Record<string, FactionConfigFieldMeta> = {
   'Faction/FactionActivity/BasicValues/SetInactiveAfterHours': {
@@ -837,7 +835,7 @@ const inferGameConfigCategory = (path: string, rules: GameConfigCategoryRule[]):
     if (rule.startsWith && path.startsWith(rule.startsWith)) return rule.category;
     if (rule.includes && lowerPath.includes(rule.includes.toLowerCase())) return rule.category;
   }
-  return 'other';
+  return null
 };
 
 const inferFactionConfigCategory = (path: string, rules: FactionConfigCategoryRule[]): FactionConfigCategory => {
@@ -846,7 +844,7 @@ const inferFactionConfigCategory = (path: string, rules: FactionConfigCategoryRu
     if (rule.startsWith && path.startsWith(rule.startsWith)) return rule.category;
     if (rule.includes && lowerPath.includes(rule.includes.toLowerCase())) return rule.category;
   }
-  return 'other';
+  return null
 };
 
 const parseGameConfigXmlDocument = (xmlContent: string): Document => {
@@ -1644,6 +1642,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const hasGameApi = typeof window !== 'undefined' && !!window.launcher?.game;
   const hasDownloadApi = typeof window !== 'undefined' && !!window.launcher?.download;
   const hasStoreApi = typeof window !== 'undefined' && !!window.launcher?.store;
+  const isPoppedOutPanel = typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('panelMode') === 'popout';
 
   const serverConfigDefaults = useMemo<Record<string, string>>(
     () => Object.fromEntries(serverConfigSchemaFields.map((field) => [field.key, field.defaultValue])),
@@ -2923,6 +2923,39 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     URL.revokeObjectURL(url);
   };
 
+  const handlePopOutServerPanel = useCallback(async () => {
+    if (isPoppedOutPanel) return;
+    if (typeof window === 'undefined' || !window.launcher?.window?.openServerPanel) return;
+
+    const result = await window.launcher.window.openServerPanel(
+      effectiveServer?.id ?? serverId,
+      effectiveServer?.name ?? serverName ?? effectiveServerName,
+    ).catch((error) => ({ success: false, error: String(error) }));
+
+    if (!result.success) {
+      setActionError(result.error ?? 'Failed to pop out server panel window.');
+    } else {
+      // Navigate the main window away from ServerPanel so it isn't duplicated
+      navigate('Play');
+    }
+  }, [effectiveServer?.id, effectiveServer?.name, effectiveServerName, isPoppedOutPanel, navigate, serverId, serverName]);
+
+  const handleDockServerPanel = useCallback(() => {
+    if (typeof window === 'undefined') return;
+
+    if (typeof BroadcastChannel !== 'undefined') {
+      const channel = new BroadcastChannel('starmade-launcher-navigation');
+      channel.postMessage({
+        type: 'open-server-panel',
+        serverId: effectiveServer?.id ?? serverId,
+        serverName: effectiveServer?.name ?? serverName ?? effectiveServerName,
+      });
+      channel.close();
+    }
+
+    window.launcher?.window?.close();
+  }, [effectiveServer?.id, effectiveServer?.name, effectiveServerName, serverId, serverName]);
+
   const reloadGameConfigXml = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) return;
 
@@ -3259,7 +3292,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   if (!effectiveServer) {
     return (
-      <PageContainer>
+      <PageContainer resizable>
         <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-white/20 bg-black/20 p-8 text-center">
           <div>
             <h3 className="mb-2 text-2xl font-semibold text-white">No Server Selected</h3>
@@ -3543,7 +3576,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   setDraggedQuickAction(null);
                   setQuickActionDropTarget(null);
                 }}
-                className={`rounded-lg border p-4 transition-all ${
+                className={`flex h-full flex-col rounded-lg border p-4 transition-all ${
                   draggedQuickAction?.actionId === action.id
                     ? 'border-starmade-accent/50 bg-starmade-accent/10 opacity-60 shadow-[0_0_0_1px_rgba(34,123,134,0.25)]'
                     : 'border-white/10 bg-black/20 hover:border-white/20'
@@ -3564,12 +3597,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 )}
               </div>
 
-              <p className="mb-4 text-xs text-gray-500">{action.detail}</p>
+              <p className="mb-4 flex-1 text-xs text-gray-500">{action.detail}</p>
 
               <button
                 onClick={action.onClick}
                 disabled={!action.enabled}
-                className={`w-full rounded-md border px-4 py-3 text-sm font-semibold transition-colors ${getActionButtonClassName(action)}`}
+                className={`mt-auto w-full rounded-md border px-4 py-3 text-sm font-semibold transition-colors ${getActionButtonClassName(action)}`}
               >
                 {action.label}
               </button>
@@ -3877,7 +3910,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             groupContainerRefs.current[group.id] = element;
           }}
           style={{ height: `${height}px`, minHeight: `${minHeight}px` }}
-          className={`space-y-2 overflow-y-auto pr-1 ${isResizing ? 'select-none' : ''}`}
+          className={`space-y-2 overflow-y-auto pr-1 pb-2 ${isResizing ? 'select-none' : ''}`}
         >
           {renderDropZone(group.id, 0)}
           {group.widgetIds.map((widgetId, index) => {
@@ -4298,6 +4331,60 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     const hasUnsavedChanges = Object.keys(gameConfigValues).some(
       (path) => gameConfigValues[path] !== (gameConfigSavedValues[path] ?? ''),
     );
+    const toggleNeedle = gameConfigSearchTerm.trim().toLowerCase();
+    const toggleEntries = gameConfigCommentToggleEntries.filter((entry) => {
+      if (gameConfigCategoryFilter.size > 0 && !gameConfigCategoryFilter.has(entry.category)) return false;
+      if (!toggleNeedle) return true;
+
+      return (
+        entry.id.toLowerCase().includes(toggleNeedle)
+        || entry.label.toLowerCase().includes(toggleNeedle)
+        || entry.description.toLowerCase().includes(toggleNeedle)
+        || entry.path.toLowerCase().includes(toggleNeedle)
+      );
+    });
+
+    const toggleEntriesByCategory = gameConfigCategoryOrder.reduce<Partial<Record<string, React.ReactNode[]>>>((acc, category) => {
+      const categoryEntries = toggleEntries.filter((entry) => entry.category === category);
+      if (categoryEntries.length === 0) return acc;
+
+      acc[category] = [
+        <div key={`game-config-toggle-${category}`} className="rounded-md border border-white/10 bg-black/20 p-3">
+          <p className="text-sm font-semibold text-white">Optional Commented Sections</p>
+          <p className="mt-1 text-xs text-gray-400">
+            These sections are disabled in XML comments by default. Toggle them on to expose their fields in this editor.
+          </p>
+          <div className="mt-3 space-y-2">
+            {categoryEntries.map((entry) => {
+              const enabled = gameConfigCommentToggleStates[entry.id] ?? false;
+              const isSavingThisToggle = savingGameConfigToggleId === entry.id;
+              const toggleDisabled = !!savingGameConfigPath || (!!savingGameConfigToggleId && !isSavingThisToggle);
+
+              return (
+                <div key={entry.id} className="rounded border border-white/10 bg-black/25 p-2">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-200">{entry.label}</p>
+                      <p className="text-xs text-gray-400">{entry.description}</p>
+                      <p className="mt-1 font-mono text-[11px] text-gray-500">{entry.path}</p>
+                    </div>
+                    <button
+                      onClick={() => { void setGameConfigCommentToggle(entry, !enabled); }}
+                      disabled={toggleDisabled}
+                      className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isSavingThisToggle ? 'Saving...' : (enabled ? 'Disable' : 'Enable')}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ];
+
+      return acc;
+    }, {});
 
     const model: ConfigPanelModel = {
       title: 'GameConfig.xml',
@@ -4339,7 +4426,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       },
       reloadLabel: 'Reload',
       onReload: reloadGameConfigXml,
-      reloadDisabled: !effectiveServer || !hasGameApi || isGameConfigLoading || !!savingGameConfigPath || !!savingGameConfigToggleId
+      reloadDisabled: !effectiveServer || !hasGameApi || isGameConfigLoading || !!savingGameConfigPath || !!savingGameConfigToggleId,
+      categoryExtras: toggleEntriesByCategory,
     };
 
     return <ConfigPanel model={model} />;
@@ -4634,22 +4722,31 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   };
 
   return (
-    <PageContainer>
+    <PageContainer resizable>
       <div className="flex h-full min-h-0 flex-col">
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          {tabItems.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`rounded-md border px-3 py-1.5 text-sm font-semibold transition-colors ${
-                activeTab === tab.id
-                  ? 'border-starmade-accent bg-starmade-accent/20 text-white'
-                  : 'border-white/10 bg-black/20 text-gray-300 hover:bg-black/35'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {tabItems.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`rounded-md border px-3 py-1.5 text-sm font-semibold transition-colors ${
+                  activeTab === tab.id
+                    ? 'border-starmade-accent bg-starmade-accent/20 text-white'
+                    : 'border-white/10 bg-black/20 text-gray-300 hover:bg-black/35'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          <button
+            onClick={isPoppedOutPanel ? handleDockServerPanel : () => { void handlePopOutServerPanel(); }}
+            className="rounded-md border border-white/15 bg-black/20 px-3 py-1.5 text-sm font-semibold text-gray-200 transition-colors hover:bg-black/35"
+          >
+            {isPoppedOutPanel ? 'Dock Back' : 'Pop Out'}
+          </button>
         </div>
 
         <div className="min-h-0 flex-1">{renderActiveTab()}</div>
