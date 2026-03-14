@@ -293,13 +293,10 @@ function getNumberField(record: Record<string, unknown>, key: string): number | 
   return typeof value === 'number' ? value : undefined;
 }
 
-function extractStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === 'string');
-}
 
 async function fetchSmdCategoryResources(): Promise<SmdModResource[]> {
   let raw: unknown;
+  let usingFallback = false;
   try {
     raw = await smdFetchJson(`/resource-categories/${SMD_MOD_CATEGORY_ID}/resources`);
   } catch (error) {
@@ -307,6 +304,7 @@ async function fetchSmdCategoryResources(): Promise<SmdModResource[]> {
     // Some XenForo keys can read /resources but are denied from category-scoped routes.
     if (!message.includes('(403)')) throw error;
     raw = await smdFetchJson('/resources');
+    usingFallback = true;
   }
   const root = asObject(raw);
   const listRaw = root?.resources;
@@ -322,11 +320,15 @@ async function fetchSmdCategoryResources(): Promise<SmdModResource[]> {
     const author = getStringField(resource, 'username') ?? 'Unknown';
     if (!resourceId || !name) continue;
 
-    const categoryId = getNumberField(resource, 'category_id')
-      ?? getNumberField(resource, 'resource_category_id');
-    if (typeof categoryId === 'number' && categoryId !== SMD_MOD_CATEGORY_ID) continue;
-
-    const tags = extractStringArray(resource.tags);
+    // Only filter by category when using the fallback /resources endpoint which
+    // returns all categories.  The primary /resource-categories/{id}/resources
+    // endpoint already scopes to the right category, so we include everything it
+    // returns regardless of what category_id field says (sub-categories are fine).
+    if (usingFallback) {
+      const categoryId = getNumberField(resource, 'category_id')
+        ?? getNumberField(resource, 'resource_category_id');
+      if (typeof categoryId === 'number' && categoryId !== SMD_MOD_CATEGORY_ID) continue;
+    }
 
     const customFields = asObject(resource.custom_fields);
     const gameVersion = customFields ? getStringField(customFields, 'Gameversion') : undefined;
