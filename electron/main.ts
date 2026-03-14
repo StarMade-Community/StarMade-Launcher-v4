@@ -525,10 +525,45 @@ function resolveInstallationTargetPath(installationPath: string, relativePath: s
   return target;
 }
 
+const KNOWN_BINARY_EXTENSIONS = new Set([
+  '.7z', '.a', '.avi', '.bin', '.bmp', '.class', '.dat', '.db', '.dll', '.dylib', '.ear', '.exe', '.gif',
+  '.gz', '.ico', '.iso', '.jar', '.jpeg', '.jpg', '.lib', '.lock', '.lz', '.mp3', '.mp4', '.o', '.ogg', '.otf',
+  '.pdf', '.png', '.rar', '.so', '.sqlite', '.tar', '.ttf', '.war', '.wav', '.webm', '.webp', '.woff', '.woff2', '.zip',
+]);
+
+function isKnownBinaryFileByExtension(filePath: string): boolean {
+  const extension = path.extname(filePath).toLowerCase();
+  return extension.length > 0 && KNOWN_BINARY_EXTENSIONS.has(extension);
+}
+
+function isLikelyBinaryContent(content: Buffer): boolean {
+  if (content.length === 0) return false;
+
+  let suspiciousByteCount = 0;
+  const sampleSize = Math.min(content.length, 8192);
+  for (let index = 0; index < sampleSize; index += 1) {
+    const value = content[index];
+    if (value === 0) return true;
+    if (value < 7 || (value > 14 && value < 32)) suspiciousByteCount += 1;
+  }
+
+  return (suspiciousByteCount / sampleSize) > 0.3;
+}
+
+function isEditableTextFile(targetPath: string): boolean {
+  if (isKnownBinaryFileByExtension(targetPath)) return false;
+  const content = fs.readFileSync(targetPath);
+  return !isLikelyBinaryContent(content);
+}
+
+function getNonEditableFileReason(relativePath: string): string {
+  return `Cannot open ${relativePath}: binary files are not supported in the editor.`;
+}
+
 function listInstallationEntries(
   installationPath: string,
   relativeDir = '',
-): Array<{ name: string; relativePath: string; isDirectory: boolean; sizeBytes: number; modifiedMs: number }> {
+): Array<{ name: string; relativePath: string; isDirectory: boolean; sizeBytes: number; modifiedMs: number; isEditableText: boolean; nonEditableReason?: string }> {
   const dirPath = resolveInstallationTargetPath(installationPath, relativeDir || '.');
   const stats = fs.statSync(dirPath);
   if (!stats.isDirectory()) {
@@ -546,6 +581,10 @@ function listInstallationEntries(
       isDirectory: entry.isDirectory(),
       sizeBytes: entry.isDirectory() ? 0 : entryStat.size,
       modifiedMs: entryStat.mtimeMs,
+      isEditableText: entry.isDirectory() || !isKnownBinaryFileByExtension(entry.name),
+      nonEditableReason: entry.isDirectory() || !isKnownBinaryFileByExtension(entry.name)
+        ? undefined
+        : getNonEditableFileReason(relativePath),
     };
   });
 
@@ -563,6 +602,11 @@ function readInstallationTextFile(installationPath: string, relativePath: string
   if (!stats.isFile()) {
     throw new Error('Target path is not a file.');
   }
+
+  if (!isEditableTextFile(targetPath)) {
+    throw new Error(getNonEditableFileReason(relativePath));
+  }
+
   return fs.readFileSync(targetPath, 'utf8');
 }
 
@@ -571,6 +615,10 @@ function writeInstallationTextFile(installationPath: string, relativePath: strin
   const stats = fs.statSync(targetPath);
   if (!stats.isFile()) {
     return { success: false, error: 'Target path is not a file.' };
+  }
+
+  if (!isEditableTextFile(targetPath)) {
+    return { success: false, error: getNonEditableFileReason(relativePath) };
   }
 
   fs.writeFileSync(targetPath, content, 'utf8');

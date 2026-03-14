@@ -209,6 +209,8 @@ const launcherApi = {
       isDirectory: boolean;
       sizeBytes: number;
       modifiedMs: number;
+      isEditableText: boolean;
+      nonEditableReason?: string;
     }>> => ipcRenderer.invoke(IPC.GAME_FILES_LIST, installationPath, relativeDir),
 
     /** Read a text file from an installation directory. */

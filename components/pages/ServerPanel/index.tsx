@@ -61,6 +61,8 @@ interface InstallationFileEntry {
   isDirectory: boolean;
   sizeBytes: number;
   modifiedMs: number;
+  isEditableText: boolean;
+  nonEditableReason?: string;
 }
 
 interface DashboardGroup {
@@ -2156,8 +2158,15 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
   }, [fileEntriesByDir, loadFileDirectory]);
 
-  const openFileInTab = useCallback(async (relativePath: string) => {
+  const openFileInTab = useCallback(async (entry: InstallationFileEntry) => {
     if (!effectiveServer || !hasGameApi) return;
+
+    if (!entry.isEditableText) {
+      setFileTabError(entry.nonEditableReason ?? `Cannot open ${entry.relativePath}: binary files are not supported in the editor.`);
+      return;
+    }
+
+    const relativePath = entry.relativePath;
 
     setOpenFileTabs((prev) => (prev.includes(relativePath) ? prev : [...prev, relativePath]));
     setActiveFileTabPath(relativePath);
@@ -4460,8 +4469,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       title: 'GameConfig.xml',
       subtitle: 'Edit game settings using typed fields and save each value directly to GameConfig.xml.',
       loadingText: 'Loading GameConfig.xml...',
-      searchPlaceholder: 'Search GameConfig fields...',
-      emptyMessage: 'No GameConfig fields match the current search/filter.',
+      searchPlaceholder: 'Search by key, label, description, or value',
+      emptyMessage: 'No fields match the current search/filter.',
       categoryOrder: gameConfigCategoryOrder,
       categoryLabels: gameConfigCategoryLabels,
       fields: gameConfigFields.map((field) => ({
@@ -4512,8 +4521,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       title: 'FactionConfig.xml',
       subtitle: 'Edit faction settings and save each value directly to FactionConfig.xml.',
       loadingText: 'Loading FactionConfig.xml...',
-      searchPlaceholder: 'Search faction config fields...',
-      emptyMessage: 'No faction config fields match the current search/filter.',
+      searchPlaceholder: 'Search by key, label, description, or value',
+      emptyMessage: 'No fields match the current search/filter.',
       categoryOrder: factionConfigCategoryOrder,
       categoryLabels: factionConfigCategoryLabels,
       fields: factionConfigFields.map((field) => ({
@@ -4627,18 +4636,24 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         );
       }
 
+      const isEditableTextFile = entry.isEditableText;
       return (
         <button
           key={entry.relativePath}
-          onClick={() => { void openFileInTab(entry.relativePath); }}
+          onClick={() => { void openFileInTab(entry); }}
+          disabled={!isEditableTextFile}
           className={`flex w-full items-center rounded px-2 py-1 text-left text-sm transition-colors ${
-            activeFileTabPath === entry.relativePath
+            !isEditableTextFile
+              ? 'cursor-not-allowed text-gray-500'
+              : activeFileTabPath === entry.relativePath
               ? 'bg-starmade-accent/20 text-white'
               : 'text-gray-300 hover:bg-white/5'
           }`}
           style={{ paddingLeft: `${22 + (depth * 14)}px` }}
+          title={isEditableTextFile ? undefined : (entry.nonEditableReason ?? 'Binary files are not editable in this panel.')}
         >
           <span className="truncate">{entry.name}</span>
+          {!isEditableTextFile && <span className="ml-2 text-[10px] uppercase tracking-wider text-gray-500">Binary</span>}
           {isTabOpen && <span className="ml-2 text-[10px] uppercase tracking-wider text-gray-500">Open</span>}
         </button>
       );

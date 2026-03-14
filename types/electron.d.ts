@@ -159,6 +159,8 @@ declare global {
           isDirectory: boolean;
           sizeBytes: number;
           modifiedMs: number;
+          isEditableText: boolean;
+          nonEditableReason?: string;
         }>>;
         /** Read a text file from an installation directory. */
         readInstallationFile: (installationPath: string, relativePath: string) => Promise<{ content: string; error?: string }>;
