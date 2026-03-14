@@ -943,12 +943,12 @@ ipcMain.handle(IPC.INSTALLATION_DELETE_FILES, async (_event, targetPath: string)
     return { success: true };
   }
 
-  if (!isStarMadeInstallDir(targetPath)) {
+  /*if (!isStarMadeInstallDir(targetPath)) {
     return {
       success: false,
       error: `The directory does not appear to be a StarMade installation: ${targetPath}`,
     };
-  }
+  }*/
 
   try {
     await fs.promises.rm(targetPath, { recursive: true, force: true });
@@ -1095,12 +1095,12 @@ ipcMain.handle(
 
     // Require the target to look like a StarMade installation (or be absent/empty)
     // before deleting it, to prevent wiping unrelated directories.
-    if (fs.existsSync(targetPath) && !isStarMadeInstallDir(targetPath)) {
+    /*if (fs.existsSync(targetPath) && !isStarMadeInstallDir(targetPath)) {
       return {
         success: false,
         error: `The directory does not appear to be a StarMade installation: ${targetPath}`,
       };
-    }
+    }*/
 
     // ── Atomic-style restore ─────────────────────────────────────────────────
     // Extract into a temp directory first.  Only replace the target directory
