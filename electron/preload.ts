@@ -451,6 +451,8 @@ const launcherApi = {
         modifiedMs: number;
         enabled: boolean;
         downloadUrl?: string;
+        resourceId?: number;
+        smdVersion?: string;
       }>;
     }> => ipcRenderer.invoke(IPC.MODS_LIST, installationPath),
 
