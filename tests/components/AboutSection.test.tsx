@@ -74,13 +74,4 @@ describe('AboutSection', () => {
     expect(await screen.findByText('LWJGL License.txt')).toBeInTheDocument();
     expect(await screen.findByText('Test license content')).toBeInTheDocument();
   });
-
-  it('copies bundled licenses to user data from the modal', async () => {
-    render(<AboutSection />);
-    fireEvent.click(screen.getByRole('button', { name: 'Third-Party Licenses' }));
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Copy to User Data' }));
-
-    expect(await screen.findByText(/Copied 1 license file\(s\)/)).toBeInTheDocument();
-  });
 });

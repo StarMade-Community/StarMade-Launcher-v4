@@ -1122,7 +1122,7 @@ ipcMain.handle(IPC.LICENSES_COPY_TO_USER_DATA, () => {
       return { success: false, copiedCount: 0, error: 'Bundled licenses directory was not found.' };
     }
 
-    const destinationDir = path.join(app.getPath('userData'), 'licences');
+    const destinationDir = path.join(app.getPath('userData'), 'licenses');
     fs.mkdirSync(destinationDir, { recursive: true });
 
     const files = listBundledLicenseFiles();

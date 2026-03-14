@@ -161,13 +161,6 @@ const AboutSection: React.FC = () => {
                             <div className="flex items-center gap-2">
                                 <button
                                     type="button"
-                                    onClick={() => void handleCopyLicenses()}
-                                    className="px-3 py-2 rounded-md bg-slate-800 hover:bg-slate-700 text-sm"
-                                >
-                                    Copy to User Data
-                                </button>
-                                <button
-                                    type="button"
                                     onClick={() => setLicensesOpen(false)}
                                     className="px-3 py-2 rounded-md bg-slate-800 hover:bg-slate-700 text-sm"
                                 >
