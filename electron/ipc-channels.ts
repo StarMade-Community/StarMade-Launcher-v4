@@ -82,6 +82,33 @@ export const IPC = {
   GAME_CLEAR_LOG_FILES: 'game:clear-log-files',
   /** Renderer → Main (invoke): get GraphicsInfo.txt content if it exists. */
   GAME_GET_GRAPHICS_INFO: 'game:get-graphics-info',
+
+  // ─── Server chat ────────────────────────────────────────────────────────────
+
+  /**
+   * Renderer → Main (invoke): send a line of text to a running server's stdin.
+   * Payload: { installationId: string; line: string }
+   * Returns: { success: boolean; error?: string }
+   */
+  GAME_SERVER_STDIN: 'game:server-stdin',
+
+  /** Main → Renderer: live parsed chat message from a running server. */
+  GAME_CHAT_MESSAGE: 'game:chat-message',
+
+  /**
+   * Renderer → Main (invoke): list chat log files from an installation's
+   * chatlogs directory.
+   * Payload: installationPath: string
+   * Returns: ChatFileInfo[]
+   */
+  GAME_LIST_CHAT_FILES: 'game:list-chat-files',
+
+  /**
+   * Renderer → Main (invoke): read a chat log file from the chatlogs directory.
+   * Payload: installationPath: string, fileName: string, maxBytes?: number
+   * Returns: { content: string; truncated: boolean; error?: string }
+   */
+  GAME_READ_CHAT_FILE: 'game:read-chat-file',
   /** Renderer → Main (invoke): read a key from installation server.cfg. */
   GAME_SERVER_CFG_GET: 'game:server-cfg-get',
   /** Renderer → Main (invoke): list parsed key/value entries from installation server.cfg. */
