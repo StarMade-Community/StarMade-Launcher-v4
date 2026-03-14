@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useMemo, ReactNode } from 'react';
 import type { AppContextType, Page, PageProps, ManagedItem, PlaySession, SessionLaunchArgs, LauncherSettingsData } from '../types';
 import { useData } from './DataContext';
 
@@ -27,10 +27,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const [logViewerOpen, setLogViewerOpen] = useState(false);
     const [logViewerInstallation, setLogViewerInstallation] = useState<ManagedItem | null>(null);
 
-    const navigate = (page: Page, props: PageProps = {}) => {
+    const navigate = useCallback((page: Page, props: PageProps = {}) => {
         setActivePage(page);
         setPageProps(props);
-    };
+    }, []);
+
+    const clearPageProps = useCallback(() => {
+        setPageProps({});
+    }, []);
 
     const closeLaunchModal = useCallback(() => {
         setIsLaunchModalOpen(false);
@@ -230,14 +234,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }, [activeAccount, applyPostLaunchBehavior, getLauncherSettings, recordSession]);
 
     /** Called by the "Launch Anyway" modal button — launches without terminating. */
-    const startLaunching = async () => {
+    const startLaunching = useCallback(async () => {
         await performLaunch(pendingLaunchInstallation, pendingSessionArgs, false);
-    };
+    }, [pendingLaunchInstallation, pendingSessionArgs, performLaunch]);
 
     /** Called by the "Terminate & Launch" modal button — stops running games first. */
-    const startLaunchingAndTerminate = async () => {
+    const startLaunchingAndTerminate = useCallback(async () => {
         await performLaunch(pendingLaunchInstallation, pendingSessionArgs, true);
-    };
+    }, [pendingLaunchInstallation, pendingSessionArgs, performLaunch]);
 
     /**
      * Open the launch flow for a given installation.
@@ -277,20 +281,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
     }, [isLaunching, performLaunch]);
     
-    const completeLaunching = () => {
+    const completeLaunching = useCallback(() => {
         console.log("Launch sequence complete.");
         setIsLaunching(false);
         setLaunchError(null);
-    };
+    }, []);
 
-    const openLogViewer = (installation: ManagedItem) => {
+    const openLogViewer = useCallback((installation: ManagedItem) => {
         setLogViewerInstallation(installation);
         setLogViewerOpen(true);
-    };
+    }, []);
 
-    const closeLogViewer = () => {
+    const closeLogViewer = useCallback(() => {
         setLogViewerOpen(false);
-    };
+    }, []);
 
     /**
      * Launch a previously recorded play session.
@@ -310,7 +314,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }, [installations, openLaunchModal]);
 
-    const value: AppContextType = {
+    const value = useMemo<AppContextType>(() => ({
         activePage,
         pageProps,
         isLaunchModalOpen,
@@ -320,6 +324,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         logViewerOpen,
         logViewerInstallation,
         navigate,
+        clearPageProps,
         openLaunchModal,
         closeLaunchModal,
         startLaunching,
@@ -328,7 +333,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         openLogViewer,
         closeLogViewer,
         launchSession,
-    };
+    }), [
+        activePage,
+        pageProps,
+        isLaunchModalOpen,
+        isLaunching,
+        launchError,
+        launchStatus,
+        logViewerOpen,
+        logViewerInstallation,
+        navigate,
+        clearPageProps,
+        openLaunchModal,
+        closeLaunchModal,
+        startLaunching,
+        startLaunchingAndTerminate,
+        completeLaunching,
+        openLogViewer,
+        closeLogViewer,
+        launchSession,
+    ]);
 
     return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

@@ -1958,7 +1958,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           key: entry.key,
           label: humanizeServerConfigKey(entry.key),
           description: entry.comment || 'Discovered key from server.cfg.',
-          category: 'advanced',
+          category: 'advanced' as ServerConfigCategory,
           type: inferServerConfigFieldType(entry.value),
           defaultValue: entry.value,
         }))
@@ -4464,7 +4464,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       emptyMessage: 'No GameConfig fields match the current search/filter.',
       categoryOrder: gameConfigCategoryOrder,
       categoryLabels: gameConfigCategoryLabels,
-      fields: gameConfigFieldsOutsideToggleGroups.map((field) => ({
+      fields: gameConfigFields.map((field) => ({
         id: field.path,
         keyDisplay: field.path,
         label: field.label,
@@ -4497,7 +4497,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       reloadLabel: 'Reload',
       onReload: reloadGameConfigXml,
       reloadDisabled: !effectiveServer || !hasGameApi || isGameConfigLoading || !!savingGameConfigPath || !!savingGameConfigToggleId,
-      categoryExtras: gameConfigCategoryExtras,
       bodyExtras,
     };
 

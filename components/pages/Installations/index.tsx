@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { PlusIcon } from '../../common/icons';
 import InstallationForm from '../../common/InstallationForm';
 import ItemCard from '../../common/ItemCard';
@@ -35,7 +35,7 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
     // Restore state
     const [restoreTarget, setRestoreTarget] = useState<ManagedItem | null>(null);
 
-    const { openLaunchModal, navigate } = useApp();
+    const { openLaunchModal, navigate, clearPageProps } = useApp();
     const { 
         installations, 
         servers,
@@ -54,12 +54,14 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
     } = useData();
 
     useEffect(() => {
-        if (initialTab && initialTab !== activeTab) {
-            setActiveTab(initialTab);
-            setView('list');
-            setActiveItem(null);
-        }
-    }, [initialTab, activeTab]);
+        if (!initialTab) return;
+
+        // Treat page-provided tab as a one-time navigation hint.
+        setActiveTab((current) => (current === initialTab ? current : initialTab));
+        setView('list');
+        setActiveItem(null);
+        clearPageProps();
+    }, [initialTab, clearPageProps]);
 
     const { items, itemTypeName, cardActionButtonText, cardStatusLabel } = activeTab === 'installations' 
     ? { 
@@ -75,20 +77,20 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
         cardStatusLabel: 'Status' 
       };
     
-    const handleEdit = (item: ManagedItem) => {
+    const handleEdit = useCallback((item: ManagedItem) => {
         setActiveItem(item);
         setIsNew(false);
         setView('form');
-    };
+    }, []);
 
-    const handleCreateNew = () => {
+    const handleCreateNew = useCallback(() => {
         const newItem = activeTab === 'installations' ? getInstallationDefaults() : getServerDefaults();
         setActiveItem(newItem);
         setIsNew(true);
         setView('form');
-    };
+    }, [activeTab, getInstallationDefaults, getServerDefaults]);
 
-    const handleSave = (savedData: ManagedItem) => {
+    const handleSave = useCallback((savedData: ManagedItem) => {
         if (activeTab === 'installations') {
             const versionChanged = !isNew && activeItem !== null && savedData.version !== activeItem.version;
             if (versionChanged && activeItem !== null) {
@@ -109,18 +111,18 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
         }
         setView('list');
         setActiveItem(null);
-    };
+    }, [activeTab, isNew, activeItem, addInstallation, updateInstallation, downloadVersion, addServer, updateServer]);
 
     /** Apply the pending version-change save after the user decided about backup. */
-    const applyVersionChange = (savedData: ManagedItem) => {
+    const applyVersionChange = useCallback((savedData: ManagedItem) => {
         updateInstallation({ ...savedData, installed: false });
         downloadVersion(savedData.id);
         setView('list');
         setActiveItem(null);
         setBackupPending(null);
-    };
+    }, [updateInstallation, downloadVersion]);
 
-    const handleBackupAndContinue = async () => {
+    const handleBackupAndContinue = useCallback(async () => {
         if (!backupPending) return;
         const { savedData, preChangeItem } = backupPending;
 
@@ -138,38 +140,38 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
             throw new Error(result.error ?? 'Backup failed');
         }
         applyVersionChange(savedData);
-    };
+    }, [backupPending, applyVersionChange]);
 
-    const handleSkipBackup = () => {
+    const handleSkipBackup = useCallback(() => {
         if (!backupPending) return;
         applyVersionChange(backupPending.savedData);
-    };
+    }, [backupPending, applyVersionChange]);
 
-    const handleCancelBackup = () => {
+    const handleCancelBackup = useCallback(() => {
         setBackupPending(null);
-    };
+    }, []);
 
-    const handleCancel = () => {
+    const handleCancel = useCallback(() => {
         setView('list');
         setActiveItem(null);
-    };
+    }, []);
 
-    const handleRepair = () => {
+    const handleRepair = useCallback(() => {
         if (!activeItem) return;
         const itemId = activeItem.id;
         setView('list');
         setActiveItem(null);
         downloadVersion(itemId);
-    };
+    }, [activeItem, downloadVersion]);
 
-    const handleDelete = (id: string) => {
+    const handleDelete = useCallback((id: string) => {
         const allItems = activeTab === 'installations' ? installations : servers;
         const item = allItems.find(i => i.id === id) ?? null;
         setDeleteError(null);
         setDeleteTarget(item);
-    };
+    }, [activeTab, installations, servers]);
 
-    const handleDeleteConfirm = async () => {
+    const handleDeleteConfirm = useCallback(async () => {
         if (!deleteTarget) return;
         const { id, path: itemPath } = deleteTarget;
 
@@ -198,34 +200,61 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
 
         setDeleteTarget(null);
         setDeleteError(null);
-    };
+    }, [deleteTarget, activeTab, deleteInstallation, deleteServer]);
 
-    const handleDeleteCancel = () => {
+    const handleDeleteCancel = useCallback(() => {
         setDeleteTarget(null);
         setDeleteError(null);
-    };
+    }, []);
 
-    const handleRestore = (item: ManagedItem) => {
+    const handleRestore = useCallback((item: ManagedItem) => {
         setRestoreTarget(item);
-    };
+    }, []);
 
-    const handleRestored = () => {
+    const handleRestored = useCallback(() => {
         if (restoreTarget) {
             // Mark the installation as installed after a successful restore.
             updateInstallation({ ...restoreTarget, installed: true });
         }
         setRestoreTarget(null);
-    };
+    }, [restoreTarget, updateInstallation]);
     
-    const handleTabChange = (tab: InstallationsTab) => {
+    const handleTabChange = useCallback((tab: InstallationsTab) => {
         if (tab !== activeTab) {
             setActiveTab(tab);
             setView('list');
             setActiveItem(null);
         }
-    }
+    }, [activeTab]);
     
-    const TabButton: React.FC<{ isActive: boolean; onClick: () => void; children: React.ReactNode }> = ({ isActive, onClick, children }) => (
+    const handleInstallationsTabClick = useCallback(() => handleTabChange('installations'), [handleTabChange]);
+    const handleServersTabClick = useCallback(() => handleTabChange('servers'), [handleTabChange]);
+    
+    // Create memoized handlers for ItemCard to prevent unnecessary re-renders during download updates
+    const handleItemDownload = useCallback((itemId: string) => {
+        downloadVersion(itemId);
+    }, [downloadVersion]);
+    
+    const handleItemCancelDownload = useCallback((itemId: string) => {
+        cancelDownload(itemId);
+    }, [cancelDownload]);
+    
+    const handleItemAction = useCallback((item: ManagedItem) => {
+        if (activeTab === 'installations') {
+            openLaunchModal(item);
+        } else {
+            setSelectedServerId(item.id);
+            navigate('ServerPanel', { serverId: item.id, serverName: item.name });
+        }
+    }, [activeTab, openLaunchModal, setSelectedServerId, navigate]);
+    
+    const handleOpenFolder = useCallback((path: string) => {
+        if (typeof window !== 'undefined' && window.launcher?.shell) {
+            window.launcher.shell.openPath(path);
+        }
+    }, []);
+    
+    const TabButton: React.FC<{ isActive: boolean; onClick: () => void; children: React.ReactNode }> = React.memo(({ isActive, onClick, children }) => (
         <button
             onClick={onClick}
             className={`
@@ -238,7 +267,7 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
                 <div className="absolute bottom-0 left-0 w-full h-1 bg-starmade-accent rounded-full shadow-[0_0_8px_0px_#227b86]"></div>
             )}
         </button>
-    );
+    ));
 
     const renderContent = () => {
         if (view === 'form' && activeItem) {
@@ -259,10 +288,10 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
             <div className="h-full flex flex-col">
                 <div className="flex justify-between items-center mb-6 flex-shrink-0 pr-4">
                     <div className="flex items-center gap-6">
-                        <TabButton isActive={activeTab === 'installations'} onClick={() => handleTabChange('installations')}>
+                        <TabButton isActive={activeTab === 'installations'} onClick={handleInstallationsTabClick}>
                             Installations
                         </TabButton>
-                        <TabButton isActive={activeTab === 'servers'} onClick={() => handleTabChange('servers')}>
+                        <TabButton isActive={activeTab === 'servers'} onClick={handleServersTabClick}>
                             Servers
                         </TabButton>
                     </div>
@@ -288,19 +317,10 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
                             actionButtonText={cardActionButtonText}
                             statusLabel={cardStatusLabel}
                             downloadStatus={downloadStatuses[item.id]}
-                            onDownload={() => downloadVersion(item.id)}
-                            onCancelDownload={() => cancelDownload(item.id)}
-                            onAction={activeTab === 'installations'
-                                ? (i) => openLaunchModal(i)
-                                : (server) => {
-                                    setSelectedServerId(server.id);
-                                    navigate('ServerPanel', { serverId: server.id, serverName: server.name });
-                                }}
-                            onOpenFolder={
-                                typeof window !== 'undefined' && window.launcher?.shell
-                                    ? (path) => window.launcher.shell!.openPath(path)
-                                    : undefined
-                            }
+                            onDownload={() => handleItemDownload(item.id)}
+                            onCancelDownload={() => handleItemCancelDownload(item.id)}
+                            onAction={handleItemAction}
+                            onOpenFolder={typeof window !== 'undefined' && window.launcher?.shell ? handleOpenFolder : undefined}
                             onRestore={activeTab === 'installations' ? handleRestore : undefined}
                         />
                     ))}

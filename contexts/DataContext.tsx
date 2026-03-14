@@ -44,6 +44,20 @@ const hasVersions = (): boolean => typeof window !== 'undefined' && typeof windo
 const hasDownload = (): boolean => typeof window !== 'undefined' && typeof window.launcher?.download !== 'undefined';
 const hasAuth     = (): boolean => typeof window !== 'undefined' && typeof window.launcher?.auth     !== 'undefined';
 
+const areDownloadStatusesEqual = (a?: DownloadStatus, b?: DownloadStatus): boolean => {
+    if (!a || !b) return false;
+    return (
+        a.state === b.state &&
+        a.percent === b.percent &&
+        a.bytesReceived === b.bytesReceived &&
+        a.totalBytes === b.totalBytes &&
+        a.filesDownloaded === b.filesDownloaded &&
+        a.totalFiles === b.totalFiles &&
+        a.currentFile === b.currentFile &&
+        a.error === b.error
+    );
+};
+
 // ─── Context ─────────────────────────────────────────────────────────────────
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -178,30 +192,46 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (!hasDownload()) return;
 
         const removeProgress = window.launcher.download.onProgress((progress: DownloadProgress) => {
-            setDownloadStatuses(prev => ({
-                ...prev,
-                [progress.installationId]: {
-                    state:           progress.phase,
-                    percent:         progress.percent,
-                    bytesReceived:   progress.bytesReceived,
-                    totalBytes:      progress.totalBytes,
-                    filesDownloaded: progress.filesDownloaded,
-                    totalFiles:      progress.totalFiles,
-                    currentFile:     progress.currentFile,
-                },
-            }));
+            const nextStatus: DownloadStatus = {
+                state:           progress.phase,
+                percent:         progress.percent,
+                bytesReceived:   progress.bytesReceived,
+                totalBytes:      progress.totalBytes,
+                filesDownloaded: progress.filesDownloaded,
+                totalFiles:      progress.totalFiles,
+                currentFile:     progress.currentFile,
+            };
+
+            setDownloadStatuses(prev => {
+                const current = prev[progress.installationId];
+                if (areDownloadStatusesEqual(current, nextStatus)) {
+                    return prev;
+                }
+                return {
+                    ...prev,
+                    [progress.installationId]: nextStatus,
+                };
+            });
         });
 
         const removeComplete = window.launcher.download.onComplete(({ installationId }) => {
-            setDownloadStatuses(prev => ({
-                ...prev,
-                [installationId]: {
-                    state: 'complete', percent: 100,
-                    bytesReceived: 0, totalBytes: 0,
-                    filesDownloaded: 0, totalFiles: 0,
-                    currentFile: 'Download complete',
-                },
-            }));
+            const nextStatus: DownloadStatus = {
+                state: 'complete', percent: 100,
+                bytesReceived: 0, totalBytes: 0,
+                filesDownloaded: 0, totalFiles: 0,
+                currentFile: 'Download complete',
+            };
+
+            setDownloadStatuses(prev => {
+                const current = prev[installationId];
+                if (areDownloadStatusesEqual(current, nextStatus)) {
+                    return prev;
+                }
+                return {
+                    ...prev,
+                    [installationId]: nextStatus,
+                };
+            });
             // Persist the installed flag so "Play" is shown after restart
             setInstallations(prev =>
                 prev.map(i => i.id === installationId ? { ...i, installed: true } : i)
@@ -212,15 +242,23 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         });
 
         const removeError = window.launcher.download.onError(({ installationId, error }) => {
-            setDownloadStatuses(prev => ({
-                ...prev,
-                [installationId]: {
-                    state: 'error', percent: 0,
-                    bytesReceived: 0, totalBytes: 0,
-                    filesDownloaded: 0, totalFiles: 0,
-                    currentFile: '', error,
-                },
-            }));
+            const nextStatus: DownloadStatus = {
+                state: 'error', percent: 0,
+                bytesReceived: 0, totalBytes: 0,
+                filesDownloaded: 0, totalFiles: 0,
+                currentFile: '', error,
+            };
+
+            setDownloadStatuses(prev => {
+                const current = prev[installationId];
+                if (areDownloadStatusesEqual(current, nextStatus)) {
+                    return prev;
+                }
+                return {
+                    ...prev,
+                    [installationId]: nextStatus,
+                };
+            });
         });
 
         return () => { removeProgress(); removeComplete(); removeError(); };
@@ -305,15 +343,22 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             return;
         }
 
-        setDownloadStatuses(prev => ({
-            ...prev,
-            [itemId]: {
-                state: 'checksums', percent: 0,
-                bytesReceived: 0, totalBytes: 0,
-                filesDownloaded: 0, totalFiles: 0,
-                currentFile: 'Starting…',
-            },
-        }));
+        const nextStartStatus: DownloadStatus = {
+            state: 'checksums', percent: 0,
+            bytesReceived: 0, totalBytes: 0,
+            filesDownloaded: 0, totalFiles: 0,
+            currentFile: 'Starting…',
+        };
+        setDownloadStatuses(prev => {
+            const current = prev[itemId];
+            if (areDownloadStatusesEqual(current, nextStartStatus)) {
+                return prev;
+            }
+            return {
+                ...prev,
+                [itemId]: nextStartStatus,
+            };
+        });
 
         // Helper: resolve buildPath and start the download for the given item
         const beginDownload = (item: ManagedItem) => {
@@ -327,16 +372,23 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             }
 
             if (!buildPath) {
-                setDownloadStatuses(ds => ({
-                    ...ds,
-                    [itemId]: {
-                        state: 'error', percent: 0,
-                        bytesReceived: 0, totalBytes: 0,
-                        filesDownloaded: 0, totalFiles: 0,
-                        currentFile: '',
-                        error: 'Version not available for download — build path unknown.',
-                    },
-                }));
+                const nextErrorStatus: DownloadStatus = {
+                    state: 'error', percent: 0,
+                    bytesReceived: 0, totalBytes: 0,
+                    filesDownloaded: 0, totalFiles: 0,
+                    currentFile: '',
+                    error: 'Version not available for download — build path unknown.',
+                };
+                setDownloadStatuses(ds => {
+                    const current = ds[itemId];
+                    if (areDownloadStatusesEqual(current, nextErrorStatus)) {
+                        return ds;
+                    }
+                    return {
+                        ...ds,
+                        [itemId]: nextErrorStatus,
+                    };
+                });
                 return;
             }
 
@@ -367,7 +419,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setDownloadStatuses(prev => {
             const entry = prev[installationId];
             if (!entry) return prev;
-            return { ...prev, [installationId]: { ...entry, state: 'cancelled' } };
+            const nextStatus: DownloadStatus = { ...entry, state: 'cancelled' };
+            if (areDownloadStatusesEqual(entry, nextStatus)) {
+                return prev;
+            }
+            return { ...prev, [installationId]: nextStatus };
         });
     }, []);
 

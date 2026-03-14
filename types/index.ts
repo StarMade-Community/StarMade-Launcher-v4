@@ -179,6 +179,7 @@ export interface AppContextType {
     logViewerOpen: boolean;
     logViewerInstallation: ManagedItem | null;
     navigate: (page: Page, props?: PageProps) => void;
+    clearPageProps: () => void;
     openLaunchModal: (installation?: ManagedItem, sessionArgs?: SessionLaunchArgs) => void | Promise<void>;
     closeLaunchModal: () => void;
     startLaunching: () => void;
