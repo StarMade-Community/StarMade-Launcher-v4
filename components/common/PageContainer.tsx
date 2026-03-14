@@ -25,7 +25,7 @@ const PageContainer: React.FC<PageContainerProps> = ({
                 : 'w-full max-w-6xl h-full'
         }`}>
             <div className="absolute top-1 right-1 z-10 flex items-center gap-1">
-                {onPopOut && (
+                {/*{onPopOut && (
                     <button
                         onClick={onPopOut}
                         className="p-1.5 rounded-md hover:bg-white/10 transition-colors"
@@ -34,7 +34,7 @@ const PageContainer: React.FC<PageContainerProps> = ({
                     >
                         <MaximizeIcon className="w-4 h-4 text-gray-300" />
                     </button>
-                )}
+                )}*/}
                 <button
                     onClick={() => navigate(closeTarget)}
                     className="p-1.5 rounded-md hover:bg-starmade-danger/20 transition-colors"
