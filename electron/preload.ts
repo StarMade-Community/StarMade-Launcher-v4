@@ -439,10 +439,9 @@ const launcherApi = {
 
   /** Mods management APIs */
   mods: {
-    /** List mod jars in both mods and mods-disabled directories. */
+    /** List mod jars from the installation's mods directory. */
     list: (installationPath: string): Promise<{
       modsDir: string;
-      disabledModsDir: string;
       mods: Array<{
         fileName: string;
         absolutePath: string;
@@ -510,7 +509,7 @@ const launcherApi = {
     remove: (installationPath: string, relativePath: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC.MODS_REMOVE, installationPath, relativePath),
 
-    /** Enable/disable a mod by moving it between mods and mods-disabled. */
+    /** Deprecated: StarMade manages mod enable/disable state in-game. */
     setEnabled: (
       installationPath: string,
       relativePath: string,

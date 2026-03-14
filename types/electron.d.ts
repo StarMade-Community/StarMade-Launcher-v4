@@ -319,10 +319,9 @@ declare global {
 
       /** Mods management APIs */
       mods: {
-        /** List mod jars from an installation's mods and mods-disabled folders. */
+        /** List mod jars from an installation's mods folder. */
         list: (installationPath: string) => Promise<{
           modsDir: string;
-          disabledModsDir: string;
           mods: ModRecord[];
         }>;
         /** Browse StarMade Dock StarLoader mods. */
@@ -343,7 +342,7 @@ declare global {
         ) => Promise<{ success: boolean; updates: SmdInstalledUpdateStatus[]; error?: string }>;
         /** Delete a mod jar from an installation. */
         remove: (installationPath: string, relativePath: string) => Promise<{ success: boolean; error?: string }>;
-        /** Enable or disable a mod by moving it between folders. */
+        /** Deprecated: StarMade manages mod enable/disable state in-game. */
         setEnabled: (
           installationPath: string,
           relativePath: string,

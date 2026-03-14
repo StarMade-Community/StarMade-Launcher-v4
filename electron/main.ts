@@ -1882,7 +1882,6 @@ ipcMain.handle(IPC.MODS_LIST, async (_event, installationPath: string) => {
   } catch (error) {
     return {
       modsDir: path.join(installationPath || '', 'mods'),
-      disabledModsDir: path.join(installationPath || '', 'mods-disabled'),
       mods: [],
       error: String(error),
     };

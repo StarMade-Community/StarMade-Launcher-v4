@@ -6,7 +6,6 @@ import type { ManagedItem, ModRecord, SmdModResource, SmdInstalledUpdateStatus }
 
 interface ModsListResult {
   modsDir: string;
-  disabledModsDir: string;
   mods: ModRecord[];
 }
 
@@ -16,7 +15,6 @@ interface ModsBridge {
   installOrUpdateFromSmd: (installationPath: string, resourceId: number, enabled?: boolean) => Promise<{ success: boolean; mod?: ModRecord; error?: string }>;
   checkSmdUpdates: (installed: Array<{ resourceId: number; smdVersion: string }>) => Promise<{ success: boolean; updates: SmdInstalledUpdateStatus[]; error?: string }>;
   remove: (installationPath: string, relativePath: string) => Promise<{ success: boolean; error?: string }>;
-  setEnabled: (installationPath: string, relativePath: string, enabled: boolean) => Promise<{ success: boolean; relativePath?: string; error?: string }>;
   exportModpack: (
     installationPath: string,
     outputPath: string,
@@ -49,7 +47,6 @@ const Mods: React.FC = () => {
   const { installations, selectedInstallationId } = useData();
   const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(selectedInstallationId);
   const [modsDir, setModsDir] = useState('');
-  const [disabledModsDir, setDisabledModsDir] = useState('');
   const [mods, setMods] = useState<ModRecord[]>([]);
   const [smdMods, setSmdMods] = useState<SmdModResource[]>([]);
   const [smdSearch, setSmdSearch] = useState('');
@@ -89,7 +86,7 @@ const Mods: React.FC = () => {
   );
 
   const sortedMods = useMemo(
-    () => [...mods].sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.fileName.localeCompare(b.fileName)),
+    () => [...mods].sort((a, b) => a.fileName.localeCompare(b.fileName)),
     [mods],
   );
 
@@ -110,7 +107,6 @@ const Mods: React.FC = () => {
     if (!selectedInstance) {
       setMods([]);
       setModsDir('');
-      setDisabledModsDir('');
       return;
     }
     if (!launcher?.mods?.list) {
@@ -126,12 +122,10 @@ const Mods: React.FC = () => {
       const result = await launcher.mods.list(selectedInstance.path);
       setMods(result.mods);
       setModsDir(result.modsDir);
-      setDisabledModsDir(result.disabledModsDir);
     } catch (err) {
       setError(`Failed to load mods: ${String(err)}`);
       setMods([]);
       setModsDir('');
-      setDisabledModsDir('');
     } finally {
       setIsLoading(false);
     }
@@ -250,19 +244,6 @@ const Mods: React.FC = () => {
     });
   }, [launcher, loadMods, selectedInstance, withBusyAction]);
 
-  const onToggleMod = useCallback(async (mod: ModRecord) => {
-    if (!selectedInstance || !launcher?.mods?.setEnabled) return;
-
-    await withBusyAction(async () => {
-      const result = await launcher.mods.setEnabled(selectedInstance.path, mod.relativePath, !mod.enabled);
-      if (!result.success) {
-        throw new Error(result.error ?? 'Failed to update mod state.');
-      }
-      setStatus(`${mod.fileName} ${mod.enabled ? 'disabled' : 'enabled'}.`);
-      await loadMods();
-    });
-  }, [launcher, loadMods, selectedInstance, withBusyAction]);
-
   const onDeleteMod = useCallback(async (mod: ModRecord) => {
     if (!selectedInstance || !launcher?.mods?.remove) return;
 
@@ -361,7 +342,7 @@ const Mods: React.FC = () => {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(260px,420px)_1fr_1fr] gap-4 items-end">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(260px,420px)_1fr] gap-4 items-end">
           <div>
             <p className="text-xs uppercase tracking-wider text-gray-400 mb-2">Installation</p>
             {instances.length > 0 ? (
@@ -376,13 +357,8 @@ const Mods: React.FC = () => {
           </div>
 
           <div>
-            <p className="text-xs uppercase tracking-wider text-gray-400 mb-1">Enabled Folder</p>
+            <p className="text-xs uppercase tracking-wider text-gray-400 mb-1">Mods Folder</p>
             <p className="text-sm text-gray-200 break-all">{modsDir || 'n/a'}</p>
-          </div>
-
-          <div>
-            <p className="text-xs uppercase tracking-wider text-gray-400 mb-1">Disabled Folder</p>
-            <p className="text-sm text-gray-200 break-all">{disabledModsDir || 'n/a'}</p>
           </div>
         </div>
 
@@ -505,7 +481,7 @@ const Mods: React.FC = () => {
                 return (
                 <tr key={`${mod.relativePath}-${mod.modifiedMs}`} className="border-b border-white/5 last:border-b-0">
                   <td className="px-3 py-2 text-gray-200 break-all">{mod.fileName}</td>
-                  <td className="px-3 py-2">{mod.enabled ? 'Enabled' : 'Disabled'}</td>
+                  <td className="px-3 py-2">Managed In-Game</td>
                   <td className="px-3 py-2 text-gray-300">
                     {mod.resourceId ? `#${mod.resourceId}${mod.smdVersion ? ` (${mod.smdVersion})` : ''}` : 'Manual/Unknown'}
                     {hasUpdate && (
@@ -537,14 +513,6 @@ const Mods: React.FC = () => {
                   </td>
                   <td className="px-3 py-2">
                     <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void onToggleMod(mod)}
-                        className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs"
-                        disabled={isBusy}
-                      >
-                        {mod.enabled ? 'Disable' : 'Enable'}
-                      </button>
                       <button
                         type="button"
                         onClick={() => void onDeleteMod(mod)}

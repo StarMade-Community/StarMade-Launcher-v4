@@ -35,7 +35,6 @@ export interface SmdInstalledUpdateStatus {
 
 export interface ModsListResult {
   modsDir: string;
-  disabledModsDir: string;
   mods: ModRecord[];
 }
 
@@ -77,7 +76,7 @@ export interface ModMetadataStore {
 }
 
 const MODS_DIR_NAME = 'mods';
-const MODS_DISABLED_DIR_NAME = 'mods-disabled';
+const LEGACY_MODS_DISABLED_DIR_NAME = 'mods-disabled';
 const SMD_API_BASE = 'https://starmadedock.net/api';
 const SMD_MOD_CATEGORY_ID = 6;
 const SMD_API_KEY_ENV_NAMES = ['SMD_API_KEY', 'SMD_XF_API_KEY', 'XENFORO_API_KEY'] as const;
@@ -182,6 +181,21 @@ function getUniqueFilePath(targetDir: string, preferredFileName: string): string
     const fullPath = path.join(targetDir, fileName);
     if (!fs.existsSync(fullPath)) return fullPath;
     index += 1;
+  }
+}
+
+function migrateLegacyDisabledModsToMods(modsDir: string, legacyDisabledDir: string): void {
+  if (!fs.existsSync(legacyDisabledDir)) return;
+  const stats = fs.statSync(legacyDisabledDir);
+  if (!stats.isDirectory()) return;
+
+  for (const fileName of fs.readdirSync(legacyDisabledDir)) {
+    const sourcePath = path.join(legacyDisabledDir, fileName);
+    if (!fs.statSync(sourcePath).isFile()) continue;
+    if (path.extname(fileName).toLowerCase() !== '.jar') continue;
+
+    const targetPath = getUniqueFilePath(modsDir, fileName);
+    fs.renameSync(sourcePath, targetPath);
   }
 }
 
@@ -410,8 +424,6 @@ export async function checkSmdUpdatesForInstalled(
 
 function createModRecordFromFile(
   modFilePath: string,
-  modsDir: string,
-  disabledModsDir: string,
   metadataForInstallation: Record<string, ModMetadataRecord>,
 ): ModRecord | null {
   if (!fs.existsSync(modFilePath)) return null;
@@ -422,10 +434,7 @@ function createModRecordFromFile(
   if (ext !== '.jar') return null;
 
   const normalizedPath = path.resolve(modFilePath);
-  const enabled = normalizedPath.startsWith(`${path.resolve(modsDir)}${path.sep}`);
-  const relativePath = enabled
-    ? path.join(MODS_DIR_NAME, path.basename(modFilePath))
-    : path.join(MODS_DISABLED_DIR_NAME, path.basename(modFilePath));
+  const relativePath = path.join(MODS_DIR_NAME, path.basename(modFilePath));
 
   const fileName = path.basename(modFilePath);
   return {
@@ -434,7 +443,8 @@ function createModRecordFromFile(
     relativePath,
     sizeBytes: stats.size,
     modifiedMs: stats.mtimeMs,
-    enabled,
+    // StarMade owns enable/disable state. Presence in mods/ means available to the game.
+    enabled: true,
     downloadUrl: metadataForInstallation[fileName]?.downloadUrl,
     resourceId: metadataForInstallation[fileName]?.resourceId,
     smdVersion: metadataForInstallation[fileName]?.smdVersion,
@@ -448,27 +458,24 @@ export function listModsForInstallation(
 ): ModsListResult {
   const installationRoot = getInstallationRoot(installationPath, launcherDir);
   const modsDir = path.join(installationRoot, MODS_DIR_NAME);
-  const disabledModsDir = path.join(installationRoot, MODS_DISABLED_DIR_NAME);
+  const legacyDisabledModsDir = path.join(installationRoot, LEGACY_MODS_DISABLED_DIR_NAME);
   fs.mkdirSync(modsDir, { recursive: true });
-  fs.mkdirSync(disabledModsDir, { recursive: true });
+  migrateLegacyDisabledModsToMods(modsDir, legacyDisabledModsDir);
 
   const metadata = readMetadata(metadataStore);
   const installationKey = getInstallationKey(installationRoot);
   const metadataForInstallation = metadata.byInstallation[installationKey] ?? {};
 
   const entries: ModRecord[] = [];
-  for (const dir of [modsDir, disabledModsDir]) {
-    for (const fileName of fs.readdirSync(dir)) {
-      const mod = createModRecordFromFile(path.join(dir, fileName), modsDir, disabledModsDir, metadataForInstallation);
-      if (mod) entries.push(mod);
-    }
+  for (const fileName of fs.readdirSync(modsDir)) {
+    const mod = createModRecordFromFile(path.join(modsDir, fileName), metadataForInstallation);
+    if (mod) entries.push(mod);
   }
 
-  entries.sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.fileName.localeCompare(b.fileName));
+  entries.sort((a, b) => a.fileName.localeCompare(b.fileName));
 
   return {
     modsDir,
-    disabledModsDir,
     mods: entries,
   };
 }
@@ -522,7 +529,6 @@ export async function downloadModForInstallation(options: {
     launcherDir,
     downloadUrl,
     preferredFileName,
-    enabled = true,
     metadataStore,
     source,
     resourceId,
@@ -535,9 +541,7 @@ export async function downloadModForInstallation(options: {
 
   const installationRoot = getInstallationRoot(installationPath, launcherDir);
   const modsDir = path.join(installationRoot, MODS_DIR_NAME);
-  const disabledModsDir = path.join(installationRoot, MODS_DISABLED_DIR_NAME);
   fs.mkdirSync(modsDir, { recursive: true });
-  fs.mkdirSync(disabledModsDir, { recursive: true });
 
   const headResponse = await fetch(downloadUrl, { method: 'HEAD' }).catch(() => null);
   const inferredFileName = inferDownloadFileName(
@@ -546,8 +550,7 @@ export async function downloadModForInstallation(options: {
     preferredFileName,
   );
 
-  const targetDir = enabled ? modsDir : disabledModsDir;
-  const targetPath = getUniqueFilePath(targetDir, inferredFileName);
+  const targetPath = getUniqueFilePath(modsDir, inferredFileName);
   assertWithin(installationRoot, targetPath);
 
   await downloadToFile(downloadUrl, targetPath);
@@ -591,7 +594,7 @@ export async function installOrUpdateSmdModForInstallation(options: {
   enabled?: boolean;
   metadataStore: ModMetadataStore;
 }): Promise<ModRecord> {
-  const { installationPath, launcherDir, resourceId, enabled = true, metadataStore } = options;
+  const { installationPath, launcherDir, resourceId, metadataStore } = options;
   if (!Number.isFinite(resourceId) || resourceId <= 0) {
     throw new Error('Invalid SMD resource id.');
   }
@@ -608,7 +611,6 @@ export async function installOrUpdateSmdModForInstallation(options: {
     launcherDir,
     downloadUrl,
     preferredFileName,
-    enabled,
     source: 'smd',
     resourceId,
     smdVersion: version,
@@ -618,21 +620,17 @@ export async function installOrUpdateSmdModForInstallation(options: {
 
 function resolveManagedModPath(installationRoot: string, relativePath: string): string {
   const modsDir = path.join(installationRoot, MODS_DIR_NAME);
-  const disabledModsDir = path.join(installationRoot, MODS_DISABLED_DIR_NAME);
 
   const normalized = path.normalize(relativePath);
-  const allowedRoots = [path.normalize(MODS_DIR_NAME), path.normalize(MODS_DISABLED_DIR_NAME)];
-  const startsInAllowedRoot = allowedRoots.some((prefix) => (
-    normalized === prefix || normalized.startsWith(`${prefix}${path.sep}`)
-  ));
-  if (!startsInAllowedRoot) throw new Error('Mod path is outside managed mod directories.');
+  const allowedRoot = path.normalize(MODS_DIR_NAME);
+  const startsInAllowedRoot = normalized === allowedRoot || normalized.startsWith(`${allowedRoot}${path.sep}`);
+  if (!startsInAllowedRoot) throw new Error('Mod path is outside managed mods directory.');
 
   const fullPath = path.resolve(path.join(installationRoot, normalized));
   const fullModsDir = path.resolve(modsDir);
-  const fullDisabledDir = path.resolve(disabledModsDir);
 
-  if (!fullPath.startsWith(`${fullModsDir}${path.sep}`) && !fullPath.startsWith(`${fullDisabledDir}${path.sep}`)) {
-    throw new Error('Mod path is outside installation mod directories.');
+  if (!fullPath.startsWith(`${fullModsDir}${path.sep}`)) {
+    throw new Error('Mod path is outside installation mods directory.');
   }
 
   if (path.extname(fullPath).toLowerCase() !== '.jar') {
@@ -664,21 +662,16 @@ export function setModEnabledForInstallation(options: {
   enabled: boolean;
 }): { relativePath: string } {
   const { installationPath, launcherDir, relativePath, enabled } = options;
+  if (!enabled) {
+    throw new Error('Disabling mods is managed by StarMade. Use the in-game mod settings.');
+  }
+
   const installationRoot = getInstallationRoot(installationPath, launcherDir);
   const sourcePath = resolveManagedModPath(installationRoot, relativePath);
   if (!fs.existsSync(sourcePath)) throw new Error('Mod file does not exist.');
 
-  const modsDir = path.join(installationRoot, MODS_DIR_NAME);
-  const disabledModsDir = path.join(installationRoot, MODS_DISABLED_DIR_NAME);
-  fs.mkdirSync(modsDir, { recursive: true });
-  fs.mkdirSync(disabledModsDir, { recursive: true });
-
-  const targetDir = enabled ? modsDir : disabledModsDir;
-  const targetPath = getUniqueFilePath(targetDir, path.basename(sourcePath));
-  fs.renameSync(sourcePath, targetPath);
-
   return {
-    relativePath: path.join(enabled ? MODS_DIR_NAME : MODS_DISABLED_DIR_NAME, path.basename(targetPath)),
+    relativePath: path.join(MODS_DIR_NAME, path.basename(sourcePath)),
   };
 }
 
@@ -777,7 +770,6 @@ export function createModpackManifest(options: {
       name: mod.fileName,
       fileName: mod.fileName,
       downloadUrl: mod.downloadUrl,
-      enabled: mod.enabled,
     });
   }
 
@@ -838,7 +830,6 @@ export async function importModpackFromFile(options: {
         launcherDir,
         downloadUrl: entry.downloadUrl,
         preferredFileName: entry.fileName || entry.name,
-        enabled: entry.enabled ?? true,
         source: 'modpack-import',
         metadataStore,
       });
