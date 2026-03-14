@@ -163,7 +163,7 @@ interface InstallationFileEntry {
 // ─── Database tab types ───────────────────────────────────────────────────────
 
 type DatabaseSqlMode = 'query' | 'update' | 'insertKeys';
-type DatabaseSortKey = 'name-asc' | 'name-desc' | 'mass-asc' | 'mass-desc';
+type DatabaseSortKey = 'name-asc' | 'name-desc';
 
 interface DatabaseSqlTable {
   columns: string[];
@@ -179,7 +179,6 @@ interface DatabaseEntityRow {
   x: number;
   y: number;
   z: number;
-  massEstimate: number | null;
 }
 
 interface PendingDatabaseSqlRequest {
@@ -495,18 +494,6 @@ const getDbColIdx = (columns: string[], ...candidates: string[]): number => {
   return -1;
 };
 
-/** Estimate mass from the 6-element DIM array column (min/max block coords). */
-const parseDimMassEstimate = (raw: string): number | null => {
-  const nums = raw.match(/-?\d+/g);
-  if (!nums || nums.length < 6) return null;
-  const v = nums.slice(0, 6).map((n) => Number.parseInt(n, 10));
-  if (v.some((n) => !Number.isFinite(n))) return null;
-  const w = Math.max(1, (v[3] - v[0]) + 1);
-  const h = Math.max(1, (v[4] - v[1]) + 1);
-  const d = Math.max(1, (v[5] - v[2]) + 1);
-  return w * h * d;
-};
-
 const parseDatabaseEntities = (table: DatabaseSqlTable): DatabaseEntityRow[] => {
   const idIdx  = getDbColIdx(table.columns, 'ID');
   const uidIdx = getDbColIdx(table.columns, 'UID');
@@ -516,7 +503,6 @@ const parseDatabaseEntities = (table: DatabaseSqlTable): DatabaseEntityRow[] => 
   const xIdx   = getDbColIdx(table.columns, 'X');
   const yIdx   = getDbColIdx(table.columns, 'Y');
   const zIdx   = getDbColIdx(table.columns, 'Z');
-  const dimIdx = getDbColIdx(table.columns, 'DIM');
 
   if ([idIdx, uidIdx, nmIdx, tyIdx, faIdx, xIdx, yIdx, zIdx].some((i) => i < 0)) return [];
 
@@ -533,7 +519,6 @@ const parseDatabaseEntities = (table: DatabaseSqlTable): DatabaseEntityRow[] => 
       typeValue: row[tyIdx] ?? 'Unknown',
       factionValue: row[faIdx] ?? '0',
       x, y, z,
-      massEstimate: dimIdx >= 0 ? parseDimMassEstimate(row[dimIdx] ?? '') : null,
     });
   }
   return result;
@@ -541,7 +526,7 @@ const parseDatabaseEntities = (table: DatabaseSqlTable): DatabaseEntityRow[] => 
 
 /** The default entity-browser query — joins on SECTORS to only show non-transient (loaded) sectors */
 const DATABASE_ENTITY_LIST_SQL =
-  'SELECT e.ID, e.UID, e.NAME, e.TYPE, e.FACTION, e.X, e.Y, e.Z, e.DIM ' +
+  'SELECT e.ID, e.UID, e.NAME, e.TYPE, e.FACTION, e.X, e.Y, e.Z ' +
   'FROM ENTITIES e ' +
   'JOIN SECTORS s ON s.X = e.X AND s.Y = e.Y AND s.Z = e.Z ' +
   'WHERE s.TRANSIENT = FALSE ' +
@@ -3534,12 +3519,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     });
 
     filtered.sort((a, b) => {
-      if (databaseSortKey === 'name-asc') return a.name.localeCompare(b.name);
       if (databaseSortKey === 'name-desc') return b.name.localeCompare(a.name);
-      const am = a.massEstimate ?? -1;
-      const bm = b.massEstimate ?? -1;
-      if (databaseSortKey === 'mass-asc') return am !== bm ? am - bm : a.name.localeCompare(b.name);
-      return am !== bm ? bm - am : a.name.localeCompare(b.name);
+      return a.name.localeCompare(b.name);
     });
 
     return filtered;
@@ -6230,7 +6211,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           </div>
           <p className="text-xs text-gray-500">
             Grouped by sector coords. Only sectors with <code className="text-gray-400">TRANSIENT = FALSE</code> are shown.
-            Mass is estimated from entity DIM column (block bounding box volume).
           </p>
         </div>
 
@@ -6263,8 +6243,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           >
             <option value="name-asc">Sort: Name A→Z</option>
             <option value="name-desc">Sort: Name Z→A</option>
-            <option value="mass-desc">Sort: Mass High→Low</option>
-            <option value="mass-asc">Sort: Mass Low→High</option>
           </select>
         </div>
 
@@ -6303,7 +6281,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                             ID&nbsp;<span className="text-gray-300">{entity.id}</span>
                             &ensp;|&ensp;Type&nbsp;<span className="text-gray-300">{entity.typeValue}</span>
                             &ensp;|&ensp;Faction&nbsp;<span className="text-gray-300">{entity.factionValue}</span>
-                            &ensp;|&ensp;Mass&nbsp;<span className="text-gray-300">{entity.massEstimate != null ? entity.massEstimate.toLocaleString() : 'n/a'}</span>
                           </p>
                           <p className="mt-0.5 font-mono text-[11px] text-gray-500 truncate" title={entity.uid}>
                             UID: {entity.uid}
