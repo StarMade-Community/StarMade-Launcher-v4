@@ -39,6 +39,7 @@ jobs:
         run: npm run electron:build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SMD_API_KEY: ${{ secrets.SMD_API_KEY }}
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -74,6 +75,7 @@ jobs:
         run: npm run electron:build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SMD_API_KEY: ${{ secrets.SMD_API_KEY }}
           # Uncomment if you have Apple Developer credentials for code signing:
           # CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
           # CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
@@ -114,6 +116,7 @@ jobs:
         run: npm run electron:build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SMD_API_KEY: ${{ secrets.SMD_API_KEY }}
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4

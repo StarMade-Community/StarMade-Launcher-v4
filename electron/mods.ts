@@ -80,7 +80,7 @@ const MODS_DIR_NAME = 'mods';
 const MODS_DISABLED_DIR_NAME = 'mods-disabled';
 const SMD_API_BASE = 'https://starmadedock.net/api';
 const SMD_MOD_CATEGORY_ID = 6;
-const SMD_API_KEY = 'RSVcV-pNXnzaZgHTths0Qd11WsNJ_EK7';
+const SMD_API_KEY_ENV_NAMES = ['SMD_API_KEY', 'SMD_XF_API_KEY', 'XENFORO_API_KEY'] as const;
 
 const DEFAULT_METADATA: ModMetadataStoreData = {
   byInstallation: {},
@@ -221,10 +221,11 @@ function inferDownloadFileName(downloadUrl: string, contentDisposition: string |
 
 async function smdFetchJson(apiPath: string): Promise<unknown> {
   const normalizedPath = apiPath.startsWith('/') ? apiPath : `/${apiPath}`;
+  const apiKey = getSmdApiKey();
   const response = await fetch(`${SMD_API_BASE}${normalizedPath}`, {
     headers: {
       'Content-type': 'application/x-www-form-urlencoded',
-      'XF-Api-Key': SMD_API_KEY,
+      'XF-Api-Key': apiKey,
       'User-Agent': 'StarMade-Launcher',
     },
   });
@@ -234,6 +235,19 @@ async function smdFetchJson(apiPath: string): Promise<unknown> {
   }
 
   return response.json();
+}
+
+function getSmdApiKey(): string {
+  for (const envName of SMD_API_KEY_ENV_NAMES) {
+    const value = process.env[envName];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  throw new Error(
+    `SMD API key is not configured. Set one of: ${SMD_API_KEY_ENV_NAMES.join(', ')}`,
+  );
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {

@@ -1,7 +1,19 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { listSmdMods, parseModpackManifest, sanitizeModFileName } from '../../electron/mods.js';
 
+let previousSmdApiKey: string | undefined;
+
+beforeEach(() => {
+  previousSmdApiKey = process.env.SMD_API_KEY;
+  process.env.SMD_API_KEY = 'test-api-key';
+});
+
 afterEach(() => {
+  if (typeof previousSmdApiKey === 'string') {
+    process.env.SMD_API_KEY = previousSmdApiKey;
+  } else {
+    delete process.env.SMD_API_KEY;
+  }
   vi.unstubAllGlobals();
 });
 
