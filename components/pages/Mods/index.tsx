@@ -141,7 +141,9 @@ const Mods: React.FC = () => {
     try {
       const result = await launcher.mods.listSmdMods(smdSearch);
       if (!result.success) {
-        throw new Error(result.error ?? 'Failed to load SMD mods.');
+        setError(result.error ?? 'Failed to load SMD mods.');
+        setSmdMods([]);
+        return;
       }
       setSmdMods(result.mods);
     } catch (err) {
