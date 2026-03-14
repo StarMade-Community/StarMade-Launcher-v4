@@ -30,6 +30,7 @@ import { isRunningAsAppImage } from './appimage-detect.js';
 import { registerAppImageDesktopIntegration } from './desktop-integration.js';
 import { parseVersionTxt } from './legacy.js';
 import { getManagedPathCandidates } from './install-paths.js';
+import sizeOf from 'image-size';
 
 // ─── ES Module compatibility ─────────────────────────────────────────────────
 
@@ -1687,8 +1688,9 @@ function listPngScreenshots(installationPath: string): {
     .map(fileName => {
       const absolutePath = path.join(screenshotsDir, fileName);
       const stats = fs.statSync(absolutePath);
-      const img = nativeImage.createFromPath(absolutePath);
-      const { width, height } = img.getSize();
+      const dimensions = sizeOf(absolutePath);
+      const width = dimensions.width ?? 0;
+      const height = dimensions.height ?? 0;
 
       return {
         name: fileName,
