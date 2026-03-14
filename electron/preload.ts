@@ -244,6 +244,37 @@ const launcherApi = {
     writeInstallationFile: (installationPath: string, relativePath: string, content: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC.GAME_FILE_WRITE, installationPath, relativePath, content),
 
+    /** Rename a file/directory in an installation directory. */
+    renameInstallationPath: (
+      installationPath: string,
+      relativePath: string,
+      nextName: string,
+    ): Promise<{ success: boolean; oldRelativePath?: string; newRelativePath?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_FILE_RENAME, installationPath, relativePath, nextName),
+
+    /** Copy a file/directory into a destination directory in an installation. */
+    copyInstallationPath: (
+      installationPath: string,
+      sourceRelativePath: string,
+      destinationDir: string,
+    ): Promise<{ success: boolean; sourceRelativePath?: string; destinationRelativePath?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_FILE_COPY, installationPath, sourceRelativePath, destinationDir),
+
+    /** Move a file/directory into a destination directory in an installation. */
+    moveInstallationPath: (
+      installationPath: string,
+      sourceRelativePath: string,
+      destinationDir: string,
+    ): Promise<{ success: boolean; sourceRelativePath?: string; destinationRelativePath?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_FILE_MOVE, installationPath, sourceRelativePath, destinationDir),
+
+    /** Delete a file/directory from an installation. */
+    deleteInstallationPath: (
+      installationPath: string,
+      relativePath: string,
+    ): Promise<{ success: boolean; deletedRelativePath?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_FILE_DELETE, installationPath, relativePath),
+
     /**
      * Read the `launcher-session.json` file written by the game into the
      * installation directory.  Returns the parsed object or `null` when the

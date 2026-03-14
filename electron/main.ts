@@ -831,6 +831,192 @@ function writeInstallationTextFile(installationPath: string, relativePath: strin
   return { success: true };
 }
 
+function normalizeRelativePath(installationPath: string, absolutePath: string): string {
+  return path.relative(path.resolve(installationPath), absolutePath).split(path.sep).join('/');
+}
+
+function assertValidLeafName(nextName: string): string {
+  const trimmed = nextName.trim();
+  if (!trimmed) {
+    throw new Error('Name cannot be empty.');
+  }
+  if (trimmed === '.' || trimmed === '..') {
+    throw new Error('Invalid file or directory name.');
+  }
+  if (trimmed.includes('/') || trimmed.includes('\\')) {
+    throw new Error('Name cannot include path separators.');
+  }
+  return trimmed;
+}
+
+function toUniqueDestinationPath(initialPath: string): string {
+  if (!fs.existsSync(initialPath)) return initialPath;
+
+  const dirPath = path.dirname(initialPath);
+  const ext = path.extname(initialPath);
+  const stem = path.basename(initialPath, ext);
+
+  let index = 1;
+  while (true) {
+    const candidate = path.join(dirPath, `${stem} (${index})${ext}`);
+    if (!fs.existsSync(candidate)) {
+      return candidate;
+    }
+    index += 1;
+  }
+}
+
+function copyPathRecursive(sourcePath: string, destinationPath: string): void {
+  const sourceStats = fs.statSync(sourcePath);
+  if (sourceStats.isDirectory()) {
+    fs.cpSync(sourcePath, destinationPath, { recursive: true, errorOnExist: true, force: false });
+    return;
+  }
+
+  fs.copyFileSync(sourcePath, destinationPath, fs.constants.COPYFILE_EXCL);
+}
+
+function renameInstallationEntry(
+  installationPath: string,
+  relativePath: string,
+  nextName: string,
+): { success: boolean; oldRelativePath: string; newRelativePath: string } {
+  const trimmedRelativePath = relativePath.trim();
+  if (!trimmedRelativePath) {
+    throw new Error('relativePath is required.');
+  }
+
+  const absoluteSourcePath = resolveInstallationTargetPath(installationPath, trimmedRelativePath);
+  if (!fs.existsSync(absoluteSourcePath)) {
+    throw new Error(`Path not found: ${trimmedRelativePath}`);
+  }
+
+  const validName = assertValidLeafName(nextName);
+  const parentPath = path.dirname(absoluteSourcePath);
+  const absoluteDestinationPath = path.join(parentPath, validName);
+  const destinationRelativePath = normalizeRelativePath(installationPath, absoluteDestinationPath);
+  const safeDestinationPath = resolveInstallationTargetPath(installationPath, destinationRelativePath);
+
+  if (safeDestinationPath === absoluteSourcePath) {
+    return { success: true, oldRelativePath: trimmedRelativePath, newRelativePath: trimmedRelativePath };
+  }
+
+  if (fs.existsSync(safeDestinationPath)) {
+    throw new Error(`A file or directory named "${validName}" already exists.`);
+  }
+
+  fs.renameSync(absoluteSourcePath, safeDestinationPath);
+  return {
+    success: true,
+    oldRelativePath: normalizeRelativePath(installationPath, absoluteSourcePath),
+    newRelativePath: destinationRelativePath,
+  };
+}
+
+function copyInstallationEntry(
+  installationPath: string,
+  sourceRelativePath: string,
+  destinationDir: string,
+): { success: boolean; sourceRelativePath: string; destinationRelativePath: string } {
+  const sourcePath = resolveInstallationTargetPath(installationPath, sourceRelativePath);
+  if (!fs.existsSync(sourcePath)) {
+    throw new Error(`Path not found: ${sourceRelativePath}`);
+  }
+
+  const destinationDirPath = resolveInstallationTargetPath(installationPath, destinationDir || '.');
+  if (!fs.existsSync(destinationDirPath) || !fs.statSync(destinationDirPath).isDirectory()) {
+    throw new Error('Destination path is not a directory.');
+  }
+
+  const sourceStats = fs.statSync(sourcePath);
+  if (sourceStats.isDirectory() && (destinationDirPath === sourcePath || destinationDirPath.startsWith(`${sourcePath}${path.sep}`))) {
+    throw new Error('Cannot copy a directory into itself.');
+  }
+
+  let absoluteDestinationPath = path.join(destinationDirPath, path.basename(sourcePath));
+  if (absoluteDestinationPath === sourcePath || fs.existsSync(absoluteDestinationPath)) {
+    absoluteDestinationPath = toUniqueDestinationPath(absoluteDestinationPath);
+  }
+
+  copyPathRecursive(sourcePath, absoluteDestinationPath);
+
+  return {
+    success: true,
+    sourceRelativePath: normalizeRelativePath(installationPath, sourcePath),
+    destinationRelativePath: normalizeRelativePath(installationPath, absoluteDestinationPath),
+  };
+}
+
+function moveInstallationEntry(
+  installationPath: string,
+  sourceRelativePath: string,
+  destinationDir: string,
+): { success: boolean; sourceRelativePath: string; destinationRelativePath: string } {
+  const sourcePath = resolveInstallationTargetPath(installationPath, sourceRelativePath);
+  if (!fs.existsSync(sourcePath)) {
+    throw new Error(`Path not found: ${sourceRelativePath}`);
+  }
+
+  const destinationDirPath = resolveInstallationTargetPath(installationPath, destinationDir || '.');
+  if (!fs.existsSync(destinationDirPath) || !fs.statSync(destinationDirPath).isDirectory()) {
+    throw new Error('Destination path is not a directory.');
+  }
+
+  const sourceStats = fs.statSync(sourcePath);
+  if (sourceStats.isDirectory() && (destinationDirPath === sourcePath || destinationDirPath.startsWith(`${sourcePath}${path.sep}`))) {
+    throw new Error('Cannot move a directory into itself.');
+  }
+
+  let absoluteDestinationPath = path.join(destinationDirPath, path.basename(sourcePath));
+  if (absoluteDestinationPath === sourcePath) {
+    return {
+      success: true,
+      sourceRelativePath: normalizeRelativePath(installationPath, sourcePath),
+      destinationRelativePath: normalizeRelativePath(installationPath, sourcePath),
+    };
+  }
+  if (fs.existsSync(absoluteDestinationPath)) {
+    absoluteDestinationPath = toUniqueDestinationPath(absoluteDestinationPath);
+  }
+
+  try {
+    fs.renameSync(sourcePath, absoluteDestinationPath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code !== 'EXDEV') throw error;
+
+    copyPathRecursive(sourcePath, absoluteDestinationPath);
+    fs.rmSync(sourcePath, { recursive: true, force: false });
+  }
+
+  return {
+    success: true,
+    sourceRelativePath: normalizeRelativePath(installationPath, sourcePath),
+    destinationRelativePath: normalizeRelativePath(installationPath, absoluteDestinationPath),
+  };
+}
+
+function deleteInstallationEntry(
+  installationPath: string,
+  relativePath: string,
+): { success: boolean; deletedRelativePath: string } {
+  const trimmedRelativePath = relativePath.trim();
+  if (!trimmedRelativePath) {
+    throw new Error('relativePath is required.');
+  }
+
+  const targetPath = resolveInstallationTargetPath(installationPath, trimmedRelativePath);
+  if (!fs.existsSync(targetPath)) {
+    throw new Error(`Path not found: ${trimmedRelativePath}`);
+  }
+
+  fs.rmSync(targetPath, { recursive: true, force: false });
+  return {
+    success: true,
+    deletedRelativePath: normalizeRelativePath(installationPath, targetPath),
+  };
+}
+
 ipcMain.handle(IPC.GAME_SERVER_CFG_GET, (_event, installationPath: string, key: string) => {
   if (!installationPath || !key) return null;
   try {
@@ -918,6 +1104,58 @@ ipcMain.handle(IPC.GAME_FILE_WRITE, (_event, installationPath: string, relativeP
 
   try {
     return writeInstallationTextFile(installationPath, relativePath, content);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, error: message };
+  }
+});
+
+ipcMain.handle(IPC.GAME_FILE_RENAME, (_event, installationPath: string, relativePath: string, nextName: string) => {
+  if (!installationPath || !relativePath || !nextName) {
+    return { success: false, error: 'installationPath, relativePath, and nextName are required.' };
+  }
+
+  try {
+    return renameInstallationEntry(installationPath, relativePath, nextName);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, error: message };
+  }
+});
+
+ipcMain.handle(IPC.GAME_FILE_COPY, (_event, installationPath: string, sourceRelativePath: string, destinationDir: string) => {
+  if (!installationPath || !sourceRelativePath) {
+    return { success: false, error: 'installationPath and sourceRelativePath are required.' };
+  }
+
+  try {
+    return copyInstallationEntry(installationPath, sourceRelativePath, destinationDir ?? '');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, error: message };
+  }
+});
+
+ipcMain.handle(IPC.GAME_FILE_MOVE, (_event, installationPath: string, sourceRelativePath: string, destinationDir: string) => {
+  if (!installationPath || !sourceRelativePath) {
+    return { success: false, error: 'installationPath and sourceRelativePath are required.' };
+  }
+
+  try {
+    return moveInstallationEntry(installationPath, sourceRelativePath, destinationDir ?? '');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, error: message };
+  }
+});
+
+ipcMain.handle(IPC.GAME_FILE_DELETE, (_event, installationPath: string, relativePath: string) => {
+  if (!installationPath || !relativePath) {
+    return { success: false, error: 'installationPath and relativePath are required.' };
+  }
+
+  try {
+    return deleteInstallationEntry(installationPath, relativePath);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { success: false, error: message };

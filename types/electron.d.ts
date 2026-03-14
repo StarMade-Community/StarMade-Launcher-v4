@@ -184,6 +184,29 @@ declare global {
         readInstallationFile: (installationPath: string, relativePath: string) => Promise<{ content: string; error?: string }>;
         /** Write a text file in an installation directory. */
         writeInstallationFile: (installationPath: string, relativePath: string, content: string) => Promise<{ success: boolean; error?: string }>;
+        /** Rename a file/directory in an installation directory. */
+        renameInstallationPath: (
+          installationPath: string,
+          relativePath: string,
+          nextName: string,
+        ) => Promise<{ success: boolean; oldRelativePath?: string; newRelativePath?: string; error?: string }>;
+        /** Copy a file/directory into a destination directory in an installation. */
+        copyInstallationPath: (
+          installationPath: string,
+          sourceRelativePath: string,
+          destinationDir: string,
+        ) => Promise<{ success: boolean; sourceRelativePath?: string; destinationRelativePath?: string; error?: string }>;
+        /** Move a file/directory into a destination directory in an installation. */
+        moveInstallationPath: (
+          installationPath: string,
+          sourceRelativePath: string,
+          destinationDir: string,
+        ) => Promise<{ success: boolean; sourceRelativePath?: string; destinationRelativePath?: string; error?: string }>;
+        /** Delete a file/directory from an installation. */
+        deleteInstallationPath: (
+          installationPath: string,
+          relativePath: string,
+        ) => Promise<{ success: boolean; deletedRelativePath?: string; error?: string }>;
         /** Subscribe to game log events. Returns a cleanup function. */
         onLog: (cb: (data: { installationId: string; level: string; message: string }) => void) => () => void;
         /**

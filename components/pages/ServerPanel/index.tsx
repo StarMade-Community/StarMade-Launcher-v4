@@ -160,6 +160,25 @@ interface InstallationFileEntry {
   nonEditableReason?: string;
 }
 
+type FileClipboardMode = 'copy' | 'cut';
+
+interface FileClipboardEntry {
+  mode: FileClipboardMode;
+  sourceServerId: string;
+  sourcePath: string;
+  sourceName: string;
+  isDirectory: boolean;
+}
+
+interface FileContextMenuState {
+  x: number;
+  y: number;
+  targetPath: string | null;
+  targetName: string;
+  targetIsDirectory: boolean;
+  destinationDir: string;
+}
+
 // ─── Database tab types ───────────────────────────────────────────────────────
 
 type DatabaseSqlMode = 'query' | 'update' | 'insertKeys';
@@ -230,6 +249,18 @@ const FACTION_CONFIG_PATH_CANDIDATES = [
 
 function quoteServerCommandArg(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function getRelativeParentDir(relativePath: string): string {
+  const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!normalized) return '';
+
+  const slashIndex = normalized.lastIndexOf('/');
+  return slashIndex >= 0 ? normalized.slice(0, slashIndex) : '';
+}
+
+function isSamePathOrChild(pathValue: string, parentPath: string): boolean {
+  return pathValue === parentPath || pathValue.startsWith(`${parentPath}/`);
 }
 
 const WIDGET_HEIGHT_WEIGHT: Record<DashboardWidgetId, number> = {
@@ -1903,6 +1934,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [isFileSaving, setIsFileSaving] = useState(false);
   const [fileTabError, setFileTabError] = useState<string | null>(null);
   const [fileTabErrorPath, setFileTabErrorPath] = useState<string | null>(null);
+  const [fileClipboard, setFileClipboard] = useState<FileClipboardEntry | null>(null);
+  const [fileContextMenu, setFileContextMenu] = useState<FileContextMenuState | null>(null);
   const [dashboardLayout, setDashboardLayout] = useState<DashboardLayout>(createDefaultDashboardLayout);
   const [dashboardLoaded, setDashboardLoaded] = useState(false);
   const [isLayoutEditMode, setIsLayoutEditMode] = useState(false);
@@ -2381,6 +2414,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setFileContentByPath({});
     setSavedFileContentByPath({});
     setFileTabError(null);
+    setFileClipboard(null);
+    setFileContextMenu(null);
     setServerNameInput(effectiveServer?.name ?? '');
     setServerPortInput(effectiveServer?.port?.trim() || '4242');
     // Reset chat state on server change
@@ -2780,6 +2815,290 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setIsFileSaving(false);
     }
   }, [activeFileTabPath, effectiveServer, fileContentByPath, hasGameApi, isFileSaving]);
+
+  const closeFileContextMenu = useCallback(() => {
+    setFileContextMenu(null);
+  }, []);
+
+  useEffect(() => {
+    if (!fileContextMenu) return;
+
+    const onWindowClick = () => {
+      setFileContextMenu(null);
+    };
+
+    const onWindowEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setFileContextMenu(null);
+      }
+    };
+
+    window.addEventListener('click', onWindowClick);
+    window.addEventListener('contextmenu', onWindowClick);
+    window.addEventListener('keydown', onWindowEscape);
+    window.addEventListener('scroll', onWindowClick, true);
+
+    return () => {
+      window.removeEventListener('click', onWindowClick);
+      window.removeEventListener('contextmenu', onWindowClick);
+      window.removeEventListener('keydown', onWindowEscape);
+      window.removeEventListener('scroll', onWindowClick, true);
+    };
+  }, [fileContextMenu]);
+
+  const remapOpenFilePaths = useCallback((sourcePath: string, destinationPath: string, includeChildren: boolean) => {
+    const shouldRemap = (pathValue: string) => (
+      includeChildren ? isSamePathOrChild(pathValue, sourcePath) : pathValue === sourcePath
+    );
+    const remapPath = (pathValue: string) => {
+      if (!shouldRemap(pathValue)) return pathValue;
+      if (!includeChildren) return destinationPath;
+      if (pathValue === sourcePath) return destinationPath;
+      return `${destinationPath}${pathValue.slice(sourcePath.length)}`;
+    };
+
+    setOpenFileTabs((prev) => prev.map(remapPath));
+    setActiveFileTabPath((prev) => (prev ? remapPath(prev) : prev));
+    setFileContentByPath((prev) => {
+      const next: Record<string, string> = {};
+      for (const [key, value] of Object.entries(prev)) {
+        next[remapPath(key)] = value;
+      }
+      return next;
+    });
+    setSavedFileContentByPath((prev) => {
+      const next: Record<string, string> = {};
+      for (const [key, value] of Object.entries(prev)) {
+        next[remapPath(key)] = value;
+      }
+      return next;
+    });
+    setFileTabErrorPath((prev) => (prev ? remapPath(prev) : prev));
+  }, []);
+
+  const removeFilePathsFromTabs = useCallback((deletedPath: string) => {
+    setOpenFileTabs((prev) => prev.filter((pathValue) => !isSamePathOrChild(pathValue, deletedPath)));
+    setActiveFileTabPath((prev) => (prev && isSamePathOrChild(prev, deletedPath) ? null : prev));
+    setFileContentByPath((prev) => {
+      const next: Record<string, string> = {};
+      for (const [key, value] of Object.entries(prev)) {
+        if (!isSamePathOrChild(key, deletedPath)) {
+          next[key] = value;
+        }
+      }
+      return next;
+    });
+    setSavedFileContentByPath((prev) => {
+      const next: Record<string, string> = {};
+      for (const [key, value] of Object.entries(prev)) {
+        if (!isSamePathOrChild(key, deletedPath)) {
+          next[key] = value;
+        }
+      }
+      return next;
+    });
+    setFileTabErrorPath((prev) => (prev && isSamePathOrChild(prev, deletedPath) ? null : prev));
+  }, []);
+
+  const refreshFileBrowserAfterMutation = useCallback(async (dirsToRefresh: string[]) => {
+    const uniqueDirs = Array.from(new Set(['', ...expandedFileDirs, ...dirsToRefresh]));
+    setFileEntriesByDir({});
+    await Promise.all(uniqueDirs.map(async (relativeDir) => {
+      await loadFileDirectory(relativeDir);
+    }));
+  }, [expandedFileDirs, loadFileDirectory]);
+
+  const openFileContextMenu = useCallback((event: React.MouseEvent, entry: InstallationFileEntry | null) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!effectiveServer) return;
+
+    const destinationDir = entry
+      ? (entry.isDirectory ? entry.relativePath : getRelativeParentDir(entry.relativePath))
+      : '';
+
+    setFileContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      targetPath: entry?.relativePath ?? null,
+      targetName: entry?.name ?? 'This Folder',
+      targetIsDirectory: entry?.isDirectory ?? true,
+      destinationDir,
+    });
+  }, [effectiveServer]);
+
+  const handleFileContextCopyLikeAction = useCallback((mode: FileClipboardMode) => {
+    if (!effectiveServer || !fileContextMenu?.targetPath) return;
+
+    setFileClipboard({
+      mode,
+      sourceServerId: effectiveServer.id,
+      sourcePath: fileContextMenu.targetPath,
+      sourceName: fileContextMenu.targetName,
+      isDirectory: fileContextMenu.targetIsDirectory,
+    });
+    closeFileContextMenu();
+  }, [closeFileContextMenu, effectiveServer, fileContextMenu]);
+
+  const handleFileContextRename = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || !fileContextMenu?.targetPath) return;
+
+    const currentName = fileContextMenu.targetName;
+    const promptedName = window.prompt(`Rename "${currentName}" to:`, currentName);
+    if (promptedName === null) {
+      closeFileContextMenu();
+      return;
+    }
+
+    const nextName = promptedName.trim();
+    if (!nextName) {
+      setFileTabError('Name cannot be empty.');
+      closeFileContextMenu();
+      return;
+    }
+
+    setFileTabError(null);
+    try {
+      const result = await window.launcher.game.renameInstallationPath(
+        effectiveServer.path,
+        fileContextMenu.targetPath,
+        nextName,
+      );
+      if (!result.success || !result.oldRelativePath || !result.newRelativePath) {
+        setFileTabError(result.error ?? `Failed to rename ${currentName}.`);
+        return;
+      }
+
+      remapOpenFilePaths(result.oldRelativePath, result.newRelativePath, fileContextMenu.targetIsDirectory);
+
+      if (fileClipboard && fileClipboard.sourcePath === result.oldRelativePath) {
+        setFileClipboard((prev) => {
+          if (!prev || prev.sourcePath !== result.oldRelativePath) return prev;
+          return { ...prev, sourcePath: result.newRelativePath, sourceName: nextName };
+        });
+      }
+
+      await refreshFileBrowserAfterMutation([
+        getRelativeParentDir(result.oldRelativePath),
+        getRelativeParentDir(result.newRelativePath),
+      ]);
+    } catch (error) {
+      setFileTabError(`Failed to rename ${currentName}: ${String(error)}`);
+    } finally {
+      closeFileContextMenu();
+    }
+  }, [
+    closeFileContextMenu,
+    effectiveServer,
+    fileClipboard,
+    fileContextMenu,
+    hasGameApi,
+    refreshFileBrowserAfterMutation,
+    remapOpenFilePaths,
+  ]);
+
+  const handleFileContextDelete = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || !fileContextMenu?.targetPath) return;
+
+    const targetLabel = fileContextMenu.targetIsDirectory ? 'folder' : 'file';
+    const shouldDelete = window.confirm(`Delete ${targetLabel} "${fileContextMenu.targetName}"? This cannot be undone.`);
+    if (!shouldDelete) {
+      closeFileContextMenu();
+      return;
+    }
+
+    setFileTabError(null);
+    try {
+      const result = await window.launcher.game.deleteInstallationPath(effectiveServer.path, fileContextMenu.targetPath);
+      if (!result.success || !result.deletedRelativePath) {
+        setFileTabError(result.error ?? `Failed to delete ${fileContextMenu.targetName}.`);
+        return;
+      }
+
+      removeFilePathsFromTabs(result.deletedRelativePath);
+
+      if (fileClipboard && isSamePathOrChild(fileClipboard.sourcePath, result.deletedRelativePath)) {
+        setFileClipboard(null);
+      }
+
+      await refreshFileBrowserAfterMutation([
+        getRelativeParentDir(result.deletedRelativePath),
+      ]);
+    } catch (error) {
+      setFileTabError(`Failed to delete ${fileContextMenu.targetName}: ${String(error)}`);
+    } finally {
+      closeFileContextMenu();
+    }
+  }, [
+    closeFileContextMenu,
+    effectiveServer,
+    fileClipboard,
+    fileContextMenu,
+    hasGameApi,
+    refreshFileBrowserAfterMutation,
+    removeFilePathsFromTabs,
+  ]);
+
+  const handleFileContextPaste = useCallback(async () => {
+    if (!effectiveServer || !hasGameApi || !fileContextMenu || !fileClipboard) return;
+
+    if (fileClipboard.sourceServerId !== effectiveServer.id) {
+      setFileTabError('Paste is only supported within the same server installation.');
+      closeFileContextMenu();
+      return;
+    }
+
+    setFileTabError(null);
+    try {
+      if (fileClipboard.mode === 'copy') {
+        const result = await window.launcher.game.copyInstallationPath(
+          effectiveServer.path,
+          fileClipboard.sourcePath,
+          fileContextMenu.destinationDir,
+        );
+        if (!result.success || !result.destinationRelativePath) {
+          setFileTabError(result.error ?? `Failed to copy ${fileClipboard.sourceName}.`);
+          return;
+        }
+
+        await refreshFileBrowserAfterMutation([
+          fileContextMenu.destinationDir,
+        ]);
+        return;
+      }
+
+      const result = await window.launcher.game.moveInstallationPath(
+        effectiveServer.path,
+        fileClipboard.sourcePath,
+        fileContextMenu.destinationDir,
+      );
+      if (!result.success || !result.sourceRelativePath || !result.destinationRelativePath) {
+        setFileTabError(result.error ?? `Failed to move ${fileClipboard.sourceName}.`);
+        return;
+      }
+
+      remapOpenFilePaths(result.sourceRelativePath, result.destinationRelativePath, fileClipboard.isDirectory);
+      setFileClipboard(null);
+
+      await refreshFileBrowserAfterMutation([
+        getRelativeParentDir(result.sourceRelativePath),
+        getRelativeParentDir(result.destinationRelativePath),
+      ]);
+    } catch (error) {
+      setFileTabError(`Failed to paste ${fileClipboard.sourceName}: ${String(error)}`);
+    } finally {
+      closeFileContextMenu();
+    }
+  }, [
+    closeFileContextMenu,
+    effectiveServer,
+    fileClipboard,
+    fileContextMenu,
+    hasGameApi,
+    refreshFileBrowserAfterMutation,
+    remapOpenFilePaths,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -5713,6 +6032,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           <div key={entry.relativePath}>
             <button
               onClick={() => toggleFileDirectory(entry.relativePath)}
+              onContextMenu={(event) => openFileContextMenu(event, entry)}
               className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm text-gray-200 hover:bg-white/5"
               style={{ paddingLeft: `${8 + (depth * 14)}px` }}
             >
@@ -5731,7 +6051,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         <button
           key={entry.relativePath}
           onClick={() => { void openFileInTab(entry); }}
-          disabled={!isEditableTextFile}
+          onContextMenu={(event) => openFileContextMenu(event, entry)}
           className={`flex w-full items-center rounded px-2 py-1 text-left text-sm transition-colors ${
             !isEditableTextFile
               ? 'cursor-not-allowed text-gray-500'
@@ -5766,9 +6086,58 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             {isFileBrowserLoading ? 'Loading...' : 'Refresh'}
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        <div
+          className="min-h-0 flex-1 overflow-y-auto p-2"
+          onContextMenu={(event) => openFileContextMenu(event, null)}
+        >
           {renderFileTree('')}
         </div>
+        {fileContextMenu && (
+          <div
+            className="fixed z-50 min-w-[180px] rounded-md border border-white/15 bg-[#111820] p-1 shadow-2xl"
+            style={{ left: fileContextMenu.x, top: fileContextMenu.y }}
+            onClick={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            {fileContextMenu.targetPath && (
+              <>
+                <button
+                  onClick={() => { void handleFileContextRename(); }}
+                  className="block w-full rounded px-2 py-1.5 text-left text-xs text-gray-200 hover:bg-white/10"
+                >
+                  Rename
+                </button>
+                <button
+                  onClick={() => handleFileContextCopyLikeAction('copy')}
+                  className="block w-full rounded px-2 py-1.5 text-left text-xs text-gray-200 hover:bg-white/10"
+                >
+                  Copy
+                </button>
+                <button
+                  onClick={() => handleFileContextCopyLikeAction('cut')}
+                  className="block w-full rounded px-2 py-1.5 text-left text-xs text-gray-200 hover:bg-white/10"
+                >
+                  Cut
+                </button>
+              </>
+            )}
+            <button
+              onClick={() => { void handleFileContextPaste(); }}
+              disabled={!fileClipboard || fileClipboard.sourceServerId !== effectiveServer?.id}
+              className="block w-full rounded px-2 py-1.5 text-left text-xs text-gray-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:text-gray-500 disabled:hover:bg-transparent"
+            >
+              {fileClipboard ? `Paste ${fileClipboard.sourceName}` : 'Paste'}
+            </button>
+            {fileContextMenu.targetPath && (
+              <button
+                onClick={() => { void handleFileContextDelete(); }}
+                className="block w-full rounded px-2 py-1.5 text-left text-xs text-red-300 hover:bg-red-500/20"
+              >
+                Delete
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">

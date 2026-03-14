@@ -129,6 +129,14 @@ export const IPC = {
   GAME_FILE_READ: 'game:file-read',
   /** Renderer → Main (invoke): write a text file to an installation path. */
   GAME_FILE_WRITE: 'game:file-write',
+  /** Renderer → Main (invoke): rename a file/directory inside an installation path. */
+  GAME_FILE_RENAME: 'game:file-rename',
+  /** Renderer → Main (invoke): copy a file/directory inside an installation path. */
+  GAME_FILE_COPY: 'game:file-copy',
+  /** Renderer → Main (invoke): move a file/directory inside an installation path. */
+  GAME_FILE_MOVE: 'game:file-move',
+  /** Renderer → Main (invoke): delete a file/directory inside an installation path. */
+  GAME_FILE_DELETE: 'game:file-delete',
   /**
    * Renderer → Main (invoke): read the `launcher-session.json` file written by
    * the game into an installation directory.  Returns the parsed object or
