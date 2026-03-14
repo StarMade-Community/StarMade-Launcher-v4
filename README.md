@@ -18,6 +18,7 @@ A modern, immersive launcher for [StarMade](https://www.star-made.org/) — the 
 - **Version Selection** — Switch between latest release, dev builds, and archived versions
 - **Live Downloads** — Fetch and download StarMade versions directly from the official CDN
 - **News Feed** — Live news pulled from the StarMade Steam page
+- **Screenshot Management** — Manage and copy screenshots across multiple instances, and use them as backgrounds for both the launcher and game itself
 - **Discord Integration** — Live member count and one-click join button
 - **Settings** — Language, Java configuration, default game paths, and memory allocation
 - **Cross-Platform** — Windows, macOS, and Linux support
