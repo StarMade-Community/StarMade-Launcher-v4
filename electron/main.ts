@@ -13,6 +13,7 @@ import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import fs from 'fs';
 import os from 'os';
+import net from 'net';
 import { Worker } from 'worker_threads';
 import { config as loadDotEnv } from 'dotenv';
 import { IPC } from './ipc-channels.js';
@@ -77,6 +78,28 @@ loadLocalEnvIfPresent();
 const isDev = !app.isPackaged;
 const RENDERER_URL = 'http://localhost:3000';
 const PRELOAD_PATH = path.join(__dirname, 'preload.js');
+
+interface StarmoteConnectionRecord {
+  serverId: string;
+  host: string;
+  port: number;
+  username?: string;
+  socket: net.Socket;
+  connectedAt: number;
+}
+
+interface StarmoteConnectionStatus {
+  serverId: string;
+  connected: boolean;
+  host?: string;
+  port?: number;
+  username?: string;
+  connectedAt?: string;
+  error?: string;
+}
+
+const starmoteConnections = new Map<string, StarmoteConnectionRecord>();
+const starmoteLastErrors = new Map<string, string>();
 
 // ─── EPIPE guard ─────────────────────────────────────────────────────────────
 // When the launcher is packaged as an AppImage (or any scenario where stdout /
@@ -179,6 +202,47 @@ function loadRendererRoute(
   }
 
   return window.loadFile(path.join(__dirname, '../dist/index.html'), { query: queryObject });
+}
+
+function getStarmoteStatusFor(serverId: string): StarmoteConnectionStatus {
+  const active = starmoteConnections.get(serverId);
+  if (active) {
+    return {
+      serverId,
+      connected: true,
+      host: active.host,
+      port: active.port,
+      username: active.username,
+      connectedAt: new Date(active.connectedAt).toISOString(),
+    };
+  }
+
+  return {
+    serverId,
+    connected: false,
+    error: starmoteLastErrors.get(serverId),
+  };
+}
+
+function broadcastStarmoteStatus(serverId: string): void {
+  const status = getStarmoteStatusFor(serverId);
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    window.webContents.send(IPC.STARMOTE_STATUS_CHANGED, status);
+  }
+}
+
+function closeStarmoteConnection(serverId: string): void {
+  const existing = starmoteConnections.get(serverId);
+  if (!existing) return;
+
+  starmoteConnections.delete(serverId);
+  try {
+    existing.socket.removeAllListeners();
+    existing.socket.destroy();
+  } catch {
+    // Ignore teardown errors during shutdown/disconnect races.
+  }
 }
 
 function createWindow(): void {
@@ -356,6 +420,120 @@ ipcMain.handle(IPC.WINDOW_OPEN_SERVER_PANEL, async (_event, payload?: { serverId
     return { success: false, error: String(error) };
   }
 });
+
+// ─── StarMote IPC handlers ───────────────────────────────────────────────────
+
+ipcMain.handle(
+  IPC.STARMOTE_CONNECT,
+  async (
+    _event,
+    payload: { serverId: string; host: string; port: number; username?: string },
+  ): Promise<{ success: boolean; status?: StarmoteConnectionStatus; error?: string }> => {
+    const serverId = payload?.serverId?.trim();
+    const host = payload?.host?.trim();
+    const port = Number.isFinite(payload?.port) ? Math.trunc(payload.port) : Number.NaN;
+    const username = payload?.username?.trim() || undefined;
+
+    if (!serverId || !host || !Number.isInteger(port) || port < 1 || port > 65535) {
+      return { success: false, error: 'serverId, host, and a valid port are required.' };
+    }
+
+    closeStarmoteConnection(serverId);
+    starmoteLastErrors.delete(serverId);
+
+    const socket = new net.Socket();
+    socket.setNoDelay(true);
+
+    const connectResult = await new Promise<{ success: true } | { success: false; error: string }>((resolve) => {
+      let settled = false;
+      const finish = (result: { success: true } | { success: false; error: string }) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+
+      socket.setTimeout(7000);
+      socket.once('connect', () => {
+        socket.setTimeout(0);
+        finish({ success: true });
+      });
+      socket.once('timeout', () => {
+        finish({ success: false, error: `Connection timed out (${host}:${port}).` });
+      });
+      socket.once('error', (error) => {
+        finish({ success: false, error: `Connection failed: ${String(error.message || error)}` });
+      });
+
+      socket.connect(port, host);
+    });
+
+    if (!connectResult.success) {
+      const connectError = 'error' in connectResult ? connectResult.error : `Connection failed (${host}:${port}).`;
+      starmoteLastErrors.set(serverId, connectError);
+      try { socket.destroy(); } catch { /* ignore */ }
+      broadcastStarmoteStatus(serverId);
+      return { success: false, error: connectError, status: getStarmoteStatusFor(serverId) };
+    }
+
+    const record: StarmoteConnectionRecord = {
+      serverId,
+      host,
+      port,
+      username,
+      socket,
+      connectedAt: Date.now(),
+    };
+
+    starmoteConnections.set(serverId, record);
+
+    socket.on('error', (error) => {
+      starmoteLastErrors.set(serverId, `Connection error: ${String(error.message || error)}`);
+      closeStarmoteConnection(serverId);
+      broadcastStarmoteStatus(serverId);
+    });
+    socket.on('close', () => {
+      if (starmoteConnections.get(serverId)?.socket === socket) {
+        starmoteConnections.delete(serverId);
+      }
+      broadcastStarmoteStatus(serverId);
+    });
+
+    const status = getStarmoteStatusFor(serverId);
+    broadcastStarmoteStatus(serverId);
+    return { success: true, status };
+  },
+);
+
+ipcMain.handle(
+  IPC.STARMOTE_DISCONNECT,
+  (_event, payload: { serverId: string }): { success: boolean; status?: StarmoteConnectionStatus; error?: string } => {
+    const serverId = payload?.serverId?.trim();
+    if (!serverId) {
+      return { success: false, error: 'serverId is required.' };
+    }
+
+    closeStarmoteConnection(serverId);
+    const status = getStarmoteStatusFor(serverId);
+    broadcastStarmoteStatus(serverId);
+    return { success: true, status };
+  },
+);
+
+ipcMain.handle(
+  IPC.STARMOTE_STATUS,
+  (_event, payload?: { serverId?: string }): { statuses: StarmoteConnectionStatus[] } => {
+    const requestedId = payload?.serverId?.trim();
+    if (requestedId) {
+      return { statuses: [getStarmoteStatusFor(requestedId)] };
+    }
+
+    const ids = new Set<string>([
+      ...starmoteConnections.keys(),
+      ...starmoteLastErrors.keys(),
+    ]);
+    return { statuses: Array.from(ids).map((id) => getStarmoteStatusFor(id)) };
+  },
+);
 
 // ─── Store IPC handlers ───────────────────────────────────────────────────────
 

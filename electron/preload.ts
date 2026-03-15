@@ -341,6 +341,81 @@ const launcherApi = {
     },
   },
 
+  // ─── StarMote remote connection ────────────────────────────────────────────
+
+  starmote: {
+    /** Open a remote StarMote TCP session for a server profile. */
+    connect: (payload: {
+      serverId: string;
+      host: string;
+      port: number;
+      username?: string;
+    }): Promise<{
+      success: boolean;
+      status?: {
+        serverId: string;
+        connected: boolean;
+        host?: string;
+        port?: number;
+        username?: string;
+        connectedAt?: string;
+        error?: string;
+      };
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.STARMOTE_CONNECT, payload),
+
+    /** Close an active remote StarMote session for a server profile. */
+    disconnect: (serverId: string): Promise<{
+      success: boolean;
+      status?: {
+        serverId: string;
+        connected: boolean;
+        host?: string;
+        port?: number;
+        username?: string;
+        connectedAt?: string;
+        error?: string;
+      };
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.STARMOTE_DISCONNECT, { serverId }),
+
+    /** Fetch current StarMote connection status for one profile or all profiles. */
+    getStatus: (serverId?: string): Promise<{
+      statuses: Array<{
+        serverId: string;
+        connected: boolean;
+        host?: string;
+        port?: number;
+        username?: string;
+        connectedAt?: string;
+        error?: string;
+      }>;
+    }> => ipcRenderer.invoke(IPC.STARMOTE_STATUS, { serverId }),
+
+    /** Subscribe to StarMote connection status changes. Returns a cleanup function. */
+    onStatusChanged: (cb: (status: {
+      serverId: string;
+      connected: boolean;
+      host?: string;
+      port?: number;
+      username?: string;
+      connectedAt?: string;
+      error?: string;
+    }) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, status: {
+        serverId: string;
+        connected: boolean;
+        host?: string;
+        port?: number;
+        username?: string;
+        connectedAt?: string;
+        error?: string;
+      }) => cb(status);
+      ipcRenderer.on(IPC.STARMOTE_STATUS_CHANGED, listener);
+      return () => ipcRenderer.removeListener(IPC.STARMOTE_STATUS_CHANGED, listener);
+    },
+  },
+
   /** Dialog APIs (folder picker, etc.) */
   dialog: {
     /** Open folder picker dialog. Returns selected path or null if canceled. */

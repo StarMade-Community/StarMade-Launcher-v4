@@ -252,6 +252,68 @@ declare global {
         } | null>;
       };
 
+      /** StarMote remote connection APIs */
+      starmote: {
+        /** Open a remote StarMote TCP session for a server profile. */
+        connect: (payload: {
+          serverId: string;
+          host: string;
+          port: number;
+          username?: string;
+        }) => Promise<{
+          success: boolean;
+          status?: {
+            serverId: string;
+            connected: boolean;
+            host?: string;
+            port?: number;
+            username?: string;
+            connectedAt?: string;
+            error?: string;
+          };
+          error?: string;
+        }>;
+
+        /** Close an active StarMote session for a server profile. */
+        disconnect: (serverId: string) => Promise<{
+          success: boolean;
+          status?: {
+            serverId: string;
+            connected: boolean;
+            host?: string;
+            port?: number;
+            username?: string;
+            connectedAt?: string;
+            error?: string;
+          };
+          error?: string;
+        }>;
+
+        /** Fetch StarMote connection status for one profile or all profiles. */
+        getStatus: (serverId?: string) => Promise<{
+          statuses: Array<{
+            serverId: string;
+            connected: boolean;
+            host?: string;
+            port?: number;
+            username?: string;
+            connectedAt?: string;
+            error?: string;
+          }>;
+        }>;
+
+        /** Subscribe to status changes for StarMote sessions. */
+        onStatusChanged: (cb: (status: {
+          serverId: string;
+          connected: boolean;
+          host?: string;
+          port?: number;
+          username?: string;
+          connectedAt?: string;
+          error?: string;
+        }) => void) => () => void;
+      };
+
       /** Dialog APIs */
       dialog: {
         /** Open folder picker dialog. Returns selected path or null if canceled. */

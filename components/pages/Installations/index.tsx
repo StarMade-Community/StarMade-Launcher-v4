@@ -180,7 +180,7 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
 
         // Attempt to delete physical files.  Surface any error to the user
         // before removing the store record so they understand what happened.
-        if (itemPath && typeof window !== 'undefined' && window.launcher?.installation) {
+        if (!deleteTarget.isRemote && itemPath && typeof window !== 'undefined' && window.launcher?.installation) {
             try {
                 const result = await window.launcher.installation.deleteFiles(itemPath);
                 if (!result.success) {
@@ -320,6 +320,7 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
                             key={item.id} 
                             item={item} 
                             isFeatured={index === 0} 
+                            showServerModeBadge={activeTab === 'servers'}
                             onEdit={handleEdit}
                             onDelete={handleDelete}
                             actionButtonText={cardActionButtonText}

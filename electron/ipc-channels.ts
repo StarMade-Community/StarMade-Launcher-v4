@@ -358,6 +358,29 @@ export const IPC = {
    * Returns: { authenticated: boolean; expired: boolean }
    */
   AUTH_GET_STATUS: 'auth:get-status',
+
+  // ─── StarMote remote control ───────────────────────────────────────────────
+
+  /**
+   * Renderer → Main (invoke): open a StarMote remote TCP session for a server profile.
+   * Payload: { serverId: string; host: string; port: number; username?: string }
+   */
+  STARMOTE_CONNECT: 'starmote:connect',
+
+  /**
+   * Renderer → Main (invoke): close an active StarMote remote session.
+   * Payload: { serverId: string }
+   */
+  STARMOTE_DISCONNECT: 'starmote:disconnect',
+
+  /**
+   * Renderer → Main (invoke): fetch StarMote connection status for one profile or all profiles.
+   * Payload: { serverId?: string }
+   */
+  STARMOTE_STATUS: 'starmote:status',
+
+  /** Main → Renderer: StarMote connection status changed for a server profile. */
+  STARMOTE_STATUS_CHANGED: 'starmote:status-changed',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

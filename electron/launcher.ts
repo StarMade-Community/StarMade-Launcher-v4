@@ -440,9 +440,10 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
     }
 
     // Pass the authentication token to the game so players don't need to
-    // log in again through the in-game menu
+    // log in again through the in-game menu. Modern Starter parsing accepts
+    // "-auth <token>" directly, so keep token as a separate argv entry.
     if (authToken) {
-      args.push('-auth ' + authToken); //The game requires it to be like this, no idea why
+      args.push('-auth', authToken);
       sendLogEvent(installationId, 'INFO', 'Auth token injected.');
     }
 
@@ -458,7 +459,12 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
     // Build a redacted copy of args for logging so the auth token is never
     // written to any log in plaintext.
     const safeArgs = authToken
-      ? args.map((a) => (a === authToken ? '[REDACTED]' : a))
+      ? args.map((a) => {
+          if (a === authToken) return '[REDACTED]';
+          if (a.startsWith('-auth=')) return '-auth=[REDACTED]';
+          if (a.startsWith('-auth ')) return '-auth [REDACTED]';
+          return a;
+        })
       : args;
 
     console.log(`[Launcher] Launching: ${javaPath} ${safeArgs.join(' ')}`);

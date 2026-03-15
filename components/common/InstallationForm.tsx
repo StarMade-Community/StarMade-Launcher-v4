@@ -199,6 +199,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
   const [port, setPort] = useState(item.port ?? '4242');
   const [serverIp, setServerIp] = useState(item.serverIp ?? 'localhost');
   const [maxPlayers, setMaxPlayers] = useState(item.maxPlayers ?? 32);
+  const [isRemoteServer, setIsRemoteServer] = useState(item.isRemote ?? false);
   const [icon, setIcon] = useState(item.icon);
   const [type, setType] = useState<ItemType>(item.type === 'latest' ? 'release' : item.type);
   const [version, setVersion] = useState(item.version);
@@ -341,16 +342,30 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
   };
 
   const handleSaveClick = () => {
-    // Require a directory to be set before saving
-    if (!gameDir.trim()) {
+    if (itemTypeName === 'Server' && isRemoteServer) {
+      if (!serverIp.trim()) {
+        setPathError('Please enter a remote server host.');
+        return;
+      }
+      const parsedPort = Number(port);
+      if (!Number.isInteger(parsedPort) || parsedPort <= 0 || parsedPort > 65535) {
+        setPathError('Please enter a valid port (1-65535).');
+        return;
+      }
+    } else if (!gameDir.trim()) {
+      // Require a directory to be set before saving local installs.
       setPathError('Please choose a directory.');
       return;
     }
+
     setPathError('');
 
     // Strip -Xms/-Xmx from jvmArgs before saving — the launcher applies those
     // separately via minMemory/maxMemory so we'd otherwise double-apply them.
     const extraJvmArgs = jvmArgs.split(/\s+/).filter(a => !a.startsWith('-Xm')).join(' ').trim();
+
+    const normalizedServerIp = serverIp.trim() || 'localhost';
+    const normalizedPort = String(Math.max(1, Math.min(65535, Number.parseInt(port, 10) || 4242)));
 
     onSave({
         ...item,
@@ -358,17 +373,18 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         type,
         icon,
         version,
-        path: effectivePath,
+        path: itemTypeName === 'Server' && isRemoteServer ? '' : effectivePath,
         buildPath: buildPath || undefined,
         requiredJavaVersion: requiredJavaVersion,
-        installed: isNew ? false : item.installed,
-        minMemory: javaMemory,
-        maxMemory: javaMemory,
-        jvmArgs: extraJvmArgs || undefined,
-        customJavaPath: javaPath || undefined,
+        installed: itemTypeName === 'Server' && isRemoteServer ? true : (isNew ? false : item.installed),
+        minMemory: itemTypeName === 'Server' && isRemoteServer ? undefined : javaMemory,
+        maxMemory: itemTypeName === 'Server' && isRemoteServer ? undefined : javaMemory,
+        jvmArgs: itemTypeName === 'Server' && isRemoteServer ? undefined : (extraJvmArgs || undefined),
+        customJavaPath: itemTypeName === 'Server' && isRemoteServer ? undefined : (javaPath || undefined),
         ...(itemTypeName === 'Server' && {
-          port,
-          serverIp: serverIp.trim() || 'localhost',
+          isRemote: isRemoteServer,
+          port: normalizedPort,
+          serverIp: normalizedServerIp,
           maxPlayers: Math.max(0, Math.round(maxPlayers || 0)),
         }),
     });
@@ -417,12 +433,28 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
                 <FormField label="Name" htmlFor="itemName" className="col-span-2">
                   <input id="itemName" type="text" value={name} onChange={e => setName(e.target.value)} className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
                 </FormField>
+                <FormField label="Server Type" htmlFor="serverType">
+                  <select
+                    id="serverType"
+                    value={isRemoteServer ? 'remote' : 'local'}
+                    onChange={e => {
+                      const nextIsRemote = e.target.value === 'remote';
+                      setIsRemoteServer(nextIsRemote);
+                      setPathError('');
+                    }}
+                    className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+                  >
+                    <option value="local">Local Install</option>
+                    <option value="remote">Remote Registration</option>
+                  </select>
+                </FormField>
                 <FormField label="Port" htmlFor="itemPort">
                   <input id="itemPort" type="text" value={port} onChange={e => setPort(e.target.value)} className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
                 </FormField>
-                <FormField label="Server IP" htmlFor="itemServerIp">
+                <FormField label={isRemoteServer ? 'Remote Host' : 'Server IP'} htmlFor="itemServerIp" className="col-span-2">
                   <input id="itemServerIp" type="text" value={serverIp} onChange={e => setServerIp(e.target.value)} className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
                 </FormField>
+                {!isRemoteServer && (
                 <FormField label="Max Players" htmlFor="itemMaxPlayers">
                   <input
                     id="itemMaxPlayers"
@@ -433,6 +465,15 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
                     className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
                   />
                 </FormField>
+                )}
+                {isRemoteServer && (
+                  <div className="col-span-2 -mt-1 space-y-1">
+                    <p className="text-xs text-gray-400">
+                      Remote profiles are used for StarMote connection and monitoring only.
+                    </p>
+                    {pathError && <p className="text-xs text-red-400">{pathError}</p>}
+                  </div>
+                )}
               </>
             ) : (
               <FormField label="Name" htmlFor="itemName" className="col-span-2">
@@ -465,6 +506,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         </div>
 
         <div className="grid grid-cols-2 gap-x-8 gap-y-6">
+          {!(itemTypeName === 'Server' && isRemoteServer) && (
           <FormField label={isNew ? 'Parent Directory' : 'Game Directory'} htmlFor="gameDir">
             <div className="flex">
               <input
@@ -508,7 +550,9 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
               </p>
             )}
           </FormField>
+          )}
 
+            {!(itemTypeName === 'Server' && isRemoteServer) && (
             <div className="col-span-2">
                 <hr className="border-slate-800 my-2" />
                 <button
@@ -552,6 +596,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
                     </div>
                 )}
             </div>
+            )}
         </div>
       </div>
     </div>

@@ -77,6 +77,16 @@ interface ChatChannelInfo {
   modifiedMs: number;
 }
 
+interface RemoteConnectionStatus {
+  serverId: string;
+  connected: boolean;
+  host?: string;
+  port?: number;
+  username?: string;
+  connectedAt?: string;
+  error?: string;
+}
+
 const GENERAL_CHANNEL_ID = 'all';
 
 const createVirtualGeneralChannel = (): ChatChannelInfo => ({
@@ -236,7 +246,7 @@ interface DraggedQuickAction {
   actionId: ServerActionId;
 }
 
-const LOG_BUFFER_CAP = 30000;
+const LOG_BUFFER_CAP = 300000;
 const LIVE_PROCESS_LOG_PATH = '__live_process_output__';
 const DASHBOARD_STORE_KEY = 'serverPanelDashboardLayoutsV2';
 const MIN_GROUP_HEIGHT = 260;
@@ -1965,6 +1975,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [groupDropTarget, setGroupDropTarget] = useState<number | null>(null);
   const [quickActionDropTarget, setQuickActionDropTarget] = useState<number | null>(null);
   const [groupResizeDraft, setGroupResizeDraft] = useState<{ groupId: string; startY: number; startHeight: number } | null>(null);
+  const [isRemoteConnectModalOpen, setIsRemoteConnectModalOpen] = useState(false);
+  const [remoteConnectTargetServerId, setRemoteConnectTargetServerId] = useState<string>('');
+  const [remoteConnectNameInput, setRemoteConnectNameInput] = useState('');
+  const [remoteConnectHostInput, setRemoteConnectHostInput] = useState('');
+  const [remoteConnectPortInput, setRemoteConnectPortInput] = useState('4242');
+  const [remoteConnectUsernameInput, setRemoteConnectUsernameInput] = useState('');
+  const [remoteConnectError, setRemoteConnectError] = useState<string | null>(null);
+  const [isRemoteConnectPending, setIsRemoteConnectPending] = useState(false);
+  const [remoteConnectionStatus, setRemoteConnectionStatus] = useState<RemoteConnectionStatus | null>(null);
+  const [isRemoteDisconnectPending, setIsRemoteDisconnectPending] = useState(false);
+  const [remoteStatusesByServerId, setRemoteStatusesByServerId] = useState<Record<string, RemoteConnectionStatus>>({});
 
   // ─── Database tab state ─────────────────────────────────────────────────────
   const [databaseSqlInput, setDatabaseSqlInput] = useState<string>(DATABASE_ENTITY_LIST_SQL);
@@ -1999,21 +2020,40 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     downloadStatuses,
   } = useData();
 
+  const [viewingServerId, setViewingServerId] = useState<string | null>(() => (
+    serverId ?? selectedServerId ?? null
+  ));
+
   useEffect(() => {
-    if (serverId && serverId !== selectedServerId) {
-      setSelectedServerId(serverId);
-    }
-  }, [serverId, selectedServerId, setSelectedServerId]);
+    setViewingServerId((previous) => {
+      if (previous && servers.some((server) => server.id === previous)) {
+        return previous;
+      }
+      if (serverId && servers.some((server) => server.id === serverId)) {
+        return serverId;
+      }
+      if (selectedServerId && servers.some((server) => server.id === selectedServerId)) {
+        return selectedServerId;
+      }
+      return servers[0]?.id ?? null;
+    });
+  }, [serverId, selectedServerId, servers]);
+
+  useEffect(() => {
+    if (!viewingServerId || viewingServerId === selectedServerId) return;
+    setSelectedServerId(viewingServerId);
+  }, [viewingServerId, selectedServerId, setSelectedServerId]);
 
   const effectiveServer = useMemo<ManagedItem | null>(() => {
-    if (serverId) {
-      return servers.find((server) => server.id === serverId) ?? selectedServer;
+    if (viewingServerId) {
+      return servers.find((server) => server.id === viewingServerId) ?? null;
     }
     return selectedServer;
-  }, [serverId, servers, selectedServer]);
+  }, [viewingServerId, servers, selectedServer]);
 
-  const effectiveServerName = serverName || effectiveServer?.name || 'Server';
+  const effectiveServerName = effectiveServer?.name || serverName || 'Server';
   const hasGameApi = typeof window !== 'undefined' && !!window.launcher?.game;
+  const hasStarmoteApi = typeof window !== 'undefined' && !!window.launcher?.starmote;
   const hasDownloadApi = typeof window !== 'undefined' && !!window.launcher?.download;
   const hasStoreApi = typeof window !== 'undefined' && !!window.launcher?.store;
   const isPoppedOutPanel = typeof window !== 'undefined'
@@ -2031,6 +2071,200 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const serverDownloadStatus = effectiveServer ? downloadStatuses[effectiveServer.id] : undefined;
   const isUpdating = serverDownloadStatus?.state === 'checksums' || serverDownloadStatus?.state === 'downloading';
+
+  const refreshRemoteConnectionStatus = useCallback(async (targetServerId?: string): Promise<void> => {
+    if (!hasStarmoteApi) {
+      setRemoteConnectionStatus(null);
+      setRemoteStatusesByServerId({});
+      return;
+    }
+
+    try {
+      if (targetServerId) {
+        const result = await window.launcher.starmote.getStatus(targetServerId);
+        const status = result.statuses.find((entry) => entry.serverId === targetServerId) ?? null;
+        if (status) {
+          setRemoteStatusesByServerId((previous) => ({ ...previous, [status.serverId]: status }));
+        }
+        const currentServerId = effectiveServer?.id;
+        if (!currentServerId) {
+          setRemoteConnectionStatus(status);
+        } else if (status?.serverId === currentServerId) {
+          setRemoteConnectionStatus(status);
+        }
+        return;
+      }
+
+      const result = await window.launcher.starmote.getStatus();
+      const nextByServerId: Record<string, RemoteConnectionStatus> = {};
+      for (const status of result.statuses) {
+        nextByServerId[status.serverId] = status;
+      }
+      setRemoteStatusesByServerId(nextByServerId);
+      const currentServerId = effectiveServer?.id;
+      setRemoteConnectionStatus(currentServerId ? (nextByServerId[currentServerId] ?? null) : null);
+    } catch {
+      setRemoteConnectionStatus(null);
+    }
+  }, [effectiveServer?.id, hasStarmoteApi]);
+
+  const hasConnectedRemoteByServerId = useMemo<Record<string, boolean>>(() => {
+    const flags: Record<string, boolean> = {};
+    for (const [serverId, status] of Object.entries(remoteStatusesByServerId)) {
+      flags[serverId] = !!status.connected;
+    }
+    return flags;
+  }, [remoteStatusesByServerId]);
+
+  const handleSwitchServer = useCallback((nextServerId: string) => {
+    setViewingServerId(nextServerId || null);
+  }, []);
+
+  const openRemoteConnectModal = useCallback(() => {
+    const fallbackServerId = viewingServerId ?? selectedServerId ?? servers[0]?.id ?? '';
+    const selectedServerForModal = servers.find((server) => server.id === fallbackServerId) ?? effectiveServer ?? null;
+
+    setRemoteConnectTargetServerId(selectedServerForModal?.id ?? fallbackServerId);
+    setRemoteConnectNameInput(selectedServerForModal?.name ?? '');
+    setRemoteConnectHostInput(selectedServerForModal?.serverIp?.trim() ?? serverConfigValues.SERVER_LISTEN_IP ?? '127.0.0.1');
+    setRemoteConnectPortInput(selectedServerForModal?.port?.trim() || serverPortInput || '4242');
+    setRemoteConnectUsernameInput(activeAccount?.displayName?.trim() || '');
+    setRemoteConnectError(null);
+    setIsRemoteConnectModalOpen(true);
+  }, [activeAccount?.name, effectiveServer, selectedServerId, serverConfigValues.SERVER_LISTEN_IP, serverPortInput, servers, viewingServerId]);
+
+  const closeRemoteConnectModal = useCallback(() => {
+    if (isRemoteConnectPending) return;
+    setIsRemoteConnectModalOpen(false);
+    setRemoteConnectError(null);
+  }, [isRemoteConnectPending]);
+
+  const handleRemoteConnect = useCallback(async () => {
+    if (isRemoteConnectPending) return;
+
+    if (!hasStarmoteApi) {
+      setRemoteConnectError('StarMote API is unavailable in this build.');
+      return;
+    }
+
+    const targetServerId = remoteConnectTargetServerId || viewingServerId || selectedServerId || servers[0]?.id;
+    if (!targetServerId) {
+      setRemoteConnectError('No server profile is available to attach this remote connection.');
+      return;
+    }
+
+    const targetServer = servers.find((server) => server.id === targetServerId);
+    if (!targetServer) {
+      setRemoteConnectError('Selected server profile could not be found.');
+      return;
+    }
+
+    const host = remoteConnectHostInput.trim();
+    if (!host) {
+      setRemoteConnectError('Remote host is required.');
+      return;
+    }
+
+    const parsedPort = Number.parseInt(remoteConnectPortInput.trim() || '4242', 10);
+    if (!Number.isFinite(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+      setRemoteConnectError('Port must be between 1 and 65535.');
+      return;
+    }
+
+    const sanitizedPort = String(parsedPort);
+    const nextName = remoteConnectNameInput.trim() || targetServer.name;
+    const username = remoteConnectUsernameInput.trim() || undefined;
+
+    setIsRemoteConnectPending(true);
+    setRemoteConnectError(null);
+
+    try {
+      const connectResult = await window.launcher.starmote.connect({
+        serverId: targetServer.id,
+        host,
+        port: parsedPort,
+        username,
+      });
+      if (!connectResult.success) {
+        setRemoteConnectError(connectResult.error ?? 'Failed to establish StarMote connection.');
+        if (connectResult.status) {
+          setRemoteConnectionStatus(connectResult.status);
+        }
+        return;
+      }
+      if (connectResult.status) {
+        setRemoteConnectionStatus(connectResult.status);
+      }
+
+      updateServerItem({
+        ...targetServer,
+        name: nextName,
+        serverIp: host,
+        port: sanitizedPort,
+      });
+
+      setViewingServerId(targetServer.id);
+      setServerNameInput(nextName);
+      setServerPortInput(sanitizedPort);
+      setServerConfigValues((previous) => ({
+        ...previous,
+        SERVER_LISTEN_IP: host,
+      }));
+
+      setIsRemoteConnectModalOpen(false);
+      setActionError(null);
+    } catch (error) {
+      setRemoteConnectError(`Failed to apply remote connection: ${String(error)}`);
+    } finally {
+      setIsRemoteConnectPending(false);
+    }
+  }, [
+    hasStarmoteApi,
+    remoteConnectUsernameInput,
+    isRemoteConnectPending,
+    remoteConnectHostInput,
+    remoteConnectNameInput,
+    remoteConnectPortInput,
+    remoteConnectTargetServerId,
+    selectedServerId,
+    servers,
+    updateServerItem,
+    viewingServerId,
+  ]);
+
+  const handleRemoteDisconnect = useCallback(async () => {
+    if (!hasStarmoteApi || !effectiveServer || isRemoteDisconnectPending) return;
+    setIsRemoteDisconnectPending(true);
+    setRemoteConnectError(null);
+    try {
+      const result = await window.launcher.starmote.disconnect(effectiveServer.id);
+      if (!result.success) {
+        setRemoteConnectError(result.error ?? 'Failed to disconnect remote session.');
+      }
+      await refreshRemoteConnectionStatus(effectiveServer.id);
+    } catch (error) {
+      setRemoteConnectError(`Failed to disconnect remote session: ${String(error)}`);
+    } finally {
+      setIsRemoteDisconnectPending(false);
+    }
+  }, [effectiveServer, hasStarmoteApi, isRemoteDisconnectPending, refreshRemoteConnectionStatus]);
+
+  useEffect(() => {
+    void refreshRemoteConnectionStatus();
+  }, [refreshRemoteConnectionStatus]);
+
+  useEffect(() => {
+    if (!hasStarmoteApi) return;
+    const unsubscribe = window.launcher.starmote.onStatusChanged((status) => {
+      setRemoteStatusesByServerId((previous) => ({
+        ...previous,
+        [status.serverId]: status,
+      }));
+      if (!effectiveServer || status.serverId !== effectiveServer.id) return;
+      setRemoteConnectionStatus(status);
+    });
+    return unsubscribe;
+  }, [effectiveServer, hasStarmoteApi]);
 
   const allLogFiles = useMemo(() => {
     return logCategories
@@ -5016,6 +5250,36 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const renderConnectionWidget = () => (
     <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
       <div className="space-y-3">
+        <div className="flex items-center justify-between gap-3 rounded-md border border-white/10 bg-black/20 px-3 py-2">
+          <div className="space-y-1">
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+              Remote Target: <span className="text-gray-200">{effectiveServer?.serverIp?.trim() || 'Not set'}</span>
+            </p>
+            <p className="text-[11px] text-gray-400">
+              Status:{' '}
+              <span className={remoteConnectionStatus?.connected ? 'text-emerald-300' : 'text-gray-300'}>
+                {remoteConnectionStatus?.connected ? 'Connected' : 'Disconnected'}
+              </span>
+              {remoteConnectionStatus?.connectedAt ? ` · ${new Date(remoteConnectionStatus.connectedAt).toLocaleTimeString()}` : ''}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={openRemoteConnectModal}
+              disabled={!hasStarmoteApi}
+              className="rounded border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-cyan-200 transition-colors hover:bg-cyan-500/20"
+            >
+              Remote Connect
+            </button>
+            <button
+              onClick={() => { void handleRemoteDisconnect(); }}
+              disabled={!remoteConnectionStatus?.connected || isRemoteDisconnectPending || !hasStarmoteApi}
+              className="rounded border border-white/20 bg-black/30 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-200 transition-colors hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isRemoteDisconnectPending ? 'Disconnecting...' : 'Disconnect'}
+            </button>
+          </div>
+        </div>
         {renderDashboardConfigField('SERVER_LISTEN_IP', { labelWidthClassName: 'w-28' })}
         <label className="flex items-center gap-3 text-sm">
           <span className="w-28 text-gray-300">Server Port:</span>
@@ -5044,6 +5308,121 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       </div>
     </div>
   );
+
+  const renderRemoteConnectModal = () => {
+    if (!isRemoteConnectModalOpen) return null;
+
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Remote connection"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) {
+            closeRemoteConnectModal();
+          }
+        }}
+      >
+        <div className="w-full max-w-xl rounded-lg border border-white/15 bg-[#101422] p-5 shadow-xl">
+          <div className="mb-4">
+            <h3 className="text-lg font-semibold text-white">Remote Connection</h3>
+            <p className="mt-1 text-sm text-gray-400">
+              Enter remote server details and load them into the panel.
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <label className="block text-sm">
+              <span className="mb-1 block text-gray-300">Server Profile</span>
+              <select
+                value={remoteConnectTargetServerId}
+                onChange={(event) => setRemoteConnectTargetServerId(event.target.value)}
+                disabled={isRemoteConnectPending || servers.length === 0}
+                className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+              >
+                {servers.map((server) => (
+                  <option key={server.id} value={server.id}>
+                    {server.name || `Server ${server.id}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block text-sm">
+              <span className="mb-1 block text-gray-300">Display Name</span>
+              <input
+                value={remoteConnectNameInput}
+                onChange={(event) => setRemoteConnectNameInput(event.target.value)}
+                disabled={isRemoteConnectPending}
+                placeholder="My Remote Server"
+                className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+              />
+            </label>
+
+            <label className="block text-sm">
+              <span className="mb-1 block text-gray-300">Login Name</span>
+              <input
+                value={remoteConnectUsernameInput}
+                onChange={(event) => setRemoteConnectUsernameInput(event.target.value)}
+                disabled={isRemoteConnectPending}
+                placeholder="Admin username"
+                className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+              />
+            </label>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-300">Host / IP</span>
+                <input
+                  value={remoteConnectHostInput}
+                  onChange={(event) => setRemoteConnectHostInput(event.target.value)}
+                  disabled={isRemoteConnectPending}
+                  placeholder="example.org or 203.0.113.10"
+                  className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                />
+              </label>
+
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-300">Port</span>
+                <input
+                  value={remoteConnectPortInput}
+                  onChange={(event) => setRemoteConnectPortInput(event.target.value)}
+                  disabled={isRemoteConnectPending}
+                  inputMode="numeric"
+                  placeholder="4242"
+                  className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                />
+              </label>
+            </div>
+
+            {remoteConnectError && (
+              <p className="rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+                {remoteConnectError}
+              </p>
+            )}
+          </div>
+
+          <div className="mt-5 flex items-center justify-end gap-2">
+            <button
+              onClick={closeRemoteConnectModal}
+              disabled={isRemoteConnectPending}
+              className="rounded-md border border-white/15 bg-black/25 px-3 py-1.5 text-sm font-semibold text-gray-200 transition-colors hover:bg-black/35 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => { void handleRemoteConnect(); }}
+              disabled={isRemoteConnectPending || servers.length === 0 || !hasStarmoteApi}
+              className="rounded-md border border-cyan-500/40 bg-cyan-500/15 px-3 py-1.5 text-sm font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isRemoteConnectPending ? 'Connecting...' : 'Connect'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const renderPlayersWidget = () => (
     <div className="space-y-3">
@@ -6945,6 +7324,28 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             ))}
           </div>
 
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">Viewing</span>
+            <select
+              value={viewingServerId ?? ''}
+              onChange={(event) => handleSwitchServer(event.target.value)}
+              disabled={servers.length === 0}
+              className="min-w-[220px] rounded-md border border-white/15 bg-black/20 px-3 py-1.5 text-sm font-semibold text-gray-200 transition-colors hover:bg-black/35 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {servers.length === 0 ? (
+                <option value="">No servers available</option>
+              ) : (
+                servers.map((server) => (
+                  <option key={server.id} value={server.id}>
+                    {server.isRemote ? '[Remote] ' : '[Local] '}
+                    {hasConnectedRemoteByServerId[server.id] ? '[Connected] ' : ''}
+                    {server.name || `Server ${server.id}`}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+
           {/*<button
             onClick={isPoppedOutPanel ? handleDockServerPanel : () => { void handlePopOutServerPanel(); }}
             className="rounded-md border border-white/15 bg-black/20 px-3 py-1.5 text-sm font-semibold text-gray-200 transition-colors hover:bg-black/35"
@@ -6955,6 +7356,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
         <div className="min-h-0 flex-1">{renderActiveTab()}</div>
       </div>
+      {renderRemoteConnectModal()}
     </PageContainer>
   );
 };

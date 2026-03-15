@@ -19,6 +19,7 @@ interface ItemCardProps {
   statusLabel: string;
   statusValue?: string;
   downloadStatus?: DownloadStatus;
+  showServerModeBadge?: boolean;
 }
 
 function formatBytes(bytes: number): string {
@@ -39,8 +40,10 @@ const ItemCard: React.FC<ItemCardProps> = ({
   onDownload, onCancelDownload, onOpenFolder, onAction, onViewLogs, onRestore,
   actionButtonText, statusLabel, statusValue,
   downloadStatus,
+  showServerModeBadge = false,
 }) => {
   const [isRunning, setIsRunning] = useState(false);
+  const isRemoteServer = item.isRemote === true;
   
   // ── Download speed calculation (3-second rolling window) ──────────────────
   const speedSamplesRef = useRef<{ bytes: number; time: number }[]>([]);
@@ -93,13 +96,18 @@ const ItemCard: React.FC<ItemCardProps> = ({
   // An item needs a download when explicitly marked not-installed, and it isn't
   // currently downloading and hasn't just finished.
   const needsDownload =
+    !isRemoteServer &&
     item.installed === false &&
     !isActivelyDownloading &&
     downloadStatus?.state !== 'complete';
 
   // An item is playable if it is installed (or has no `installed` field, i.e. mock data)
   // or if the current download session just completed.
-  const isPlayable = item.installed !== false || downloadStatus?.state === 'complete';
+  const isPlayable = isRemoteServer || item.installed !== false || downloadStatus?.state === 'complete';
+
+  const secondaryLine = isRemoteServer
+    ? `${item.serverIp?.trim() || 'localhost'}:${item.port?.trim() || '4242'}`
+    : item.path;
 
   return (
     <div className={`
@@ -120,7 +128,18 @@ const ItemCard: React.FC<ItemCardProps> = ({
             {item.name}{' '}
             <span className="text-sm font-normal text-gray-400">{item.version}</span>
           </h3>
-          <p className="text-xs text-gray-500 font-mono truncate">{item.path}</p>
+          {showServerModeBadge && (
+            <span
+              className={`inline-flex mt-1 items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                isRemoteServer
+                  ? 'bg-cyan-500/15 text-cyan-200 border border-cyan-400/30'
+                  : 'bg-emerald-500/15 text-emerald-200 border border-emerald-400/30'
+              }`}
+            >
+              {isRemoteServer ? 'Remote Registration' : 'Local Install'}
+            </span>
+          )}
+          <p className="text-xs text-gray-500 font-mono truncate">{secondaryLine}</p>
         </div>
 
         {/* Status / progress text */}
@@ -184,7 +203,7 @@ const ItemCard: React.FC<ItemCardProps> = ({
           <Tooltip text="Open Directory">
             <button
               onClick={() => onOpenFolder?.(item.path)}
-              disabled={!onOpenFolder}
+              disabled={!onOpenFolder || !item.path || isRemoteServer}
               className="p-2 rounded-md hover:bg-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               aria-label="Open Folder"
             >
