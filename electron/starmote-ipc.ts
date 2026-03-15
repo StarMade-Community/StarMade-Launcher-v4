@@ -27,7 +27,7 @@ interface StarmoteConnectPayload {
   activeAccountId?: string;
 }
 
-const USER_AGENT_STAR_MOTE_STANDALONE = 2;
+const USER_AGENT_STAR_MOTE_STANDALONE = 1;
 
 interface StarmoteDisconnectPayload {
   serverId: string;

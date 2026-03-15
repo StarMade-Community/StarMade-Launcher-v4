@@ -274,9 +274,17 @@ export async function registerAccount(
 
 /**
  * Retrieve the stored access token for `accountId`, refreshing it first if it
- * is expired and a refresh token is available.
+ * is expired or unreadable and a refresh token is available.
  *
  * Returns `null` for guest accounts (no token required for offline play).
+ *
+ * NOTE: The access token is encrypted at rest via Electron safeStorage.  If
+ * the OS key material has changed (e.g. after a Windows profile migration or
+ * an app reinstall) the stored blob may be unreadable even though the user is
+ * "logged in" according to the account list.  We therefore attempt a token
+ * refresh whenever the access token cannot be loaded — a fresh token can then
+ * be encrypted with the current key material and the game launch proceeds
+ * without requiring the user to log in again manually.
  */
 export async function getAccessTokenForLaunch(
   accountId: string,
@@ -285,26 +293,46 @@ export async function getAccessTokenForLaunch(
   // Guest accounts have no token
   if (accountId.startsWith('offline-') || accountId.startsWith('guest-')) return null;
 
-  const token = loadToken(tokenKey(accountId));
-  if (!token) return null;
+  let token = loadToken(tokenKey(accountId));
+  const tokenMissing = !token;
 
   // Refresh proactively when:
   //   • forceRefresh is explicitly requested (e.g. StarMote connection)
+  //   • access token is missing / unreadable — try the refresh token so the
+  //     user does not have to log in again just because safeStorage key
+  //     material changed (common after OS upgrades or app reinstalls)
   //   • expiry is unknown — could mean token is already expired
   //   • token expires in less than 5 minutes
   const expiry = storeGet(expiryKey(accountId));
   const expiryUnknown = typeof expiry !== 'number';
   const nearExpiry = !expiryUnknown && (expiry as number) - Date.now() < 5 * 60 * 1000;
 
-  if (options?.forceRefresh || expiryUnknown || nearExpiry) {
-    const reason = options?.forceRefresh ? 'forced refresh' : expiryUnknown ? 'expiry unknown' : 'near expiry';
+  if (options?.forceRefresh || tokenMissing || expiryUnknown || nearExpiry) {
+    const reason = options?.forceRefresh
+      ? 'forced refresh'
+      : tokenMissing
+      ? 'token missing or unreadable'
+      : expiryUnknown
+      ? 'expiry unknown'
+      : 'near expiry';
     console.log(`[Auth] Refreshing token for ${accountId} (${reason})…`);
     const result = await refreshAccessToken(accountId);
     if (result.success) {
-      return loadToken(tokenKey(accountId));
+      token = loadToken(tokenKey(accountId));
+    } else if (!tokenMissing) {
+      // Refresh failed but we still have the original token — use it as a
+      // fallback (it may still be accepted by the server).
+      console.warn(`[Auth] Token refresh failed for ${accountId}, using stored token as fallback.`);
+    } else {
+      // Access token was missing AND refresh failed.  The user will need to
+      // log in again; log a clear warning so this shows up in the console.
+      console.warn(`[Auth] Token missing and refresh failed for ${accountId}: ${result.success ? 'unknown' : result.error}`);
     }
-    // Refresh failed — fall through and try the stored token anyway
-    console.warn(`[Auth] Token refresh failed for ${accountId}, using stored token as fallback.`);
+  }
+
+  if (!token) {
+    console.warn(`[Auth] No auth token available for account ${accountId} — game will launch without authentication.`);
+    return null;
   }
 
   return token;

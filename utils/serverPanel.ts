@@ -62,6 +62,10 @@ export function isRemoteCommandActionEnabled(options: {
   return isRemoteReady === true || remoteState === 'ready';
 }
 
+export function isRemoteConnectSupported(server: ManagedItem | null | undefined): boolean {
+  return !!server?.isRemote;
+}
+
 export function buildDatabaseEntityListSql(): string {
   return (
     'SELECT e.ID, e.UID, e.NAME, e.TYPE, e.FACTION, e.X, e.Y, e.Z, ' +

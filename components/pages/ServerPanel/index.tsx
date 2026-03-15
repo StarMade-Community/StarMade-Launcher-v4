@@ -9,6 +9,7 @@ import {
   formatDatabaseEntityType,
   getDefaultRemoteFileAccessPort,
   isRemoteCommandActionEnabled,
+  isRemoteConnectSupported,
   isServerUpdateSupported,
   matchesDatabaseSectorLoadFilter,
   resolveDefaultRemoteConnectHost,
@@ -2211,7 +2212,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
   }, [remoteConnectionStatus?.error, remoteConnectionStatus?.reasonCode]);
 
-  const isRemoteServerProfile = !!effectiveServer?.isRemote;
+  const isRemoteServerProfile = isRemoteConnectSupported(effectiveServer);
+  const remoteConnectEligibleServers = useMemo(
+    () => servers.filter((server) => isRemoteConnectSupported(server)),
+    [servers],
+  );
+  const canShowRemoteConnectControls = isRemoteServerProfile;
+  const canOpenRemoteConnectModal = hasStarmoteApi && canShowRemoteConnectControls;
+  const canDisconnectRemoteSession = canShowRemoteConnectControls && !!remoteConnectionStatus?.connected;
   const canExecuteRemoteCommandActions = isRemoteCommandActionEnabled({
     isRemoteServer: isRemoteServerProfile,
     remoteState: remoteConnectionStatus?.state,
@@ -2244,11 +2252,16 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [activeAccount?.displayName, serverConfigValues.SERVER_LISTEN_IP, serverPortInput]);
 
   const openRemoteConnectModal = useCallback(() => {
-    const fallbackServerId = viewingServerId ?? selectedServerId ?? servers[0]?.id ?? '';
-    const selectedServerForModal = servers.find((server) => server.id === fallbackServerId) ?? effectiveServer ?? null;
+    if (!canShowRemoteConnectControls) {
+      setActionError('Remote Connect is only available for remote server profiles.');
+      return;
+    }
+
+    const fallbackServerId = viewingServerId ?? selectedServerId ?? remoteConnectEligibleServers[0]?.id ?? '';
+    const selectedServerForModal = remoteConnectEligibleServers.find((server) => server.id === fallbackServerId) ?? effectiveServer ?? remoteConnectEligibleServers[0] ?? null;
     populateRemoteConnectForm(selectedServerForModal, fallbackServerId);
     setIsRemoteConnectModalOpen(true);
-  }, [effectiveServer, populateRemoteConnectForm, selectedServerId, servers, viewingServerId]);
+  }, [canShowRemoteConnectControls, effectiveServer, populateRemoteConnectForm, remoteConnectEligibleServers, selectedServerId, viewingServerId]);
 
   const closeRemoteConnectModal = useCallback(() => {
     if (isRemoteConnectPending) return;
@@ -2263,20 +2276,25 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const handleRemoteConnect = useCallback(async () => {
     if (isRemoteConnectPending) return;
 
+    if (!canShowRemoteConnectControls) {
+      setRemoteConnectError('Remote Connect is only available for remote server profiles.');
+      return;
+    }
+
     if (!hasStarmoteApi || !starmoteApi) {
       setRemoteConnectError('StarMote API is unavailable in this build.');
       return;
     }
 
-    const targetServerId = remoteConnectTargetServerId || viewingServerId || selectedServerId || servers[0]?.id;
+    const targetServerId = remoteConnectTargetServerId || viewingServerId || selectedServerId || remoteConnectEligibleServers[0]?.id;
     if (!targetServerId) {
-      setRemoteConnectError('No server profile is available to attach this remote connection.');
+      setRemoteConnectError('No remote server profile is available to attach this connection.');
       return;
     }
 
-    const targetServer = servers.find((server) => server.id === targetServerId);
+    const targetServer = remoteConnectEligibleServers.find((server) => server.id === targetServerId);
     if (!targetServer) {
-      setRemoteConnectError('Selected server profile could not be found.');
+      setRemoteConnectError('Selected profile is not a remote server profile.');
       return;
     }
 
@@ -2355,7 +2373,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
   }, [
     activeAccount?.id,
+    canShowRemoteConnectControls,
     hasStarmoteApi,
+    remoteConnectEligibleServers,
     remoteConnectUsernameInput,
     isRemoteConnectPending,
     remoteConnectHostInput,
@@ -2368,14 +2388,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     remoteFileAccessUsernameInput,
     remoteConnectTargetServerId,
     selectedServerId,
-    servers,
     updateServerItem,
     viewingServerId,
     starmoteApi,
   ]);
 
   const handleRemoteDisconnect = useCallback(async () => {
-    if (!hasStarmoteApi || !starmoteApi || !effectiveServer || isRemoteDisconnectPending) return;
+    if (!hasStarmoteApi || !starmoteApi || !effectiveServer || !canShowRemoteConnectControls || isRemoteDisconnectPending) return;
     setIsRemoteDisconnectPending(true);
     setRemoteConnectError(null);
     try {
@@ -2389,7 +2408,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setIsRemoteDisconnectPending(false);
     }
-  }, [effectiveServer, hasStarmoteApi, isRemoteDisconnectPending, refreshRemoteConnectionStatus, starmoteApi]);
+  }, [canShowRemoteConnectControls, effectiveServer, hasStarmoteApi, isRemoteDisconnectPending, refreshRemoteConnectionStatus, starmoteApi]);
 
   useEffect(() => {
     void refreshRemoteConnectionStatus();
@@ -5634,48 +5653,57 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const renderConnectionWidget = () => (
     <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
       <div className="space-y-3">
-        <div className="flex items-center justify-between gap-3 rounded-md border border-white/10 bg-black/20 px-3 py-2">
-          <div className="space-y-1">
-            <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-              Remote Target: <span className="text-gray-200">{resolveDefaultRemoteConnectHost(effectiveServer, serverConfigValues.SERVER_LISTEN_IP)}</span>
-            </p>
-            <p className="text-[11px] text-gray-400">
-              Status:{' '}
-              <span className={remoteConnectionDisplay.className}>
-                {remoteConnectionDisplay.label}
-              </span>
-              {remoteConnectionStatus?.connectedAt ? ` · ${new Date(remoteConnectionStatus.connectedAt).toLocaleTimeString()}` : ''}
-            </p>
+        {canShowRemoteConnectControls ? (
+          <>
+            <div className="flex items-center justify-between gap-3 rounded-md border border-white/10 bg-black/20 px-3 py-2">
+              <div className="space-y-1">
+                <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                  Remote Target: <span className="text-gray-200">{resolveDefaultRemoteConnectHost(effectiveServer, serverConfigValues.SERVER_LISTEN_IP)}</span>
+                </p>
+                <p className="text-[11px] text-gray-400">
+                  Status:{' '}
+                  <span className={remoteConnectionDisplay.className}>
+                    {remoteConnectionDisplay.label}
+                  </span>
+                  {remoteConnectionStatus?.connectedAt ? ` · ${new Date(remoteConnectionStatus.connectedAt).toLocaleTimeString()}` : ''}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={openRemoteConnectModal}
+                  disabled={!canOpenRemoteConnectModal}
+                  className="rounded border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Remote Connect
+                </button>
+                <button
+                  onClick={() => { void handleRemoteDisconnect(); }}
+                  disabled={!canDisconnectRemoteSession || isRemoteDisconnectPending || !hasStarmoteApi}
+                  className="rounded border border-white/20 bg-black/30 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-200 transition-colors hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isRemoteDisconnectPending ? 'Disconnecting...' : 'Disconnect'}
+                </button>
+              </div>
+            </div>
+            <div className="rounded-md border border-white/10 bg-black/15 px-3 py-2 text-[11px] text-gray-300">
+              <p className="font-semibold uppercase tracking-wider text-gray-400">Protocol Diagnostics</p>
+              <p className="mt-1 text-gray-300">
+                Reason Code: <span className="font-mono text-gray-100">{remoteConnectionStatus?.reasonCode ?? 'none'}</span>
+              </p>
+              {remoteConnectionStatus?.error && (
+                <p className="mt-1 text-red-200">Last Error: {remoteConnectionStatus.error}</p>
+              )}
+              {remoteDiagnosticsHint && (
+                <p className="mt-1 text-amber-200">Hint: {remoteDiagnosticsHint}</p>
+              )}
+            </div>
+          </>
+        ) : (
+          <div className="rounded-md border border-white/10 bg-black/15 px-3 py-2 text-[11px] text-gray-300">
+            <p className="font-semibold uppercase tracking-wider text-gray-400">Remote Control</p>
+            <p className="mt-1">Remote Connect is hidden for local server profiles.</p>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={openRemoteConnectModal}
-              disabled={!hasStarmoteApi}
-              className="rounded border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-cyan-200 transition-colors hover:bg-cyan-500/20"
-            >
-              Remote Connect
-            </button>
-            <button
-              onClick={() => { void handleRemoteDisconnect(); }}
-              disabled={!remoteConnectionStatus?.connected || isRemoteDisconnectPending || !hasStarmoteApi}
-              className="rounded border border-white/20 bg-black/30 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-200 transition-colors hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isRemoteDisconnectPending ? 'Disconnecting...' : 'Disconnect'}
-            </button>
-          </div>
-        </div>
-        <div className="rounded-md border border-white/10 bg-black/15 px-3 py-2 text-[11px] text-gray-300">
-          <p className="font-semibold uppercase tracking-wider text-gray-400">Protocol Diagnostics</p>
-          <p className="mt-1 text-gray-300">
-            Reason Code: <span className="font-mono text-gray-100">{remoteConnectionStatus?.reasonCode ?? 'none'}</span>
-          </p>
-          {remoteConnectionStatus?.error && (
-            <p className="mt-1 text-red-200">Last Error: {remoteConnectionStatus.error}</p>
-          )}
-          {remoteDiagnosticsHint && (
-            <p className="mt-1 text-amber-200">Hint: {remoteDiagnosticsHint}</p>
-          )}
-        </div>
+        )}
         {renderDashboardConfigField('SERVER_LISTEN_IP', { labelWidthClassName: 'w-28' })}
         <label className="flex items-center gap-3 text-sm">
           <span className="w-28 text-gray-300">Server Port:</span>
@@ -5706,7 +5734,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   );
 
   const renderRemoteConnectModal = () => {
-    if (!isRemoteConnectModalOpen) return null;
+    if (!isRemoteConnectModalOpen || !canShowRemoteConnectControls) return null;
 
     return (
       <div
@@ -5735,13 +5763,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 value={remoteConnectTargetServerId}
                 onChange={(event) => {
                   const nextServerId = event.target.value;
-                  const nextServer = servers.find((server) => server.id === nextServerId) ?? null;
+                  const nextServer = remoteConnectEligibleServers.find((server) => server.id === nextServerId) ?? null;
                   populateRemoteConnectForm(nextServer, nextServerId);
                 }}
-                disabled={isRemoteConnectPending || servers.length === 0}
+                disabled={isRemoteConnectPending || remoteConnectEligibleServers.length === 0}
                 className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
               >
-                {servers.map((server) => (
+                {remoteConnectEligibleServers.map((server) => (
                   <option key={server.id} value={server.id}>
                     {server.name || `Server ${server.id}`}
                   </option>
@@ -5884,7 +5912,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             </button>
             <button
               onClick={() => { void handleRemoteConnect(); }}
-              disabled={isRemoteConnectPending || servers.length === 0 || !hasStarmoteApi}
+              disabled={isRemoteConnectPending || remoteConnectEligibleServers.length === 0 || !hasStarmoteApi}
               className="rounded-md border border-cyan-500/40 bg-cyan-500/15 px-3 py-1.5 text-sm font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isRemoteConnectPending ? 'Connecting...' : 'Connect'}

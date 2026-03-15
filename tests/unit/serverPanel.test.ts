@@ -6,6 +6,7 @@ import {
   formatDatabaseEntityType,
   getDefaultRemoteFileAccessPort,
   isRemoteCommandActionEnabled,
+  isRemoteConnectSupported,
   isServerUpdateSupported,
   matchesDatabaseSectorLoadFilter,
   normalizeRemoteConnectHost,
@@ -136,6 +137,12 @@ describe('serverPanel helpers', () => {
     expect(resolveDefaultRemoteFileAccessHost({ ...baseServer, remoteFileAccessHost: 'files.example.com' }, '127.0.0.1')).toBe('files.example.com');
     expect(resolveDefaultRemoteFileAccessHost({ ...baseServer, serverIp: 'game.example.com' }, '127.0.0.1')).toBe('game.example.com');
     expect(resolveDefaultRemoteFileAccessHost(baseServer, '127.0.0.1')).toBe('127.0.0.1');
+  });
+
+  it('requires a dedicated remote profile before exposing remote-connect actions', () => {
+    expect(isRemoteConnectSupported(baseServer)).toBe(false);
+    expect(isRemoteConnectSupported({ ...baseServer, isRemote: true, path: '' })).toBe(true);
+    expect(isRemoteConnectSupported(null)).toBe(false);
   });
 
   it('disables update support for remote server profiles', () => {

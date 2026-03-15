@@ -530,6 +530,12 @@ ipcMain.handle(IPC.GAME_LAUNCH, async (_event, options: {
   if (options.activeAccountId) {
     try {
       authToken = await getAccessTokenForLaunch(options.activeAccountId);
+      if (!authToken && !options.activeAccountId.startsWith('offline-') && !options.activeAccountId.startsWith('guest-')) {
+        // Token retrieval failed for a registry account.  getAccessTokenForLaunch
+        // already logged the reason; surface it here too so it's visible in the
+        // main-process log alongside the launch event.
+        console.warn(`[main] No auth token for account ${options.activeAccountId} — launching without -auth flag.  The server may reject the connection if authentication is required.`);
+      }
     } catch (err) {
       console.warn('[main] Failed to retrieve auth token for launch:', err);
     }
