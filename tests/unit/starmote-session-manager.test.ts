@@ -57,6 +57,17 @@ function createHarness() {
   return { manager, sockets, emitted };
 }
 
+function createAuthFailHarness() {
+  const manager = new StarmoteSessionManager({
+    createSocket: () => new FakeSocket(),
+    runAuthStage: async () => {
+      throw new Error('bad credentials');
+    },
+  });
+
+  return { manager };
+}
+
 describe('StarmoteSessionManager', () => {
   let harness: ReturnType<typeof createHarness>;
   const originalDebug = process.env.STARMOTE_DEBUG;
@@ -84,9 +95,10 @@ describe('StarmoteSessionManager', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.status.state).toBe('connected');
-    expect(result.status.reasonCode).toBe('connected');
-    expect(harness.emitted.map((entry) => entry.state)).toEqual(['connecting', 'connected']);
+    expect(result.status.state).toBe('ready');
+    expect(result.status.reasonCode).toBe('ready');
+    expect(result.status.isReady).toBe(true);
+    expect(harness.emitted.map((entry) => entry.state)).toEqual(['connecting', 'connected', 'authenticating', 'ready']);
   });
 
   it('handles disconnect during connect without leaving the session stuck', async () => {
@@ -161,8 +173,22 @@ describe('StarmoteSessionManager', () => {
     });
 
     const recoveredStatus = harness.manager.getStatusFor('srv-5');
-    expect(recoveredStatus.state).toBe('connected');
+    expect(recoveredStatus.state).toBe('ready');
     expect(recoveredStatus.error).toBeUndefined();
+  });
+
+  it('transitions to auth_failed when auth stage throws', async () => {
+    const authFailHarness = createAuthFailHarness();
+    const result = await authFailHarness.manager.connect({
+      serverId: 'srv-auth-fail',
+      host: '127.0.0.1',
+      port: 4242,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status.state).toBe('error');
+    expect(result.status.reasonCode).toBe('auth_failed');
+    expect(result.status.error).toContain('Authentication failed: bad credentials');
   });
 
   it('does not emit debug logs when STARMOTE_DEBUG is not enabled', async () => {

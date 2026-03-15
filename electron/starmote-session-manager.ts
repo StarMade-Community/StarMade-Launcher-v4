@@ -10,9 +10,12 @@ export interface SocketLike {
   destroy(): void;
 }
 
-export type StarmoteSessionState = 'idle' | 'connecting' | 'connected' | 'error';
+export type StarmoteSessionState = 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
 export type StarmoteReasonCode =
   | 'connected'
+  | 'authenticating'
+  | 'ready'
+  | 'auth_failed'
   | 'timeout'
   | 'connect_failed'
   | 'socket_error'
@@ -24,6 +27,7 @@ export interface StarmoteConnectionStatus {
   serverId: string;
   connected: boolean;
   state: StarmoteSessionState;
+  isReady?: boolean;
   host?: string;
   port?: number;
   username?: string;
@@ -55,6 +59,7 @@ interface StarmoteSessionRecord {
 interface StarmoteSessionManagerOptions {
   createSocket: () => SocketLike;
   onStatusChanged?: (status: StarmoteConnectionStatus) => void;
+  runAuthStage?: (params: StarmoteConnectParams) => Promise<void>;
 }
 
 function formatSocketError(error: unknown): string {
@@ -67,11 +72,13 @@ function formatSocketError(error: unknown): string {
 export class StarmoteSessionManager {
   private readonly createSocket: () => SocketLike;
   private readonly onStatusChanged?: (status: StarmoteConnectionStatus) => void;
+  private readonly runAuthStage: (params: StarmoteConnectParams) => Promise<void>;
   private readonly sessions = new Map<string, StarmoteSessionRecord>();
 
   constructor(options: StarmoteSessionManagerOptions) {
     this.createSocket = options.createSocket;
     this.onStatusChanged = options.onStatusChanged;
+    this.runAuthStage = options.runAuthStage ?? (async () => undefined);
   }
 
   getStatusFor(serverId: string): StarmoteConnectionStatus {
@@ -86,8 +93,9 @@ export class StarmoteSessionManager {
 
     return {
       serverId,
-      connected: session.state === 'connected',
+      connected: session.state === 'connected' || session.state === 'authenticating' || session.state === 'ready',
       state: session.state,
+      isReady: session.state === 'ready',
       host: session.host,
       port: session.port,
       username: session.username,
@@ -193,6 +201,40 @@ export class StarmoteSessionManager {
     active.error = undefined;
     active.reasonCode = 'connected';
     active.socket = socket;
+    this.emitStatus(params.serverId);
+
+    active.state = 'authenticating';
+    active.reasonCode = 'authenticating';
+    this.emitStatus(params.serverId);
+
+    try {
+      await this.runAuthStage(params);
+    } catch (error) {
+      active.socket = undefined;
+      active.connectedAt = undefined;
+      active.state = 'error';
+      active.error = `Authentication failed: ${formatSocketError(error)}`;
+      active.reasonCode = 'auth_failed';
+      try {
+        socket.removeAllListeners();
+        socket.destroy();
+      } catch {
+        // Ignore teardown races.
+      }
+      this.emitStatus(params.serverId);
+      logStarmoteDebug('session.connect.auth_failed', {
+        serverId: params.serverId,
+        error: active.error,
+      });
+      return {
+        success: false,
+        error: active.error,
+        status: this.getStatusFor(params.serverId),
+      };
+    }
+
+    active.state = 'ready';
+    active.reasonCode = 'ready';
 
     socket.on('error', (error) => {
       const current = this.sessions.get(params.serverId);
@@ -221,7 +263,7 @@ export class StarmoteSessionManager {
       if (!current || current.generation !== generation) return;
       current.socket = undefined;
       current.connectedAt = undefined;
-      if (current.state === 'connected') {
+      if (current.state === 'connected' || current.state === 'authenticating' || current.state === 'ready') {
         current.state = 'idle';
         current.reasonCode = 'closed';
       }

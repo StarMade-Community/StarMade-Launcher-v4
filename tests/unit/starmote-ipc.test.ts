@@ -108,15 +108,15 @@ describe('StarMote IPC handlers', () => {
 
     expect(result.success).toBe(true);
     expect(result.status?.connected).toBe(true);
-    expect(result.status?.state).toBe('connected');
-    expect(result.status?.reasonCode).toBe('connected');
+    expect(result.status?.state).toBe('ready');
+    expect(result.status?.reasonCode).toBe('ready');
     expect(result.status?.serverId).toBe('srv-1');
     expect(result.status?.host).toBe('127.0.0.1');
 
     const statusAll = await harness.call(IPC.STARMOTE_STATUS) as { statuses: Array<{ serverId: string; connected: boolean }> };
     expect(statusAll.statuses).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ serverId: 'srv-1', connected: true }),
+        expect.objectContaining({ serverId: 'srv-1', connected: true, isReady: true }),
       ]),
     );
 
@@ -161,6 +161,7 @@ describe('StarMote IPC handlers', () => {
     expect(result.status).toEqual({
       serverId: 'srv-3',
       connected: false,
+      isReady: false,
       state: 'idle',
       host: '127.0.0.1',
       port: 5000,

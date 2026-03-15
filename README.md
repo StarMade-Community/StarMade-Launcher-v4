@@ -181,6 +181,36 @@ tests/
 
 ---
 
+## StarMote Troubleshooting
+
+Current scope: StarMote in this launcher currently validates transport connectivity and basic session status, but does not yet complete full command-level protocol readiness.
+
+### Quick checks
+
+- Verify host/port and firewall rules first (client -> server TCP path).
+- Use the Server Panel status text and reason code to classify failures.
+- Enable debug tracing when needed:
+
+```bash
+STARMOTE_DEBUG=1 npm run electron:dev
+```
+
+### Reason codes and first actions
+
+- `timeout` - server did not answer in time; verify host/port reachability and listening socket.
+- `connect_failed` - TCP connect failed immediately; verify IP/DNS, port, and server uptime.
+- `socket_error` - connection dropped after connect; inspect server logs and network stability.
+- `closed` - remote side closed a previously connected socket; check server-side disconnect cause.
+- `disconnected` - local/manual disconnect (or connect cancelled) was requested.
+- `replaced` - a new connect attempt replaced an older in-flight/active session.
+
+### Known limitation
+
+- A `connected` transport state does not yet mean protocol-ready command flow.
+- Planned follow-up work is tracked in `TODO.md` under section `## 2) Main-Process StarMote Protocol Layer` and section `## 3) Command Registry and Packet Handling`.
+
+---
+
 ## Links
 
 - **Official Website**: https://www.star-made.org/

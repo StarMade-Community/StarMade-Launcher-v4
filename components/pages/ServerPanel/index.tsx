@@ -92,13 +92,14 @@ interface ChatChannelInfo {
 interface RemoteConnectionStatus {
   serverId: string;
   connected: boolean;
-  state?: 'idle' | 'connecting' | 'connected' | 'error';
+  state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
+  isReady?: boolean;
   host?: string;
   port?: number;
   username?: string;
   connectedAt?: string;
   error?: string;
-  reasonCode?: 'connected' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
+  reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
 }
 
 const GENERAL_CHANNEL_ID = 'all';
@@ -2140,6 +2141,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const remoteConnectionDisplay = useMemo(() => {
     if (remoteConnectionStatus?.state === 'connecting') {
       return { label: 'Connecting', className: 'text-amber-300' };
+    }
+    if (remoteConnectionStatus?.state === 'authenticating') {
+      return { label: 'Authenticating', className: 'text-amber-300' };
+    }
+    if (remoteConnectionStatus?.state === 'ready' || remoteConnectionStatus?.isReady) {
+      return { label: 'Ready', className: 'text-emerald-300' };
     }
     if (remoteConnectionStatus?.connected) {
       return { label: 'Connected', className: 'text-emerald-300' };
