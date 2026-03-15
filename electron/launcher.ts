@@ -329,6 +329,68 @@ export interface LaunchResult {
   error?: string;
 }
 
+export interface LaunchCommandArgOptions {
+  jvmArgList: string[];
+  isServer?: boolean;
+  serverPort?: number;
+  authToken?: string;
+  uplink?: string;
+  uplinkPort?: number;
+  modIds?: string[];
+}
+
+/** Build raw argv for the spawned Java process. */
+export function buildLaunchArgs(options: LaunchCommandArgOptions): string[] {
+  const {
+    jvmArgList,
+    isServer = false,
+    serverPort,
+    authToken,
+    uplink,
+    uplinkPort,
+    modIds,
+  } = options;
+
+  const args = [
+    ...jvmArgList,
+    '-jar',
+    'StarMade.jar',
+    '-force',
+  ];
+
+  if (isServer) {
+    args.push('-server');
+    if (serverPort) {
+      args.push('-port', String(serverPort));
+    }
+  }
+
+  if (authToken) {
+    args.push('-auth', authToken);
+  }
+
+  if (uplink) {
+    args.push('-uplink', uplink, String(uplinkPort ?? 4242));
+    if (modIds && modIds.length > 0) {
+      args.push(modIds.join(','));
+    }
+  }
+
+  return args;
+}
+
+/** Build a redacted argv copy safe for log output. */
+export function redactLaunchArgs(args: string[], authToken?: string): string[] {
+  if (!authToken) return args;
+
+  return args.map((arg) => {
+    if (arg === authToken) return '[REDACTED]';
+    if (arg.startsWith('-auth=')) return '-auth=[REDACTED]';
+    if (arg.startsWith('-auth ')) return '-auth [REDACTED]';
+    return arg;
+  });
+}
+
 /**
  * Launch StarMade or a StarMade server as a child process.
  */
@@ -423,49 +485,24 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
       jvmArgList.push(...jvmArgs.trim().split(/\s+/));
     }
 
-    // Build full command
-    const args = [
-      ...jvmArgList,
-      '-jar',
-      'StarMade.jar',
-      '-force' //StarMade requires this for some stupid reason
-    ];
+    const args = buildLaunchArgs({
+      jvmArgList,
+      isServer,
+      serverPort,
+      authToken,
+      uplink,
+      uplinkPort,
+      modIds,
+    });
 
-    // Add server-specific arguments
-    if (isServer) {
-      args.push('-server');
-      if (serverPort) {
-        args.push('-port', String(serverPort));
-      }
-    }
-
-    // Pass the authentication token to the game so players don't need to
-    // log in again through the in-game menu. Modern Starter parsing accepts
-    // "-auth <token>" directly, so keep token as a separate argv entry.
+    // Keep auth-injected status log for easier diagnostics.
     if (authToken) {
-      args.push('-auth', authToken);
       sendLogEvent(installationId, 'INFO', 'Auth token injected.');
-    }
-
-    // Direct-connect to a world or server via -uplink.
-    // Format: -uplink <address> <port> [<comma-separated-mod-ids>]
-    if (uplink) {
-      args.push('-uplink', uplink, String(uplinkPort ?? 4242));
-      if (modIds && modIds.length > 0) {
-        args.push(modIds.join(','));
-      }
     }
 
     // Build a redacted copy of args for logging so the auth token is never
     // written to any log in plaintext.
-    const safeArgs = authToken
-      ? args.map((a) => {
-          if (a === authToken) return '[REDACTED]';
-          if (a.startsWith('-auth=')) return '-auth=[REDACTED]';
-          if (a.startsWith('-auth ')) return '-auth [REDACTED]';
-          return a;
-        })
-      : args;
+    const safeArgs = redactLaunchArgs(args, authToken);
 
     console.log(`[Launcher] Launching: ${javaPath} ${safeArgs.join(' ')}`);
     console.log(`[Launcher] Working directory: ${installationPath}`);

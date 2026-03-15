@@ -1,4 +1,6 @@
- export interface SocketLike {
+import { logStarmoteDebug } from './starmote-debug.js';
+
+export interface SocketLike {
   setNoDelay(noDelay?: boolean): void;
   setTimeout(timeout: number): void;
   once(event: 'connect' | 'timeout' | 'error' | 'close', listener: (...args: unknown[]) => void): this;
@@ -100,8 +102,16 @@ export class StarmoteSessionManager {
   }
 
   async connect(params: StarmoteConnectParams): Promise<{ success: boolean; status: StarmoteConnectionStatus; error?: string }> {
+    logStarmoteDebug('session.connect.start', {
+      serverId: params.serverId,
+      host: params.host,
+      port: params.port,
+      username: params.username,
+    });
+
     const previous = this.sessions.get(params.serverId);
     if (previous?.socket) {
+      logStarmoteDebug('session.connect.replace_existing', { serverId: params.serverId });
       this.disconnect(params.serverId, false, 'replaced');
     }
 
@@ -149,6 +159,7 @@ export class StarmoteSessionManager {
 
     const active = this.sessions.get(params.serverId);
     if (!active || active.generation !== generation) {
+      logStarmoteDebug('session.connect.replaced_during_attempt', { serverId: params.serverId, generation });
       return {
         success: false,
         status: this.getStatusFor(params.serverId),
@@ -165,6 +176,11 @@ export class StarmoteSessionManager {
       active.reasonCode = reasonCode;
       try { socket.destroy(); } catch { /* ignore */ }
       this.emitStatus(params.serverId);
+      logStarmoteDebug('session.connect.failed', {
+        serverId: params.serverId,
+        reasonCode,
+        error,
+      });
       return {
         success: false,
         error,
@@ -193,6 +209,11 @@ export class StarmoteSessionManager {
         // Ignore teardown races.
       }
       this.emitStatus(params.serverId);
+      logStarmoteDebug('session.socket.error', {
+        serverId: params.serverId,
+        reasonCode: current.reasonCode,
+        error: current.error,
+      });
     });
 
     socket.on('close', () => {
@@ -205,9 +226,20 @@ export class StarmoteSessionManager {
         current.reasonCode = 'closed';
       }
       this.emitStatus(params.serverId);
+      logStarmoteDebug('session.socket.closed', {
+        serverId: params.serverId,
+        reasonCode: current.reasonCode,
+      });
     });
 
     this.emitStatus(params.serverId);
+    logStarmoteDebug('session.connect.success', {
+      serverId: params.serverId,
+      host: params.host,
+      port: params.port,
+      username: params.username,
+      state: active.state,
+    });
     return {
       success: true,
       status: this.getStatusFor(params.serverId),
@@ -217,6 +249,7 @@ export class StarmoteSessionManager {
   disconnect(serverId: string, preserveError = true, reasonCode: StarmoteReasonCode = 'disconnected'): StarmoteConnectionStatus {
     const session = this.sessions.get(serverId);
     if (!session) {
+      logStarmoteDebug('session.disconnect.missing', { serverId, reasonCode });
       return {
         serverId,
         connected: false,
@@ -247,6 +280,13 @@ export class StarmoteSessionManager {
     }
 
     this.emitStatus(serverId);
+    logStarmoteDebug('session.disconnect.done', {
+      serverId,
+      reasonCode,
+      preserveError,
+      hadSocket,
+      wasConnecting,
+    });
     return this.getStatusFor(serverId);
   }
 

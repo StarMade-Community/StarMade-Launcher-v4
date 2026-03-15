@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
 
 import { IPC } from '../../electron/ipc-channels.js';
@@ -77,9 +77,20 @@ function createHarness() {
 
 describe('StarMote IPC handlers', () => {
   let harness: ReturnType<typeof createHarness>;
+  const originalDebug = process.env.STARMOTE_DEBUG;
 
   beforeEach(() => {
+    delete process.env.STARMOTE_DEBUG;
     harness = createHarness();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (originalDebug === undefined) {
+      delete process.env.STARMOTE_DEBUG;
+    } else {
+      process.env.STARMOTE_DEBUG = originalDebug;
+    }
   });
 
   it('rejects invalid connect payloads', async () => {
@@ -158,6 +169,25 @@ describe('StarMote IPC handlers', () => {
       error: undefined,
       reasonCode: 'disconnected',
     });
+  });
+
+  it('emits debug logs for IPC operations when STARMOTE_DEBUG is enabled', async () => {
+    process.env.STARMOTE_DEBUG = '1';
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    harness = createHarness();
+
+    await harness.call(IPC.STARMOTE_CONNECT, {
+      serverId: 'srv-debug-ipc',
+      host: '127.0.0.1',
+      port: 4242,
+    });
+    await harness.call(IPC.STARMOTE_STATUS, { serverId: 'srv-debug-ipc' });
+    await harness.call(IPC.STARMOTE_DISCONNECT, { serverId: 'srv-debug-ipc' });
+
+    expect(debugSpy.mock.calls.some((call) => String(call[0]).includes('[StarMote] ipc.registered'))).toBe(true);
+    expect(debugSpy.mock.calls.some((call) => String(call[0]).includes('[StarMote] ipc.connect.request'))).toBe(true);
+    expect(debugSpy.mock.calls.some((call) => String(call[0]).includes('[StarMote] ipc.status.request'))).toBe(true);
+    expect(debugSpy.mock.calls.some((call) => String(call[0]).includes('[StarMote] ipc.disconnect.request'))).toBe(true);
   });
 });
 

@@ -4,6 +4,7 @@ import {
   type SocketLike,
   type StarmoteConnectionStatus,
 } from './starmote-session-manager.js';
+import { logStarmoteDebug } from './starmote-debug.js';
 
 interface BrowserWindowLike {
   isDestroyed(): boolean;
@@ -39,6 +40,7 @@ interface RegisterStarmoteIpcOptions {
 
 export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions): void {
   const { ipcMain, getAllWindows, createSocket } = options;
+  logStarmoteDebug('ipc.registered');
 
   const broadcastStarmoteStatus = (status: StarmoteConnectionStatus): void => {
     for (const window of getAllWindows()) {
@@ -65,9 +67,20 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
       const username = payload?.username?.trim() || undefined;
 
       if (!serverId || !host || !Number.isInteger(port) || port < 1 || port > 65535) {
+        logStarmoteDebug('ipc.connect.invalid_payload', {
+          serverId,
+          host,
+          hasValidPort: Number.isInteger(port) && port >= 1 && port <= 65535,
+        });
         return { success: false, error: 'serverId, host, and a valid port are required.' };
       }
 
+      logStarmoteDebug('ipc.connect.request', {
+        serverId,
+        host,
+        port,
+        username,
+      });
       return manager.connect({ serverId, host, port, username });
     },
   );
@@ -78,9 +91,11 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
       const payload = (payloadRaw ?? {}) as StarmoteDisconnectPayload;
       const serverId = payload?.serverId?.trim();
       if (!serverId) {
+        logStarmoteDebug('ipc.disconnect.invalid_payload');
         return { success: false, error: 'serverId is required.' };
       }
 
+      logStarmoteDebug('ipc.disconnect.request', { serverId });
       const status = manager.disconnect(serverId);
       return { success: true, status };
     },
@@ -91,6 +106,7 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
     (_event, payloadRaw): { statuses: StarmoteConnectionStatus[] } => {
       const payload = (payloadRaw ?? {}) as StarmoteStatusPayload;
       const requestedId = payload?.serverId?.trim();
+      logStarmoteDebug('ipc.status.request', { serverId: requestedId ?? null });
       if (requestedId) {
         return { statuses: [manager.getStatusFor(requestedId)] };
       }

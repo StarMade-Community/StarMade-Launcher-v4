@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
 
 import { StarmoteSessionManager } from '../../electron/starmote-session-manager.js';
@@ -59,9 +59,20 @@ function createHarness() {
 
 describe('StarmoteSessionManager', () => {
   let harness: ReturnType<typeof createHarness>;
+  const originalDebug = process.env.STARMOTE_DEBUG;
 
   beforeEach(() => {
     harness = createHarness();
+    delete process.env.STARMOTE_DEBUG;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (originalDebug === undefined) {
+      delete process.env.STARMOTE_DEBUG;
+    } else {
+      process.env.STARMOTE_DEBUG = originalDebug;
+    }
   });
 
   it('reports connecting then connected for a successful session', async () => {
@@ -152,6 +163,33 @@ describe('StarmoteSessionManager', () => {
     const recoveredStatus = harness.manager.getStatusFor('srv-5');
     expect(recoveredStatus.state).toBe('connected');
     expect(recoveredStatus.error).toBeUndefined();
+  });
+
+  it('does not emit debug logs when STARMOTE_DEBUG is not enabled', async () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+
+    await harness.manager.connect({
+      serverId: 'srv-debug-off',
+      host: '127.0.0.1',
+      port: 4242,
+    });
+
+    expect(debugSpy).not.toHaveBeenCalled();
+  });
+
+  it('emits debug logs when STARMOTE_DEBUG is enabled', async () => {
+    process.env.STARMOTE_DEBUG = '1';
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+
+    await harness.manager.connect({
+      serverId: 'srv-debug-on',
+      host: '127.0.0.1',
+      port: 4242,
+    });
+
+    expect(debugSpy).toHaveBeenCalled();
+    expect(debugSpy.mock.calls.some((call) => String(call[0]).includes('[StarMote] session.connect.start'))).toBe(true);
+    expect(debugSpy.mock.calls.some((call) => String(call[0]).includes('[StarMote] session.connect.success'))).toBe(true);
   });
 });
 
