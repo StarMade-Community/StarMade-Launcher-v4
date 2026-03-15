@@ -372,6 +372,7 @@ if (isStarmoteRolloutEnabled()) {
     getAllWindows: () => BrowserWindow.getAllWindows(),
     createSocket: () => new net.Socket(),
     adminCommandPassword: starmoteAdminCommandPassword,
+    resolveAuthTokenForAccount: getAccessTokenForLaunch,
   });
 } else {
   console.info('[starmote] rollout disabled via STARMOTE_ENABLED=0');

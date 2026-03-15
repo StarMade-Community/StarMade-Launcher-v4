@@ -2170,6 +2170,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         return { label: 'Timed Out', className: 'text-red-300' };
       case 'connect_failed':
         return { label: 'Connect Failed', className: 'text-red-300' };
+      case 'auth_failed':
+        return { label: 'Authentication Failed', className: 'text-red-300' };
       case 'socket_error':
         return { label: 'Connection Error', className: 'text-red-300' };
       case 'protocol_timeout':
@@ -2187,7 +2189,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       case 'connect_failed':
         return 'Verify host/port, firewall rules, and that the game server is listening for StarMote.';
       case 'auth_failed':
-        return 'Authentication failed; refresh credentials and reconnect.';
+        if (remoteConnectionStatus?.error?.toLowerCase().includes('whitelist')) {
+          return 'Authentication failed: this account is not on the server whitelist.';
+        }
+        if (remoteConnectionStatus?.error?.toLowerCase().includes('admin permissions')) {
+          return 'Authentication failed: this account does not have required server admin permissions.';
+        }
+        return 'Authentication failed; verify StarMade account login in the launcher and reconnect.';
       case 'protocol_timeout':
         return 'Socket connected but protocol setup timed out. Reconnect and check server-side StarMote compatibility.';
       case 'registry_unavailable':
@@ -2201,7 +2209,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       default:
         return null;
     }
-  }, [remoteConnectionStatus?.reasonCode]);
+  }, [remoteConnectionStatus?.error, remoteConnectionStatus?.reasonCode]);
 
   const isRemoteServerProfile = !!effectiveServer?.isRemote;
   const canExecuteRemoteCommandActions = isRemoteCommandActionEnabled({
@@ -2292,6 +2300,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     const nextRemoteFilePort = remoteFileAccessPortInput.trim() || undefined;
     const nextRemoteFileUsername = remoteFileAccessUsernameInput.trim() || undefined;
     const nextRemoteFileRootPath = remoteFileAccessRootPathInput.trim() || undefined;
+    const activeAccountId = activeAccount?.id;
+
+    if (!activeAccountId) {
+      setRemoteConnectError('Sign in with a StarMade account to use StarMote remote control.');
+      return;
+    }
 
     setIsRemoteConnectPending(true);
     setRemoteConnectError(null);
@@ -2302,6 +2316,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         host,
         port: parsedPort,
         username,
+        clientVersion: targetServer.version?.trim() || undefined,
+        activeAccountId,
       });
       if (!connectResult.success) {
         setRemoteConnectError(connectResult.error ?? 'Failed to establish StarMote connection.');
@@ -2338,6 +2354,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setIsRemoteConnectPending(false);
     }
   }, [
+    activeAccount?.id,
     hasStarmoteApi,
     remoteConnectUsernameInput,
     isRemoteConnectPending,

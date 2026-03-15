@@ -4,7 +4,11 @@ const PACKET_BODY_HEADER_BYTES = 7;
 
 const SCHINE_PACKET_BYTE = 42;
 const SCHINE_TYPE_PARAMETRIZED_COMMAND = 111;
+const SCHINE_TYPE_INT = 1;
+const SCHINE_TYPE_LONG = 2;
 const SCHINE_TYPE_STRING = 4;
+const SCHINE_TYPE_BYTE = 6;
+const LOGIN_COMMAND_ID = 0;
 const EXECUTE_ADMIN_COMMAND_ID = 2;
 
 export const STARMOTE_PROTOCOL_VERSION = 1;
@@ -12,6 +16,7 @@ export const STARMOTE_PROTOCOL_VERSION = 1;
 export type StarmoteWireMode = 'length-prefixed' | 'legacy-sm4t';
 
 export const STARMOTE_COMMAND_IDS = {
+  LOGIN: 0x0000,
   ADMIN_COMMAND: 0x0101,
 } as const;
 
@@ -24,6 +29,15 @@ export interface StarmoteDecodedPacket {
 export interface ExecuteAdminCommandReturnPacket {
   commandId: number;
   stringParams: string[];
+}
+
+export interface LoginResponsePacket {
+  commandId: number;
+  code: number;
+  clientId: number;
+  serverTimeMs: number;
+  serverVersion: string;
+  extraReason?: string;
 }
 
 function encodeJavaUtfString(value: string): Buffer {
@@ -87,6 +101,73 @@ export function encodeExecuteAdminCommandSuperPacket(command: string, serverPass
   payload.writeUInt8(SCHINE_TYPE_STRING, offset);
   offset += 1;
   commandUtf.copy(payload, offset);
+
+  const frame = Buffer.allocUnsafe(LENGTH_PREFIX_BYTES + payload.byteLength);
+  frame.writeUInt32BE(payload.byteLength, 0);
+  payload.copy(frame, LENGTH_PREFIX_BYTES);
+  return frame;
+}
+
+export interface EncodeLoginRequestOptions {
+  playerName: string;
+  clientVersion: string;
+  uniqueSessionId: string;
+  authToken: string;
+  userAgent?: number;
+}
+
+export function encodeLoginRequestSuperPacket(options: EncodeLoginRequestOptions): Uint8Array {
+  const playerNameUtf = encodeJavaUtfString(options.playerName);
+  const versionUtf = encodeJavaUtfString(options.clientVersion);
+  const uniqueSessionUtf = encodeJavaUtfString(options.uniqueSessionId);
+  const authTokenUtf = encodeJavaUtfString(options.authToken);
+  const userAgent = Number.isFinite(options.userAgent) ? Math.trunc(options.userAgent as number) : 1;
+
+  const payloadSize = 5
+    + 4
+    + (1 + playerNameUtf.byteLength)
+    + (1 + versionUtf.byteLength)
+    + (1 + uniqueSessionUtf.byteLength)
+    + (1 + authTokenUtf.byteLength)
+    + 2;
+  const payload = Buffer.allocUnsafe(payloadSize);
+
+  let offset = 0;
+  payload.writeUInt8(SCHINE_PACKET_BYTE, offset);
+  offset += 1;
+  payload.writeInt16BE(-1, offset);
+  offset += 2;
+  payload.writeUInt8(LOGIN_COMMAND_ID, offset);
+  offset += 1;
+  payload.writeUInt8(SCHINE_TYPE_PARAMETRIZED_COMMAND, offset);
+  offset += 1;
+
+  payload.writeInt32BE(5, offset);
+  offset += 4;
+
+  payload.writeUInt8(SCHINE_TYPE_STRING, offset);
+  offset += 1;
+  playerNameUtf.copy(payload, offset);
+  offset += playerNameUtf.byteLength;
+
+  payload.writeUInt8(SCHINE_TYPE_STRING, offset);
+  offset += 1;
+  versionUtf.copy(payload, offset);
+  offset += versionUtf.byteLength;
+
+  payload.writeUInt8(SCHINE_TYPE_STRING, offset);
+  offset += 1;
+  uniqueSessionUtf.copy(payload, offset);
+  offset += uniqueSessionUtf.byteLength;
+
+  payload.writeUInt8(SCHINE_TYPE_STRING, offset);
+  offset += 1;
+  authTokenUtf.copy(payload, offset);
+  offset += authTokenUtf.byteLength;
+
+  payload.writeUInt8(SCHINE_TYPE_BYTE, offset);
+  offset += 1;
+  payload.writeInt8(userAgent, offset);
 
   const frame = Buffer.allocUnsafe(LENGTH_PREFIX_BYTES + payload.byteLength);
   frame.writeUInt32BE(payload.byteLength, 0);
@@ -158,6 +239,112 @@ export function decodeExecuteAdminCommandReturnPacket(frame: Uint8Array):
     packet: {
       commandId,
       stringParams,
+    },
+  };
+}
+
+export function decodeLoginResponsePacket(frame: Uint8Array):
+  | { ok: true; packet: LoginResponsePacket }
+  | { ok: false; error: string } {
+  const data = Buffer.from(frame);
+  if (data.byteLength < LENGTH_PREFIX_BYTES + 9) {
+    return { ok: false, error: 'Frame too short for Login header.' };
+  }
+
+  const declaredPayloadLength = data.readUInt32BE(0);
+  if (declaredPayloadLength !== data.byteLength - LENGTH_PREFIX_BYTES) {
+    return { ok: false, error: 'Length-prefixed frame length mismatch.' };
+  }
+
+  const payload = data.subarray(LENGTH_PREFIX_BYTES);
+  if (payload.readUInt8(0) !== SCHINE_PACKET_BYTE) {
+    return { ok: false, error: 'Not a Schine super-packet frame.' };
+  }
+
+  const commandId = payload.readUInt8(3);
+  if (commandId !== LOGIN_COMMAND_ID) {
+    return { ok: false, error: 'Not a Login packet.' };
+  }
+
+  const packetType = payload.readUInt8(4);
+  if (packetType !== SCHINE_TYPE_PARAMETRIZED_COMMAND) {
+    return { ok: false, error: 'Unexpected Login packet type.' };
+  }
+
+  const parameterCount = payload.readInt32BE(5);
+  if (parameterCount < 4 || parameterCount > 5) {
+    return { ok: false, error: 'Login response parameter count is invalid.' };
+  }
+
+  let offset = 9;
+
+  const codeType = payload.readUInt8(offset);
+  offset += 1;
+  if (codeType !== SCHINE_TYPE_INT) {
+    return { ok: false, error: 'Login response code type mismatch.' };
+  }
+  const code = payload.readInt32BE(offset);
+  offset += 4;
+
+  const clientIdType = payload.readUInt8(offset);
+  offset += 1;
+  if (clientIdType !== SCHINE_TYPE_INT) {
+    return { ok: false, error: 'Login response client id type mismatch.' };
+  }
+  const clientId = payload.readInt32BE(offset);
+  offset += 4;
+
+  const serverTimeType = payload.readUInt8(offset);
+  offset += 1;
+  if (serverTimeType !== SCHINE_TYPE_LONG) {
+    return { ok: false, error: 'Login response server time type mismatch.' };
+  }
+  const serverTimeBigInt = payload.readBigInt64BE(offset);
+  offset += 8;
+  const serverTimeMs = Number(serverTimeBigInt);
+  if (!Number.isSafeInteger(serverTimeMs)) {
+    return { ok: false, error: 'Login response server time is out of range.' };
+  }
+
+  const versionType = payload.readUInt8(offset);
+  offset += 1;
+  if (versionType !== SCHINE_TYPE_STRING) {
+    return { ok: false, error: 'Login response version type mismatch.' };
+  }
+  const versionDecoded = decodeJavaUtfString(payload, offset);
+  if (versionDecoded.ok === false) {
+    return { ok: false, error: versionDecoded.error };
+  }
+  offset = versionDecoded.nextOffset;
+
+  let extraReason: string | undefined;
+  if (parameterCount === 5) {
+    const reasonType = payload.readUInt8(offset);
+    offset += 1;
+    if (reasonType !== SCHINE_TYPE_STRING) {
+      return { ok: false, error: 'Login response extra reason type mismatch.' };
+    }
+    const reasonDecoded = decodeJavaUtfString(payload, offset);
+    if (reasonDecoded.ok === false) {
+      return { ok: false, error: reasonDecoded.error };
+    }
+    offset = reasonDecoded.nextOffset;
+    extraReason = reasonDecoded.value;
+  }
+
+  if (offset !== payload.byteLength) {
+    return { ok: false, error: 'Unexpected trailing bytes in Login payload.' };
+  }
+
+  return {
+    ok: true,
+    packet: {
+      commandId,
+      code,
+      clientId,
+      serverTimeMs,
+      serverVersion: versionDecoded.value,
+      extraReason,
     },
   };
 }

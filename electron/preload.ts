@@ -352,6 +352,8 @@ const launcherApi = {
       host: string;
       port: number;
       username?: string;
+      clientVersion?: string;
+      activeAccountId: string;
     }): Promise<{
       success: boolean;
       status?: {

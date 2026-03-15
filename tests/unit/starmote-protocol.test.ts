@@ -2,9 +2,11 @@ import { describe, it, expect } from 'vitest';
 
 import {
   decodeExecuteAdminCommandReturnPacket,
+  decodeLoginResponsePacket,
   decodeStarmotePacket,
   encodeAdminCommandPacket,
   encodeExecuteAdminCommandSuperPacket,
+  encodeLoginRequestSuperPacket,
   encodeStarmotePacket,
   STARMOTE_COMMAND_IDS,
   STARMOTE_PROTOCOL_VERSION,
@@ -40,6 +42,64 @@ function createExecuteAdminCommandResponseFrame(lines: string[]): Buffer {
     offset += 1;
     part.copy(payload, offset);
     offset += part.byteLength;
+  }
+
+  const frame = Buffer.allocUnsafe(4 + payload.byteLength);
+  frame.writeUInt32BE(payload.byteLength, 0);
+  payload.copy(frame, 4);
+  return frame;
+}
+
+function createLoginResponseFrame(code: number, extraReason?: string): Buffer {
+  const version = encodeJavaUtf('0.203.999');
+  const reason = encodeJavaUtf(extraReason ?? '');
+  const hasReason = typeof extraReason === 'string';
+  const parameterCount = hasReason ? 5 : 4;
+  const payloadLength = 5
+    + 4
+    + 1 + 4
+    + 1 + 4
+    + 1 + 8
+    + 1 + version.byteLength
+    + (hasReason ? 1 + reason.byteLength : 0);
+  const payload = Buffer.allocUnsafe(payloadLength);
+
+  let offset = 0;
+  payload.writeUInt8(42, offset);
+  offset += 1;
+  payload.writeInt16BE(-1, offset);
+  offset += 2;
+  payload.writeUInt8(0, offset);
+  offset += 1;
+  payload.writeUInt8(111, offset);
+  offset += 1;
+  payload.writeInt32BE(parameterCount, offset);
+  offset += 4;
+
+  payload.writeUInt8(1, offset);
+  offset += 1;
+  payload.writeInt32BE(code, offset);
+  offset += 4;
+
+  payload.writeUInt8(1, offset);
+  offset += 1;
+  payload.writeInt32BE(123, offset);
+  offset += 4;
+
+  payload.writeUInt8(2, offset);
+  offset += 1;
+  payload.writeBigInt64BE(BigInt(1710450000000), offset);
+  offset += 8;
+
+  payload.writeUInt8(4, offset);
+  offset += 1;
+  version.copy(payload, offset);
+  offset += version.byteLength;
+
+  if (hasReason) {
+    payload.writeUInt8(4, offset);
+    offset += 1;
+    reason.copy(payload, offset);
   }
 
   const frame = Buffer.allocUnsafe(4 + payload.byteLength);
@@ -116,6 +176,34 @@ describe('starmote-protocol framing', () => {
         'SQL QUERY 19 BEGIN',
         'SQL#19: id,name',
       ]);
+    }
+  });
+
+  it('encodes Login request packet with expected command id and typed parameters', () => {
+    const frame = Buffer.from(encodeLoginRequestSuperPacket({
+      playerName: 'AdminUser',
+      clientVersion: '0.203.999',
+      uniqueSessionId: 'acct-1',
+      authToken: 'token-123',
+      userAgent: 1,
+    }));
+
+    expect(frame.readUInt32BE(0)).toBe(frame.byteLength - 4);
+    expect(frame.readUInt8(4)).toBe(42);
+    expect(frame.readUInt8(7)).toBe(0);
+    expect(frame.readUInt8(8)).toBe(111);
+    expect(frame.readInt32BE(9)).toBe(5);
+  });
+
+  it('decodes Login response packets with optional extra reason', () => {
+    const frame = createLoginResponseFrame(-7, 'auth failed');
+    const decoded = decodeLoginResponsePacket(frame);
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok) {
+      expect(decoded.packet.code).toBe(-7);
+      expect(decoded.packet.clientId).toBe(123);
+      expect(decoded.packet.serverVersion).toBe('0.203.999');
+      expect(decoded.packet.extraReason).toBe('auth failed');
     }
   });
 });

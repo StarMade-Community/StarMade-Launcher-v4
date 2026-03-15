@@ -23,6 +23,8 @@ interface StarmoteConnectPayload {
   host: string;
   port: number;
   username?: string;
+  clientVersion?: string;
+  activeAccountId: string;
 }
 
 interface StarmoteDisconnectPayload {
@@ -44,10 +46,19 @@ interface RegisterStarmoteIpcOptions {
   getAllWindows: () => BrowserWindowLike[];
   createSocket: () => SocketLike;
   adminCommandPassword?: string;
+  resolveAuthTokenForAccount?: (accountId: string) => Promise<string | null>;
+  loginClientVersion?: string;
 }
 
 export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions): void {
-  const { ipcMain, getAllWindows, createSocket, adminCommandPassword } = options;
+  const {
+    ipcMain,
+    getAllWindows,
+    createSocket,
+    adminCommandPassword,
+    resolveAuthTokenForAccount,
+    loginClientVersion,
+  } = options;
   logStarmoteDebug('ipc.registered');
 
   const broadcastStarmoteStatus = (status: StarmoteConnectionStatus): void => {
@@ -69,6 +80,15 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
     onStatusChanged: broadcastStarmoteStatus,
     onRuntimeEvent: broadcastRuntimeEvent,
     adminCommandPassword,
+    loginClientVersion,
+    runAuthStage: async (params) => {
+      if (!params.activeAccountId) {
+        throw new Error('StarMade account authentication is required for StarMote.');
+      }
+      if (!params.authToken) {
+        throw new Error('Auth token missing or expired for the selected launcher account. Please sign in again.');
+      }
+    },
   });
 
   ipcMain.handle(
@@ -81,7 +101,9 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
       const serverId = payload?.serverId?.trim();
       const host = payload?.host?.trim();
       const port = Number.isFinite(payload?.port) ? Math.trunc(payload.port) : Number.NaN;
-      const username = payload?.username?.trim() || undefined;
+      const clientVersion = payload?.clientVersion?.trim() || undefined;
+      const activeAccountId = payload?.activeAccountId?.trim() || undefined;
+      const username = payload?.username?.trim() || activeAccountId || undefined;
 
       if (!serverId || !host || !Number.isInteger(port) || port < 1 || port > 65535) {
         logStarmoteDebug('ipc.connect.invalid_payload', {
@@ -91,14 +113,35 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
         });
         return { success: false, error: 'serverId, host, and a valid port are required.' };
       }
+      if (!activeAccountId) {
+        return { success: false, error: 'StarMade account authentication is required for StarMote.' };
+      }
 
       logStarmoteDebug('ipc.connect.request', {
         serverId,
         host,
         port,
         username,
+        clientVersion,
+        activeAccountId,
       });
-      return manager.connect({ serverId, host, port, username });
+
+      let authToken: string | undefined;
+      if (!resolveAuthTokenForAccount) {
+        return { success: false, error: 'Auth token resolver is unavailable in this build.' };
+      }
+
+      try {
+        const resolvedToken = await resolveAuthTokenForAccount(activeAccountId);
+        authToken = resolvedToken ?? undefined;
+      } catch (error) {
+        return { success: false, error: `Failed to resolve launcher auth token: ${String(error)}` };
+      }
+      if (!authToken) {
+        return { success: false, error: 'StarMade account authentication is required for StarMote. Please sign in again.' };
+      }
+
+      return manager.connect({ serverId, host, port, username, clientVersion, activeAccountId, authToken });
     },
   );
 

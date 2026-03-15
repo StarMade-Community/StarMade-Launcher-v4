@@ -363,7 +363,7 @@ export const IPC = {
 
   /**
    * Renderer → Main (invoke): open a StarMote remote TCP session for a server profile.
-   * Payload: { serverId: string; host: string; port: number; username?: string }
+   * Payload: { serverId: string; host: string; port: number; username?: string; clientVersion?: string; activeAccountId: string }
    */
   STARMOTE_CONNECT: 'starmote:connect',
 

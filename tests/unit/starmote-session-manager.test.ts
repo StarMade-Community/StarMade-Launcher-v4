@@ -44,6 +44,60 @@ function createExecuteAdminCommandResponseFrame(lines: string[]): Buffer {
   return frame;
 }
 
+function createTimestampedLoginResponseFrame(code: number, extraReason?: string): Buffer {
+  const version = encodeJavaUtf('0.203.999');
+  const reason = encodeJavaUtf(extraReason ?? '');
+  const hasReason = typeof extraReason === 'string';
+  const parameterCount = hasReason ? 5 : 4;
+  const payloadLength = 5
+    + 4
+    + 1 + 4
+    + 1 + 4
+    + 1 + 8
+    + 1 + version.byteLength
+    + (hasReason ? 1 + reason.byteLength : 0);
+  const payload = Buffer.allocUnsafe(payloadLength);
+
+  let offset = 0;
+  payload.writeUInt8(42, offset);
+  offset += 1;
+  payload.writeInt16BE(-1, offset);
+  offset += 2;
+  payload.writeUInt8(0, offset);
+  offset += 1;
+  payload.writeUInt8(111, offset);
+  offset += 1;
+  payload.writeInt32BE(parameterCount, offset);
+  offset += 4;
+  payload.writeUInt8(1, offset);
+  offset += 1;
+  payload.writeInt32BE(code, offset);
+  offset += 4;
+  payload.writeUInt8(1, offset);
+  offset += 1;
+  payload.writeInt32BE(777, offset);
+  offset += 4;
+  payload.writeUInt8(2, offset);
+  offset += 1;
+  payload.writeBigInt64BE(BigInt(Date.now()), offset);
+  offset += 8;
+  payload.writeUInt8(4, offset);
+  offset += 1;
+  version.copy(payload, offset);
+  offset += version.byteLength;
+  if (hasReason) {
+    payload.writeUInt8(4, offset);
+    offset += 1;
+    reason.copy(payload, offset);
+  }
+
+  const frame = Buffer.allocUnsafe(4 + 8 + payload.byteLength);
+  frame.writeUInt32BE(payload.byteLength, 0);
+  frame.writeBigInt64BE(BigInt(Date.now()), 4);
+  payload.copy(frame, 12);
+  return frame;
+}
+
 class FakeSocket extends EventEmitter {
   public behavior: 'connect' | 'error' | 'timeout' | 'manual' = 'connect';
   public destroyed = false;
@@ -108,6 +162,7 @@ function createHarness() {
         commandId: event.commandId,
       });
     },
+    loginHandshakeEnabled: false,
   });
 
   return { manager, sockets, emitted, runtimeEvents };
@@ -121,6 +176,7 @@ function createHandshakeTimeoutHarness() {
     },
     handshakeTimeoutMs: 20,
     handshakeRetries: 1,
+    loginHandshakeEnabled: false,
   });
 
   return { manager };
@@ -132,6 +188,7 @@ function createAuthFailHarness() {
     runAuthStage: async () => {
       throw new Error('bad credentials');
     },
+    loginHandshakeEnabled: false,
   });
 
   return { manager };
@@ -246,7 +303,7 @@ describe('StarmoteSessionManager', () => {
     expect(recoveredStatus.error).toBeUndefined();
   });
 
-  it('transitions to registry_unavailable when auth stage throws', async () => {
+  it('transitions to auth_failed when auth stage throws', async () => {
     const authFailHarness = createAuthFailHarness();
     const result = await authFailHarness.manager.connect({
       serverId: 'srv-auth-fail',
@@ -256,8 +313,73 @@ describe('StarmoteSessionManager', () => {
 
     expect(result.success).toBe(false);
     expect(result.status.state).toBe('error');
-    expect(result.status.reasonCode).toBe('registry_unavailable');
-    expect(result.status.error).toContain('Authentication/registry setup failed: bad credentials');
+    expect(result.status.reasonCode).toBe('auth_failed');
+    expect(result.status.error).toContain('Authentication failed: bad credentials');
+  });
+
+  it('completes login handshake when timestamped login response is received', async () => {
+    class LoginSocket extends FakeSocket {
+      override write(data: Uint8Array): boolean {
+        const raw = Buffer.from(data);
+        const isLoginPacket = raw.byteLength >= 9 && raw.readUInt8(4) === 42 && raw.readUInt8(7) === 0;
+        if (isLoginPacket) {
+          setTimeout(() => {
+            this.emit('data', createTimestampedLoginResponseFrame(0));
+          }, 0);
+        }
+        return super.write(data);
+      }
+    }
+
+    const manager = new StarmoteSessionManager({
+      createSocket: () => new LoginSocket(),
+      loginHandshakeEnabled: true,
+    });
+
+    const result = await manager.connect({
+      serverId: 'srv-login-ok',
+      host: '127.0.0.1',
+      port: 4242,
+      activeAccountId: 'acct-1',
+      username: 'AdminUser',
+      authToken: 'token-abc',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.status.state).toBe('ready');
+  });
+
+  it('maps login reject code diagnostics to auth_failed status errors', async () => {
+    class LoginRejectSocket extends FakeSocket {
+      override write(data: Uint8Array): boolean {
+        const raw = Buffer.from(data);
+        const isLoginPacket = raw.byteLength >= 9 && raw.readUInt8(4) === 42 && raw.readUInt8(7) === 0;
+        if (isLoginPacket) {
+          setTimeout(() => {
+            this.emit('data', createTimestampedLoginResponseFrame(-10, 'auth required')); 
+          }, 0);
+        }
+        return super.write(data);
+      }
+    }
+
+    const manager = new StarmoteSessionManager({
+      createSocket: () => new LoginRejectSocket(),
+      loginHandshakeEnabled: true,
+    });
+
+    const result = await manager.connect({
+      serverId: 'srv-login-reject',
+      host: '127.0.0.1',
+      port: 4242,
+      activeAccountId: 'acct-1',
+      username: 'AdminUser',
+      authToken: 'token-abc',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status.reasonCode).toBe('auth_failed');
+    expect(result.status.error).toContain('requires StarMade account authentication');
   });
 
   it('fails with protocol_timeout when command-registry handshake times out', async () => {
