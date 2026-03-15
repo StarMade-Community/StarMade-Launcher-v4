@@ -127,6 +127,7 @@ type Handler = (event: unknown, payload?: unknown) => unknown;
 function createHarness(options?: {
   resolveAuthTokenForAccount?: (accountId: string) => Promise<string | null>;
   loginResponseCode?: number;
+  socketBehavior?: 'connect' | 'error' | 'timeout';
 }) {
   const handlers = new Map<string, Handler>();
   const sent: Array<{ channel: string; payload: unknown }> = [];
@@ -149,6 +150,7 @@ function createHarness(options?: {
     createSocket: () => {
       const socket = new FakeSocket();
       socket.loginResponseCode = options?.loginResponseCode ?? 0;
+      socket.behavior = options?.socketBehavior ?? 'connect';
       sockets.push(socket);
       return socket;
     },
@@ -195,14 +197,15 @@ describe('StarMote IPC handlers', () => {
     expect(result).toEqual({ success: false, error: 'serverId, host, and a valid port are required.' });
   });
 
-  it('requires active account authentication for connect', async () => {
+  it('allows standalone connect without active launcher account', async () => {
     const result = await harness.call(IPC.STARMOTE_CONNECT, {
       serverId: 'srv-auth-required',
       host: '127.0.0.1',
       port: 4242,
+      username: 'admin',
     });
 
-    expect(result).toEqual({ success: false, error: 'StarMade account authentication is required for StarMote.' });
+    expect((result as { success: boolean }).success).toBe(true);
   });
 
   it('connects successfully and reports connected status', async () => {
@@ -232,15 +235,13 @@ describe('StarMote IPC handlers', () => {
   });
 
   it('stores connection errors and exposes them via status', async () => {
+    harness = createHarness({ socketBehavior: 'error' });
     const connectPromise = harness.call(IPC.STARMOTE_CONNECT, {
       serverId: 'srv-2',
       host: '10.0.0.2',
       port: 4242,
       activeAccountId: 'acct-1',
     }) as Promise<{ success: boolean; error?: string; status?: { connected: boolean; error?: string; state?: string; reasonCode?: string } }>;
-
-    await Promise.resolve();
-    harness.sockets[0].behavior = 'error';
     const result = await connectPromise;
 
     expect(result.success).toBe(false);
@@ -255,7 +256,7 @@ describe('StarMote IPC handlers', () => {
     expect(statusSingle.statuses[0]?.error).toContain('Connection failed:');
   });
 
-  it('fails connect when selected account has no usable token', async () => {
+  it('connects in standalone mode when account token is unavailable', async () => {
     harness = createHarness({
       resolveAuthTokenForAccount: async () => null,
     });
@@ -267,9 +268,8 @@ describe('StarMote IPC handlers', () => {
       activeAccountId: 'acct-1',
     }) as { success: boolean; error?: string; status?: { state?: string; reasonCode?: string } };
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('StarMade account authentication is required for StarMote');
-    expect(result.status).toBeUndefined();
+    expect(result.success).toBe(true);
+    expect(result.error).toBeUndefined();
   });
 
   it('surfaces user-friendly auth diagnostics when login is rejected by server', async () => {
