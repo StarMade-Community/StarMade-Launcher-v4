@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { ManagedItem, ServerLifecycleState } from '../../types';
 import {
   buildDatabaseEntityListSql,
+  formatDatabaseEntityType,
   getDefaultRemoteFileAccessPort,
   isServerUpdateSupported,
   matchesDatabaseSectorLoadFilter,
@@ -101,6 +102,19 @@ describe('serverPanel helpers', () => {
     expect(sql).toContain('LEFT JOIN SECTORS');
     expect(sql).toContain('AS SECTOR_LOADED');
     expect(sql).not.toContain('WHERE s.TRANSIENT = FALSE');
+  });
+
+  it('formats known StarMade entity type codes for display', () => {
+    expect(formatDatabaseEntityType('1')).toBe('Shop');
+    expect(formatDatabaseEntityType('2')).toBe('Station');
+    expect(formatDatabaseEntityType('5')).toBe('Ship');
+    expect(formatDatabaseEntityType('8')).toBe('Planet Icon');
+  });
+
+  it('falls back gracefully for unknown or non-numeric entity type values', () => {
+    expect(formatDatabaseEntityType('99')).toBe('Type 99');
+    expect(formatDatabaseEntityType('NPC')).toBe('NPC');
+    expect(formatDatabaseEntityType('   ')).toBe('Unknown');
   });
 
   it('provides sensible default ports for FTP/SFTP planning fields', () => {

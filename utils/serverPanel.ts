@@ -62,6 +62,30 @@ export function buildDatabaseEntityListSql(): string {
   );
 }
 
+const ENTITY_TYPE_LABEL_BY_CODE: Record<number, string> = {
+  1: 'Shop',
+  2: 'Station',
+  3: 'Asteroid',
+  4: 'Planet Segment',
+  5: 'Ship',
+  6: 'Asteroid (Managed)',
+  7: 'Space Creature',
+  8: 'Planet Icon',
+};
+
+/**
+ * Convert StarMade entity TYPE values into human-readable labels for UI display.
+ */
+export function formatDatabaseEntityType(typeValue: string): string {
+  const numericCode = Number.parseInt(typeValue, 10);
+  if (!Number.isFinite(numericCode)) {
+    const trimmed = typeValue.trim();
+    return trimmed || 'Unknown';
+  }
+
+  return ENTITY_TYPE_LABEL_BY_CODE[numericCode] ?? `Type ${numericCode}`;
+}
+
 export function getDefaultRemoteFileAccessPort(protocol: RemoteFileAccessProtocol): string {
   if (protocol === 'sftp') return '22';
   if (protocol === 'ftp') return '21';

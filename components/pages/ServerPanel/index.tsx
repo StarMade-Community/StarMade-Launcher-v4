@@ -6,6 +6,7 @@ import { useApp } from '../../../contexts/AppContext';
 import type { ManagedItem, ServerLifecycleState, ServerLogLevel } from '../../../types';
 import {
   buildDatabaseEntityListSql,
+  formatDatabaseEntityType,
   getDefaultRemoteFileAccessPort,
   isServerUpdateSupported,
   matchesDatabaseSectorLoadFilter,
@@ -2018,7 +2019,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [databaseFactionFilter, setDatabaseFactionFilter] = useState<string>('all');
   const [databaseSectorLoadFilter, setDatabaseSectorLoadFilter] = useState<DatabaseSectorLoadFilter>('all');
   const [databaseSortKey, setDatabaseSortKey] = useState<DatabaseSortKey>('name-asc');
+  const [databaseEntitySearchTerm, setDatabaseEntitySearchTerm] = useState<string>('');
   const [databaseClipboardMsg, setDatabaseClipboardMsg] = useState<string | null>(null);
+  const [databaseInspectEntity, setDatabaseInspectEntity] = useState<DatabaseEntityRow | null>(null);
 
   const logContainerRef = useRef<HTMLDivElement>(null);
   const groupContainerRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -2026,7 +2029,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const dbLinesByRequestRef = useRef<Map<number, string[]>>(new Map());
   const dbTimeoutRef = useRef<number | null>(null);
   const databaseAutoLoadedServerIdsRef = useRef<Set<string>>(new Set());
-
   const { navigate } = useApp();
   const {
     servers,
@@ -2187,6 +2189,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setIsRemoteConnectModalOpen(false);
     setRemoteConnectError(null);
   }, [isRemoteConnectPending]);
+
+  const closeDatabaseInspectModal = useCallback(() => {
+    setDatabaseInspectEntity(null);
+  }, []);
 
   const handleRemoteConnect = useCallback(async () => {
     if (isRemoteConnectPending) return;
@@ -2753,7 +2759,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setDatabaseFactionFilter('all');
     setDatabaseSectorLoadFilter('all');
     setDatabaseSortKey('name-asc');
+    setDatabaseEntitySearchTerm('');
     setDatabaseClipboardMsg(null);
+    setDatabaseInspectEntity(null);
     pendingDbRequestRef.current = null;
     dbLinesByRequestRef.current.clear();
     if (dbTimeoutRef.current !== null) {
@@ -4185,8 +4193,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         return;
       }
 
-      // "SQL#N: <csv-row>"
-      const rowMatch = data.message.match(/^SQL#(\d+):\s*(.*)$/);
+      // "SQL#N: <csv-row>" (allow log prefixes like "[SERVER-LOCAL-ADMIN] ")
+      const rowMatch = data.message.match(/(?:^|\s)SQL#(\d+):\s*(.*)$/);
       if (rowMatch) {
         const rid = Number.parseInt(rowMatch[1], 10);
         const lines = dbLinesByRequestRef.current.get(rid) ?? [];
@@ -4224,6 +4232,20 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     return cleanup;
   }, [clearPendingDatabaseSql, effectiveServer]);
+
+  useEffect(() => {
+    if (!databaseInspectEntity) return;
+
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      closeDatabaseInspectModal();
+    };
+
+    window.addEventListener('keydown', onEscape);
+    return () => {
+      window.removeEventListener('keydown', onEscape);
+    };
+  }, [closeDatabaseInspectModal, databaseInspectEntity]);
 
   useEffect(() => {
     if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') {
@@ -4317,10 +4339,22 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   );
 
   const filteredSortedDatabaseEntities = useMemo(() => {
+    const search = databaseEntitySearchTerm.trim().toLowerCase();
     const filtered = databaseEntities.filter((e) => {
       if (!matchesDatabaseSectorLoadFilter(e.sectorLoaded, databaseSectorLoadFilter)) return false;
       if (databaseEntityTypeFilter !== 'all' && e.typeValue !== databaseEntityTypeFilter) return false;
       if (databaseFactionFilter !== 'all' && e.factionValue !== databaseFactionFilter) return false;
+      if (search) {
+        const searchable = [
+          e.name,
+          e.id,
+          e.uid,
+          e.factionValue,
+          e.typeValue,
+          `${e.x},${e.y},${e.z}`,
+        ].join(' ').toLowerCase();
+        if (!searchable.includes(search)) return false;
+      }
       return true;
     });
 
@@ -4330,7 +4364,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     });
 
     return filtered;
-  }, [databaseEntities, databaseEntityTypeFilter, databaseFactionFilter, databaseSectorLoadFilter, databaseSortKey]);
+  }, [
+    databaseEntities,
+    databaseEntitySearchTerm,
+    databaseEntityTypeFilter,
+    databaseFactionFilter,
+    databaseSectorLoadFilter,
+    databaseSortKey,
+  ]);
 
   const databaseSectorGroups = useMemo(() => {
     const bySector = new Map<string, DatabaseEntityRow[]>();
@@ -5566,6 +5607,108 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               className="rounded-md border border-cyan-500/40 bg-cyan-500/15 px-3 py-1.5 text-sm font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isRemoteConnectPending ? 'Connecting...' : 'Connect'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderDatabaseInspectModal = () => {
+    if (!databaseInspectEntity) return null;
+
+    const typeLabel = formatDatabaseEntityType(databaseInspectEntity.typeValue);
+    const typeDisplay = `${typeLabel} (${databaseInspectEntity.typeValue})`;
+
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Entity details"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) {
+            closeDatabaseInspectModal();
+          }
+        }}
+      >
+        <div className="w-full max-w-2xl rounded-lg border border-white/15 bg-[#101422] p-5 shadow-xl">
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-semibold text-white">Entity Details</h3>
+              <p className="mt-1 text-sm text-gray-300">{databaseInspectEntity.name || '(Unnamed entity)'}</p>
+            </div>
+            <span className={`rounded border px-2 py-0.5 text-[10px] uppercase tracking-wider ${databaseInspectEntity.sectorLoaded
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+              : 'border-amber-500/30 bg-amber-500/10 text-amber-200'}`}>
+              {databaseInspectEntity.sectorLoaded ? 'Sector Loaded' : 'Sector Unloaded'}
+            </span>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded border border-white/10 bg-black/25 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Identity</p>
+              <p className="mt-2 font-mono text-xs text-gray-200">ID: {databaseInspectEntity.id}</p>
+              <p className="mt-1 break-all font-mono text-xs text-gray-200">UID: {databaseInspectEntity.uid}</p>
+            </div>
+
+            <div className="rounded border border-white/10 bg-black/25 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Class</p>
+              <p className="mt-2 text-sm text-gray-200">
+                Type: {typeDisplay}
+              </p>
+              <p className="mt-1 text-sm text-gray-300">Faction: {databaseInspectEntity.factionValue}</p>
+            </div>
+
+            <div className="rounded border border-white/10 bg-black/25 p-3 sm:col-span-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Sector Coordinates</p>
+              <p className="mt-2 font-mono text-sm text-gray-200">
+                {databaseInspectEntity.x}, {databaseInspectEntity.y}, {databaseInspectEntity.z}
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+            <button
+              onClick={() => { void copyToClipboard(databaseInspectEntity.uid, 'UID'); }}
+              className="rounded-md border border-white/15 bg-black/25 px-3 py-1.5 text-sm font-semibold text-gray-200 transition-colors hover:bg-black/35"
+            >
+              Copy UID
+            </button>
+            <button
+              onClick={() => {
+                const payload = [
+                  `Name: ${databaseInspectEntity.name || '(Unnamed entity)'}`,
+                  `ID: ${databaseInspectEntity.id}`,
+                  `UID: ${databaseInspectEntity.uid}`,
+                  `Type: ${typeDisplay}`,
+                  `Faction: ${databaseInspectEntity.factionValue}`,
+                  `Sector: ${databaseInspectEntity.x}, ${databaseInspectEntity.y}, ${databaseInspectEntity.z}`,
+                  `Sector loaded: ${databaseInspectEntity.sectorLoaded ? 'yes' : 'no'}`,
+                ].join('\n');
+                void copyToClipboard(payload, 'Entity fields');
+              }}
+              className="rounded-md border border-white/15 bg-black/25 px-3 py-1.5 text-sm font-semibold text-gray-200 transition-colors hover:bg-black/35"
+            >
+              Copy All Fields
+            </button>
+            <button
+              onClick={() => {
+                const q = `SELECT * FROM ENTITIES WHERE ID = ${databaseInspectEntity.id};`;
+                setDatabaseSqlInput(q);
+                setDatabaseSqlMode('query');
+                void executeDatabaseSql(q, 'query');
+              }}
+              disabled={databaseIsExecuting || lifecycleState !== 'running'}
+              className="rounded-md border border-cyan-500/35 bg-cyan-500/10 px-3 py-1.5 text-sm font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Query Full Row
+            </button>
+            <button
+              onClick={closeDatabaseInspectModal}
+              className="rounded-md border border-white/15 bg-black/25 px-3 py-1.5 text-sm font-semibold text-gray-200 transition-colors hover:bg-black/35"
+            >
+              Close
             </button>
           </div>
         </div>
@@ -7342,7 +7485,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           >
             <option value="all">All types</option>
             {databaseEntityTypeOptions.map((t) => (
-              <option key={t} value={t}>Type {t}</option>
+              <option key={t} value={t}>{formatDatabaseEntityType(t)}</option>
             ))}
           </select>
           <select
@@ -7363,6 +7506,31 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             <option value="name-asc">Sort: Name A→Z</option>
             <option value="name-desc">Sort: Name Z→A</option>
           </select>
+          <div className="relative min-w-[180px] flex-1">
+            <input
+              value={databaseEntitySearchTerm}
+              onChange={(e) => setDatabaseEntitySearchTerm(e.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Escape') return;
+                event.preventDefault();
+                event.stopPropagation();
+                setDatabaseEntitySearchTerm('');
+              }}
+              placeholder="Search entities..."
+              className="w-full rounded border border-white/15 bg-black/30 px-2 py-1 pr-7 text-xs text-gray-200 placeholder:text-gray-500 focus:outline-none focus:ring-1 focus:ring-starmade-accent"
+            />
+            {databaseEntitySearchTerm && (
+              <button
+                type="button"
+                onClick={() => setDatabaseEntitySearchTerm('')}
+                className="absolute right-1 top-1/2 -translate-y-1/2 rounded px-1 text-[11px] font-semibold text-gray-400 hover:bg-white/10 hover:text-gray-200"
+                aria-label="Clear entity search"
+                title="Clear search"
+              >
+                x
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Entity list */}
@@ -7405,7 +7573,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                           </p>
                           <p className="mt-0.5 font-mono text-[11px] text-gray-400">
                             ID&nbsp;<span className="text-gray-300">{entity.id}</span>
-                            &ensp;|&ensp;Type&nbsp;<span className="text-gray-300">{entity.typeValue}</span>
+                            &ensp;|&ensp;Type&nbsp;<span className="text-gray-300">{formatDatabaseEntityType(entity.typeValue)}</span>
                             &ensp;|&ensp;Faction&nbsp;<span className="text-gray-300">{entity.factionValue}</span>
                           </p>
                           <p className="mt-0.5 font-mono text-[11px] text-gray-500 truncate" title={entity.uid}>
@@ -7414,13 +7582,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                         </div>
                         <div className="flex flex-wrap items-center gap-1.5">
                           <button
-                            onClick={() => {
-                              const q = `SELECT * FROM ENTITIES WHERE ID = ${entity.id};`;
-                              setDatabaseSqlInput(q);
-                              setDatabaseSqlMode('query');
-                              void executeDatabaseSql(q, 'query');
-                            }}
-                            disabled={databaseIsExecuting || lifecycleState !== 'running'}
+                            onClick={() => setDatabaseInspectEntity(entity)}
                             className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             Inspect
@@ -7522,6 +7684,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         <div className="min-h-0 flex-1">{renderActiveTab()}</div>
       </div>
       {renderRemoteConnectModal()}
+      {renderDatabaseInspectModal()}
     </PageContainer>
   );
 };
