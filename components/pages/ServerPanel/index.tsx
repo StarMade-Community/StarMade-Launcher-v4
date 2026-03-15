@@ -1872,6 +1872,14 @@ interface PlayersListCollection {
   timeoutId: number;
 }
 
+interface RemoteCommandHistoryEntry {
+  id: number;
+  timestamp: string;
+  command: string;
+  success: boolean;
+  message: string;
+}
+
 const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [activeTab, setActiveTab] = useState<ServerPanelTab>('control');
   const [activeConfigTab, setActiveConfigTab] = useState<ConfigEditorTab>('server-cfg');
@@ -2007,6 +2015,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [remoteConnectionStatus, setRemoteConnectionStatus] = useState<RemoteConnectionStatus | null>(null);
   const [isRemoteDisconnectPending, setIsRemoteDisconnectPending] = useState(false);
   const [remoteStatusesByServerId, setRemoteStatusesByServerId] = useState<Record<string, RemoteConnectionStatus>>({});
+  const [remoteCommandInput, setRemoteCommandInput] = useState<string>('');
+  const [isRemoteCommandSending, setIsRemoteCommandSending] = useState(false);
+  const [remoteCommandHistory, setRemoteCommandHistory] = useState<RemoteCommandHistoryEntry[]>([]);
 
   // ─── Database tab state ─────────────────────────────────────────────────────
   const [databaseSqlInput, setDatabaseSqlInput] = useState<string>(DATABASE_ENTITY_LIST_SQL);
@@ -2554,7 +2565,25 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   // ─── Chat callbacks ──────────────────────────────────────────────────────────
 
   const reloadChatChannels = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi) {
+    if (!effectiveServer) {
+      setChatChannels([]);
+      setSelectedChatChannelId(null);
+      return;
+    }
+
+    if (effectiveServer.isRemote) {
+      const mergedChannels = mergeFetchedChatChannels([createVirtualGeneralChannel()], chatChannelsRef.current);
+      setChatChannels(mergedChannels);
+      setSelectedChatChannelId((prev) => {
+        if (prev && mergedChannels.some((f) => f.channelId === prev)) return prev;
+        return GENERAL_CHANNEL_ID;
+      });
+      setChatError(null);
+      setIsChatListLoading(false);
+      return;
+    }
+
+    if (!hasGameApi) {
       setChatChannels([]);
       setSelectedChatChannelId(null);
       return;
@@ -2579,9 +2608,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [effectiveServer, hasGameApi]);
 
   const loadChatMessagesForChannel = useCallback(async (channelId: string | null) => {
-    if (!channelId || !effectiveServer || !hasGameApi) return;
+    if (!channelId || !effectiveServer) return;
     const channel = chatChannels.find((c) => c.channelId === channelId);
     if (!channel) return;
+
+    if (effectiveServer.isRemote) {
+      setIsChatLoading(false);
+      setChatError(null);
+      return;
+    }
+
+    if (!hasGameApi) return;
 
     if (!channel.fileName) {
       setIsChatLoading(false);
@@ -3875,6 +3912,41 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       throw new Error(result.error ?? `Failed to execute command: ${command}`);
     }
   }, [canExecuteRemoteCommandActions, effectiveServer, hasGameApi, hasStarmoteApi, isRemoteServerProfile, starmoteApi]);
+
+  const sendRawRemoteCommand = useCallback(async () => {
+    const command = remoteCommandInput.trim();
+    if (!command || !isRemoteServerProfile) return;
+    if (!isCommandRuntimeReady || isRemoteCommandSending) return;
+
+    setIsRemoteCommandSending(true);
+    try {
+      await sendServerCommandOrThrow(command);
+      setRemoteCommandHistory((prev) => [
+        {
+          id: Date.now(),
+          timestamp: new Date().toLocaleTimeString(),
+          command,
+          success: true,
+          message: 'Command sent.',
+        },
+        ...prev,
+      ].slice(0, 40));
+      setRemoteCommandInput('');
+    } catch (error) {
+      setRemoteCommandHistory((prev) => [
+        {
+          id: Date.now(),
+          timestamp: new Date().toLocaleTimeString(),
+          command,
+          success: false,
+          message: String(error),
+        },
+        ...prev,
+      ].slice(0, 40));
+    } finally {
+      setIsRemoteCommandSending(false);
+    }
+  }, [isCommandRuntimeReady, isRemoteCommandSending, isRemoteServerProfile, remoteCommandInput, sendServerCommandOrThrow]);
 
   const refreshPlayers = useCallback(async () => {
     if (!effectiveServer || !isCommandRuntimeReady) {
@@ -5895,7 +5967,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         <div className="flex items-center gap-2">
           <button
             onClick={() => { void messageAllOnlinePlayers(); }}
-            disabled={!isCommandRuntimeReady || isPlayersBroadcasting || isPlayersRefreshing || !!kickingPlayerName || isPlayerMessageSending || onlinePlayers.length === 0}
+            disabled={!isCommandRuntimeReady || isPlayersBroadcasting || isPlayersRefreshing || !!kickingPlayerName || isPlayerMessageSending || (!isRemoteServerProfile && onlinePlayers.length === 0)}
             className="rounded border border-cyan-500/35 bg-cyan-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <span className="inline-flex items-center gap-1.5">
@@ -5937,7 +6009,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               : 'Server is offline. Start the server to view connected players.'}
           </p>
         ) : onlinePlayers.length === 0 ? (
-          <p className="text-gray-500">No players online.</p>
+          <p className="text-gray-500">
+            {isRemoteServerProfile
+              ? 'Player list telemetry is limited in remote mode. Use Message All or server-side logs to confirm online users.'
+              : 'No players online.'}
+          </p>
         ) : (
           <div className="space-y-1">
             {onlinePlayers.map((playerName) => (
@@ -6271,6 +6347,59 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             emptyMessage: 'No dashboard config controls are available for this server.',
           })}
         </section>
+
+        {isRemoteServerProfile && (
+          <section className="space-y-3">
+            <div>
+              <h4 className="text-sm font-semibold uppercase tracking-wider text-gray-300">Remote Admin Console</h4>
+              <p className="mt-1 text-xs text-gray-500">
+                Send raw admin commands over StarMote for controls that do not yet have dedicated UI bindings.
+              </p>
+            </div>
+
+            <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+              <div className="flex gap-2">
+                <input
+                  value={remoteCommandInput}
+                  onChange={(event) => setRemoteCommandInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      void sendRawRemoteCommand();
+                    }
+                  }}
+                  disabled={!isCommandRuntimeReady || isRemoteCommandSending}
+                  placeholder={isCommandRuntimeReady ? 'Type command, e.g. /player_list' : 'Remote session not ready...'}
+                  className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 font-mono text-sm text-gray-200 placeholder-gray-500"
+                />
+                <button
+                  onClick={() => { void sendRawRemoteCommand(); }}
+                  disabled={!remoteCommandInput.trim() || !isCommandRuntimeReady || isRemoteCommandSending}
+                  className="rounded-md border border-cyan-500/35 bg-cyan-500/10 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-cyan-100 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isRemoteCommandSending ? 'Sending...' : 'Send'}
+                </button>
+              </div>
+
+              <div className="mt-3 max-h-40 overflow-y-auto rounded-md border border-white/10 bg-black/30 p-2 text-xs font-mono">
+                {remoteCommandHistory.length === 0 ? (
+                  <p className="text-gray-500">No commands sent in this session yet.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {remoteCommandHistory.map((entry) => (
+                      <div key={entry.id} className="rounded border border-white/10 bg-black/25 px-2 py-1.5">
+                        <p className="text-gray-300">[{entry.timestamp}] {entry.command}</p>
+                        <p className={entry.success ? 'text-emerald-300' : 'text-red-300'}>
+                          {entry.message}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );
@@ -7505,6 +7634,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 Messages are sent as server broadcasts using{' '}
                 <code className="text-gray-500">/server_message_broadcast plain</code>{' '}
                 (or <code className="text-gray-500">/server_message_to</code> for DMs).
+                {isRemoteServerProfile ? ' Remote profiles currently show command-sent chat history only.' : ''}
               </p>
             </div>
           </div>

@@ -454,6 +454,25 @@ const launcherApi = {
       ipcRenderer.on(IPC.STARMOTE_STATUS_CHANGED, listener);
       return () => ipcRenderer.removeListener(IPC.STARMOTE_STATUS_CHANGED, listener);
     },
+
+    /** Subscribe to normalized runtime line events from StarMote sessions. */
+    onRuntimeEvent: (cb: (event: {
+      version: 1;
+      serverId: string;
+      line: string;
+      source: 'framed-packet' | 'text-fallback';
+      commandId?: number;
+    }) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: {
+        version: 1;
+        serverId: string;
+        line: string;
+        source: 'framed-packet' | 'text-fallback';
+        commandId?: number;
+      }) => cb(payload);
+      ipcRenderer.on(IPC.STARMOTE_RUNTIME_EVENT, listener);
+      return () => ipcRenderer.removeListener(IPC.STARMOTE_RUNTIME_EVENT, listener);
+    },
   },
   } : {}),
 

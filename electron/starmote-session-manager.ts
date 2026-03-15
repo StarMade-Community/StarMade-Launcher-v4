@@ -1,12 +1,12 @@
 import { logStarmoteDebug } from './starmote-debug.js';
-import { encodeAdminCommandPacket } from './starmote-protocol.js';
+import { decodeStarmotePacket, encodeAdminCommandPacket } from './starmote-protocol.js';
 
 export interface SocketLike {
   setNoDelay(noDelay?: boolean): void;
   setTimeout(timeout: number): void;
   once(event: 'connect' | 'timeout' | 'error' | 'close', listener: (...args: unknown[]) => void): this;
-  on(event: 'error' | 'close', listener: (...args: unknown[]) => void): this;
-  removeListener(event: 'error' | 'close', listener: (...args: unknown[]) => void): this;
+  on(event: 'error' | 'close' | 'data', listener: (...args: unknown[]) => void): this;
+  removeListener(event: 'error' | 'close' | 'data', listener: (...args: unknown[]) => void): this;
   connect(port: number, host: string): void;
   write(data: Uint8Array): boolean;
   removeAllListeners(): this;
@@ -51,6 +51,14 @@ export interface StarmoteConnectParams {
   username?: string;
 }
 
+export interface StarmoteRuntimeEvent {
+  version: 1;
+  serverId: string;
+  line: string;
+  source: 'framed-packet' | 'text-fallback';
+  commandId?: number;
+}
+
 interface StarmoteSessionRecord {
   serverId: string;
   host?: string;
@@ -62,6 +70,8 @@ interface StarmoteSessionRecord {
   error?: string;
   reasonCode?: StarmoteReasonCode;
   commandRegistryReady: boolean;
+  inboundBuffer: Buffer;
+  inboundTextCarry: string;
   generation: number;
 }
 
@@ -70,6 +80,7 @@ interface StarmoteSessionManagerOptions {
   onStatusChanged?: (status: StarmoteConnectionStatus) => void;
   runAuthStage?: (params: StarmoteConnectParams) => Promise<void>;
   waitForCommandRegistry?: (params: StarmoteConnectParams, attempt: number) => Promise<void>;
+  onRuntimeEvent?: (event: StarmoteRuntimeEvent) => void;
   commandSendTimeoutMs?: number;
   handshakeTimeoutMs?: number;
   handshakeRetries?: number;
@@ -99,6 +110,7 @@ export class StarmoteSessionManager {
   private readonly onStatusChanged?: (status: StarmoteConnectionStatus) => void;
   private readonly runAuthStage: (params: StarmoteConnectParams) => Promise<void>;
   private readonly waitForCommandRegistry: (params: StarmoteConnectParams, attempt: number) => Promise<void>;
+  private readonly onRuntimeEvent?: (event: StarmoteRuntimeEvent) => void;
   private readonly commandSendTimeoutMs: number;
   private readonly handshakeTimeoutMs: number;
   private readonly handshakeRetries: number;
@@ -109,6 +121,7 @@ export class StarmoteSessionManager {
     this.onStatusChanged = options.onStatusChanged;
     this.runAuthStage = options.runAuthStage ?? (async () => undefined);
     this.waitForCommandRegistry = options.waitForCommandRegistry ?? (async () => undefined);
+    this.onRuntimeEvent = options.onRuntimeEvent;
     this.commandSendTimeoutMs = Number.isFinite(options.commandSendTimeoutMs)
       ? Math.max(1000, Math.trunc(options.commandSendTimeoutMs as number))
       : 5000;
@@ -217,6 +230,8 @@ export class StarmoteSessionManager {
       socket,
       state: 'connecting',
       commandRegistryReady: false,
+      inboundBuffer: Buffer.alloc(0),
+      inboundTextCarry: '',
       generation,
     };
     this.sessions.set(params.serverId, session);
@@ -337,6 +352,12 @@ export class StarmoteSessionManager {
 
     active.state = 'ready';
     active.reasonCode = 'ready';
+    active.inboundBuffer = Buffer.alloc(0);
+    active.inboundTextCarry = '';
+
+    socket.on('data', (data) => {
+      this.handleSocketData(params.serverId, generation, data);
+    });
 
     socket.on('error', (error) => {
       const current = this.sessions.get(params.serverId);
@@ -439,6 +460,94 @@ export class StarmoteSessionManager {
 
   private emitStatus(serverId: string): void {
     this.onStatusChanged?.(this.getStatusFor(serverId));
+  }
+
+  private handleSocketData(serverId: string, generation: number, data: unknown): void {
+    const session = this.sessions.get(serverId);
+    if (!session || session.generation !== generation || session.state !== 'ready') return;
+
+    const chunk = this.coerceChunk(data);
+    if (!chunk || chunk.byteLength === 0) return;
+
+    session.inboundBuffer = session.inboundBuffer.byteLength === 0
+      ? chunk
+      : Buffer.concat([session.inboundBuffer, chunk]);
+
+    while (session.inboundBuffer.byteLength > 0) {
+      if (this.startsWithMagic(session.inboundBuffer)) {
+        if (session.inboundBuffer.byteLength < 11) break;
+        const payloadLength = session.inboundBuffer.readUInt32BE(7);
+        const totalLength = 11 + payloadLength;
+        if (session.inboundBuffer.byteLength < totalLength) break;
+
+        const frame = session.inboundBuffer.subarray(0, totalLength);
+        session.inboundBuffer = session.inboundBuffer.subarray(totalLength);
+        const decoded = decodeStarmotePacket(frame);
+        if (!decoded.ok) {
+          this.emitRuntimeTextLines(serverId, frame, 'text-fallback');
+          continue;
+        }
+
+        this.emitRuntimeTextLines(serverId, decoded.packet.payload, 'framed-packet', decoded.packet.commandId);
+        continue;
+      }
+
+      const nextMagic = session.inboundBuffer.indexOf('SM4T', 1, 'ascii');
+      const textChunk = nextMagic >= 0
+        ? session.inboundBuffer.subarray(0, nextMagic)
+        : session.inboundBuffer;
+
+      session.inboundBuffer = nextMagic >= 0
+        ? session.inboundBuffer.subarray(nextMagic)
+        : Buffer.alloc(0);
+
+      this.emitRuntimeTextLines(serverId, textChunk, 'text-fallback');
+    }
+  }
+
+  private emitRuntimeTextLines(
+    serverId: string,
+    bytes: Uint8Array,
+    source: StarmoteRuntimeEvent['source'],
+    commandId?: number,
+  ): void {
+    const session = this.sessions.get(serverId);
+    if (!session) return;
+
+    const chunkText = Buffer.from(bytes).toString('utf8');
+    if (!chunkText) return;
+
+    const merged = session.inboundTextCarry + chunkText;
+    const normalized = merged.replace(/\r\n/g, '\n');
+    const parts = normalized.split('\n');
+    session.inboundTextCarry = parts.pop() ?? '';
+
+    for (const part of parts) {
+      const line = part.trim();
+      if (!line) continue;
+      this.onRuntimeEvent?.({
+        version: 1,
+        serverId,
+        line,
+        source,
+        commandId,
+      });
+    }
+  }
+
+  private startsWithMagic(buffer: Buffer): boolean {
+    return buffer.byteLength >= 4
+      && buffer[0] === 0x53
+      && buffer[1] === 0x4d
+      && buffer[2] === 0x34
+      && buffer[3] === 0x54;
+  }
+
+  private coerceChunk(data: unknown): Buffer | null {
+    if (Buffer.isBuffer(data)) return data;
+    if (data instanceof Uint8Array) return Buffer.from(data);
+    if (typeof data === 'string') return Buffer.from(data, 'utf8');
+    return null;
   }
 
   private async runHandshakeAttempt(params: StarmoteConnectParams, attempt: number): Promise<boolean> {

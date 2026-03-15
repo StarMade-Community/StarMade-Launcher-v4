@@ -347,6 +347,15 @@ declare global {
           error?: string;
           reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
         }) => void) => () => void;
+
+        /** Subscribe to normalized runtime line events from StarMote sessions. */
+        onRuntimeEvent: (cb: (event: {
+          version: 1;
+          serverId: string;
+          line: string;
+          source: 'framed-packet' | 'text-fallback';
+          commandId?: number;
+        }) => void) => () => void;
       };
 
       /** Dialog APIs */

@@ -3,6 +3,7 @@ import {
   StarmoteSessionManager,
   type SocketLike,
   type StarmoteConnectionStatus,
+  type StarmoteRuntimeEvent,
 } from './starmote-session-manager.js';
 import { logStarmoteDebug } from './starmote-debug.js';
 
@@ -55,9 +56,17 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
     }
   };
 
+  const broadcastRuntimeEvent = (event: StarmoteRuntimeEvent): void => {
+    for (const window of getAllWindows()) {
+      if (window.isDestroyed()) continue;
+      window.webContents.send(IPC.STARMOTE_RUNTIME_EVENT, event);
+    }
+  };
+
   const manager = new StarmoteSessionManager({
     createSocket,
     onStatusChanged: broadcastStarmoteStatus,
+    onRuntimeEvent: broadcastRuntimeEvent,
   });
 
   ipcMain.handle(

@@ -382,6 +382,9 @@ export const IPC = {
   /** Main → Renderer: StarMote connection status changed for a server profile. */
   STARMOTE_STATUS_CHANGED: 'starmote:status-changed',
 
+  /** Main → Renderer: normalized runtime line from a StarMote remote session. */
+  STARMOTE_RUNTIME_EVENT: 'starmote:runtime-event',
+
   /**
    * Renderer → Main (invoke): send a versioned admin command over a protocol-ready StarMote session.
    * Payload: { version: 1; serverId: string; command: string }
