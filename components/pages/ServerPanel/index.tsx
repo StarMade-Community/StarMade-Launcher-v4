@@ -4359,97 +4359,119 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     waitForServerToStop,
   ]);
 
+  const ingestRuntimeLine = useCallback((message: string, level: string) => {
+    const runtimeEntry: LogEntry = {
+      timestamp: new Date().toISOString().slice(11, 19),
+      level: normalizeLogLevel(level),
+      message,
+    };
+    setLiveProcessLogs((prev) => {
+      const next = [...prev, runtimeEntry];
+      return next.length <= LOG_BUFFER_CAP
+        ? next
+        : next.slice(next.length - LOG_BUFFER_CAP);
+    });
+
+    const playerNameMatch = message.match(/\[PL\]\s+Name:\s*(.+)$/i);
+    if (playerNameMatch) {
+      const playerName = playerNameMatch[1].trim();
+      if (playerName) {
+        const active = playersListCollectionRef.current;
+        if (active) active.names.add(playerName);
+      }
+    }
+
+    const parsedChat = parseChatLogLine(message, GENERAL_CHANNEL_ID);
+    if (parsedChat) {
+      const channelId = normalizeLiveChatChannelId(parsedChat.receiverType, parsedChat.receiver);
+      setChatMessagesByChannel((prev) => {
+        const existing = prev[channelId] ?? [];
+        return { ...prev, [channelId]: [...existing, parsedChat] };
+      });
+      setChatChannels((prev) => {
+        if (prev.some((c) => c.channelId === channelId)) return prev;
+        return [buildLiveChannelInfo(channelId, parsedChat.receiverType), ...prev];
+      });
+      setSelectedChatChannelId((prev) => prev ?? channelId);
+    }
+
+    const pending = pendingDbRequestRef.current;
+    if (!pending) return;
+
+    if (message.includes('YOU DO NOT HAVE PERMISSIONS TO DO SQL QUERIES')) {
+      clearPendingDatabaseSql();
+      setDatabaseSqlError('Permission denied. Add your name to SQL_PERMISSION in server.cfg.');
+      return;
+    }
+
+    const beginMatch = message.match(/SQL QUERY\s+(\d+)\s+BEGIN/i);
+    if (beginMatch) {
+      const rid = Number.parseInt(beginMatch[1], 10);
+      dbLinesByRequestRef.current.set(rid, []);
+      if (pending.awaitingRequestId) {
+        pending.awaitingRequestId = false;
+        pending.requestId = rid;
+        setDatabaseLastRequestId(rid);
+      }
+      return;
+    }
+
+    const rowMatch = message.match(/(?:^|\s)SQL#(\d+):\s*(.*)$/);
+    if (rowMatch) {
+      const rid = Number.parseInt(rowMatch[1], 10);
+      const lines = dbLinesByRequestRef.current.get(rid) ?? [];
+      lines.push(rowMatch[2]);
+      dbLinesByRequestRef.current.set(rid, lines);
+      return;
+    }
+
+    const endMatch = message.match(/SQL QUERY\s+(\d+)\s+END/i);
+    if (!endMatch) return;
+
+    const rid = Number.parseInt(endMatch[1], 10);
+    const lines = dbLinesByRequestRef.current.get(rid) ?? [];
+    dbLinesByRequestRef.current.delete(rid);
+    if (pending.requestId !== rid) return;
+
+    const savedMode = pending.mode;
+    clearPendingDatabaseSql();
+
+    setDatabaseSqlRawLines(lines);
+    const table = parseDatabaseSqlTable(lines);
+    setDatabaseSqlOutput(table);
+
+    if (savedMode === 'query') {
+      const entities = parseDatabaseEntities(table);
+      setDatabaseEntities(entities);
+      setDatabaseSqlStatus(`Query completed — ${table.rows.length} row${table.rows.length === 1 ? '' : 's'} returned.`);
+    } else if (savedMode === 'update') {
+      setDatabaseSqlStatus('Update completed. SQL_UPDATE does not return row data.');
+    } else {
+      setDatabaseSqlStatus(`Insert completed — ${table.rows.length} generated key row${table.rows.length === 1 ? '' : 's'} returned.`);
+    }
+  }, [clearPendingDatabaseSql]);
+
   useEffect(() => {
     if (!effectiveServer || typeof window === 'undefined' || !window.launcher?.game?.onLog) return;
 
     const cleanup = window.launcher.game.onLog((data) => {
       if (data.installationId !== effectiveServer.id) return;
-
-      const runtimeEntry: LogEntry = {
-        timestamp: new Date().toISOString().slice(11, 19),
-        level: normalizeLogLevel(data.level),
-        message: data.message,
-      };
-      setLiveProcessLogs((prev) => {
-        const next = [...prev, runtimeEntry];
-        return next.length <= LOG_BUFFER_CAP
-          ? next
-          : next.slice(next.length - LOG_BUFFER_CAP);
-      });
-
-      // ── Player-list parsing ────────────────────────────────────────────────
-      const playerNameMatch = data.message.match(/\[PL\]\s+Name:\s*(.+)$/i);
-      if (playerNameMatch) {
-        const playerName = playerNameMatch[1].trim();
-        if (playerName) {
-          const active = playersListCollectionRef.current;
-          if (active) active.names.add(playerName);
-        }
-      }
-
-      // ── Database SQL output parsing ────────────────────────────────────────
-      const pending = pendingDbRequestRef.current;
-      if (!pending) return;
-
-      // Permission error
-      if (data.message.includes('YOU DO NOT HAVE PERMISSIONS TO DO SQL QUERIES')) {
-        clearPendingDatabaseSql();
-        setDatabaseSqlError('Permission denied. Add your name to SQL_PERMISSION in server.cfg.');
-        return;
-      }
-
-      // "---------- SQL QUERY N BEGIN ----------"
-      const beginMatch = data.message.match(/SQL QUERY\s+(\d+)\s+BEGIN/i);
-      if (beginMatch) {
-        const rid = Number.parseInt(beginMatch[1], 10);
-        dbLinesByRequestRef.current.set(rid, []);
-        if (pending.awaitingRequestId) {
-          pending.awaitingRequestId = false;
-          pending.requestId = rid;
-          setDatabaseLastRequestId(rid);
-        }
-        return;
-      }
-
-      // "SQL#N: <csv-row>" (allow log prefixes like "[SERVER-LOCAL-ADMIN] ")
-      const rowMatch = data.message.match(/(?:^|\s)SQL#(\d+):\s*(.*)$/);
-      if (rowMatch) {
-        const rid = Number.parseInt(rowMatch[1], 10);
-        const lines = dbLinesByRequestRef.current.get(rid) ?? [];
-        lines.push(rowMatch[2]);
-        dbLinesByRequestRef.current.set(rid, lines);
-        return;
-      }
-
-      // "---------- SQL QUERY N END ----------"
-      const endMatch = data.message.match(/SQL QUERY\s+(\d+)\s+END/i);
-      if (endMatch) {
-        const rid = Number.parseInt(endMatch[1], 10);
-        const lines = dbLinesByRequestRef.current.get(rid) ?? [];
-        dbLinesByRequestRef.current.delete(rid);
-        if (pending.requestId !== rid) return;
-
-        const savedMode = pending.mode;
-        clearPendingDatabaseSql();
-
-        setDatabaseSqlRawLines(lines);
-        const table = parseDatabaseSqlTable(lines);
-        setDatabaseSqlOutput(table);
-
-        if (savedMode === 'query') {
-          const entities = parseDatabaseEntities(table);
-          setDatabaseEntities(entities);
-          setDatabaseSqlStatus(`Query completed — ${table.rows.length} row${table.rows.length === 1 ? '' : 's'} returned.`);
-        } else if (savedMode === 'update') {
-          setDatabaseSqlStatus('Update completed. SQL_UPDATE does not return row data.');
-        } else {
-          setDatabaseSqlStatus(`Insert completed — ${table.rows.length} generated key row${table.rows.length === 1 ? '' : 's'} returned.`);
-        }
-      }
+      ingestRuntimeLine(data.message, data.level);
     });
 
     return cleanup;
-  }, [clearPendingDatabaseSql, effectiveServer]);
+  }, [effectiveServer, ingestRuntimeLine]);
+
+  useEffect(() => {
+    if (!effectiveServer || !starmoteApi?.onRuntimeEvent) return;
+
+    const unsubscribe = starmoteApi.onRuntimeEvent((event) => {
+      if (event.serverId !== effectiveServer.id) return;
+      ingestRuntimeLine(event.line, 'INFO');
+    });
+
+    return unsubscribe;
+  }, [effectiveServer, ingestRuntimeLine, starmoteApi]);
 
   useEffect(() => {
     if (!databaseInspectEntity) return;

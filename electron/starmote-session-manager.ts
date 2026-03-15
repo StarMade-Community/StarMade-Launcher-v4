@@ -1,5 +1,5 @@
 import { logStarmoteDebug } from './starmote-debug.js';
-import { decodeStarmotePacket, encodeAdminCommandPacket } from './starmote-protocol.js';
+import { decodeStarmotePacket, encodeAdminCommandPacket, type StarmoteWireMode } from './starmote-protocol.js';
 
 export interface SocketLike {
   setNoDelay(noDelay?: boolean): void;
@@ -81,6 +81,7 @@ interface StarmoteSessionManagerOptions {
   runAuthStage?: (params: StarmoteConnectParams) => Promise<void>;
   waitForCommandRegistry?: (params: StarmoteConnectParams, attempt: number) => Promise<void>;
   onRuntimeEvent?: (event: StarmoteRuntimeEvent) => void;
+  adminCommandWireMode?: StarmoteWireMode;
   commandSendTimeoutMs?: number;
   handshakeTimeoutMs?: number;
   handshakeRetries?: number;
@@ -98,6 +99,12 @@ type StarmoteSendAdminCommandResult = {
   reasonCode?: StarmoteReasonCode;
 };
 
+const MAX_ADMIN_COMMAND_CHARS = 2048;
+const MAX_INBOUND_FRAME_PAYLOAD_BYTES = 256 * 1024;
+const MAX_INBOUND_BUFFER_BYTES = 1024 * 1024;
+const MAX_RUNTIME_LINE_CHARS = 4096;
+const MAX_LENGTH_PREFIX_BODY_BYTES = MAX_INBOUND_FRAME_PAYLOAD_BYTES + 7;
+
 function formatSocketError(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in (error as Record<string, unknown>)) {
     return String((error as { message?: unknown }).message);
@@ -111,6 +118,7 @@ export class StarmoteSessionManager {
   private readonly runAuthStage: (params: StarmoteConnectParams) => Promise<void>;
   private readonly waitForCommandRegistry: (params: StarmoteConnectParams, attempt: number) => Promise<void>;
   private readonly onRuntimeEvent?: (event: StarmoteRuntimeEvent) => void;
+  private readonly adminCommandWireMode: StarmoteWireMode;
   private readonly commandSendTimeoutMs: number;
   private readonly handshakeTimeoutMs: number;
   private readonly handshakeRetries: number;
@@ -122,6 +130,7 @@ export class StarmoteSessionManager {
     this.runAuthStage = options.runAuthStage ?? (async () => undefined);
     this.waitForCommandRegistry = options.waitForCommandRegistry ?? (async () => undefined);
     this.onRuntimeEvent = options.onRuntimeEvent;
+    this.adminCommandWireMode = options.adminCommandWireMode ?? 'length-prefixed';
     this.commandSendTimeoutMs = Number.isFinite(options.commandSendTimeoutMs)
       ? Math.max(1000, Math.trunc(options.commandSendTimeoutMs as number))
       : 5000;
@@ -180,8 +189,17 @@ export class StarmoteSessionManager {
       };
     }
 
+    if (command.length > MAX_ADMIN_COMMAND_CHARS || command.includes('\n') || command.includes('\r')) {
+      return {
+        success: false,
+        status: this.getStatusFor(serverId),
+        error: `Command must be a single line and at most ${MAX_ADMIN_COMMAND_CHARS} characters.`,
+        reasonCode: 'invalid_command',
+      };
+    }
+
     try {
-      const packet = encodeAdminCommandPacket(command);
+      const packet = encodeAdminCommandPacket(command, this.adminCommandWireMode);
       await this.writePacketWithTimeout(session.socket, packet, this.commandSendTimeoutMs);
       logStarmoteDebug('session.command.sent', { serverId, bytes: packet.byteLength });
       return {
@@ -473,10 +491,21 @@ export class StarmoteSessionManager {
       ? chunk
       : Buffer.concat([session.inboundBuffer, chunk]);
 
+    if (session.inboundBuffer.byteLength > MAX_INBOUND_BUFFER_BYTES) {
+      const errorText = `Inbound StarMote buffer exceeded ${MAX_INBOUND_BUFFER_BYTES} bytes.`;
+      this.terminateSessionForProtocolViolation(serverId, generation, errorText);
+      return;
+    }
+
     while (session.inboundBuffer.byteLength > 0) {
       if (this.startsWithMagic(session.inboundBuffer)) {
         if (session.inboundBuffer.byteLength < 11) break;
         const payloadLength = session.inboundBuffer.readUInt32BE(7);
+        if (payloadLength > MAX_INBOUND_FRAME_PAYLOAD_BYTES) {
+          const errorText = `Inbound StarMote frame payload (${payloadLength} bytes) exceeds cap (${MAX_INBOUND_FRAME_PAYLOAD_BYTES} bytes).`;
+          this.terminateSessionForProtocolViolation(serverId, generation, errorText);
+          return;
+        }
         const totalLength = 11 + payloadLength;
         if (session.inboundBuffer.byteLength < totalLength) break;
 
@@ -485,6 +514,22 @@ export class StarmoteSessionManager {
         const decoded = decodeStarmotePacket(frame);
         if (!decoded.ok) {
           this.emitRuntimeTextLines(serverId, frame, 'text-fallback');
+          continue;
+        }
+
+        this.emitRuntimeTextLines(serverId, decoded.packet.payload, 'framed-packet', decoded.packet.commandId);
+        continue;
+      }
+
+      const prefixedFrame = this.tryExtractLengthPrefixedFrame(session.inboundBuffer);
+      if (prefixedFrame.kind === 'need-more') {
+        break;
+      }
+      if (prefixedFrame.kind === 'frame') {
+        session.inboundBuffer = session.inboundBuffer.subarray(prefixedFrame.frame.byteLength);
+        const decoded = decodeStarmotePacket(prefixedFrame.frame);
+        if (!decoded.ok) {
+          this.emitRuntimeTextLines(serverId, prefixedFrame.frame, 'text-fallback');
           continue;
         }
 
@@ -525,14 +570,45 @@ export class StarmoteSessionManager {
     for (const part of parts) {
       const line = part.trim();
       if (!line) continue;
+      const limitedLine = line.length > MAX_RUNTIME_LINE_CHARS
+        ? `${line.slice(0, MAX_RUNTIME_LINE_CHARS)}...`
+        : line;
       this.onRuntimeEvent?.({
         version: 1,
         serverId,
-        line,
+        line: limitedLine,
         source,
         commandId,
       });
     }
+  }
+
+  private terminateSessionForProtocolViolation(serverId: string, generation: number, errorText: string): void {
+    const current = this.sessions.get(serverId);
+    if (!current || current.generation !== generation) return;
+
+    current.state = 'error';
+    current.error = errorText;
+    current.reasonCode = 'socket_error';
+    current.commandRegistryReady = false;
+    current.connectedAt = undefined;
+    const socket = current.socket;
+    current.socket = undefined;
+    current.inboundBuffer = Buffer.alloc(0);
+    current.inboundTextCarry = '';
+
+    try {
+      socket?.removeAllListeners();
+      socket?.destroy();
+    } catch {
+      // Ignore teardown races.
+    }
+
+    this.emitStatus(serverId);
+    logStarmoteDebug('session.socket.protocol_violation', {
+      serverId,
+      error: errorText,
+    });
   }
 
   private startsWithMagic(buffer: Buffer): boolean {
@@ -541,6 +617,30 @@ export class StarmoteSessionManager {
       && buffer[1] === 0x4d
       && buffer[2] === 0x34
       && buffer[3] === 0x54;
+  }
+
+  private tryExtractLengthPrefixedFrame(buffer: Buffer):
+    | { kind: 'invalid' }
+    | { kind: 'need-more' }
+    | { kind: 'frame'; frame: Buffer } {
+    if (buffer.byteLength < 4) {
+      return { kind: 'need-more' };
+    }
+
+    const bodyLength = buffer.readUInt32BE(0);
+    if (bodyLength < 7 || bodyLength > MAX_LENGTH_PREFIX_BODY_BYTES) {
+      return { kind: 'invalid' };
+    }
+
+    const totalLength = 4 + bodyLength;
+    if (buffer.byteLength < totalLength) {
+      return { kind: 'need-more' };
+    }
+
+    return {
+      kind: 'frame',
+      frame: buffer.subarray(0, totalLength),
+    };
   }
 
   private coerceChunk(data: unknown): Buffer | null {

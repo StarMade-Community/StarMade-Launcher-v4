@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
 
 import { StarmoteSessionManager } from '../../electron/starmote-session-manager.js';
-import { decodeStarmotePacket, STARMOTE_COMMAND_IDS, STARMOTE_PROTOCOL_VERSION } from '../../electron/starmote-protocol.js';
+import {
+  decodeStarmotePacket,
+  encodeStarmotePacket,
+  STARMOTE_COMMAND_IDS,
+  STARMOTE_PROTOCOL_VERSION,
+} from '../../electron/starmote-protocol.js';
 
 class FakeSocket extends EventEmitter {
   public behavior: 'connect' | 'error' | 'timeout' | 'manual' = 'connect';
@@ -43,6 +48,7 @@ class FakeSocket extends EventEmitter {
 
 function createHarness() {
   const emitted: Array<{ serverId: string; state: string; reasonCode?: string; error?: string }> = [];
+  const runtimeEvents: Array<{ serverId: string; line: string; source: string; commandId?: number }> = [];
   const sockets: FakeSocket[] = [];
 
   const manager = new StarmoteSessionManager({
@@ -59,9 +65,17 @@ function createHarness() {
         error: status.error,
       });
     },
+    onRuntimeEvent: (event) => {
+      runtimeEvents.push({
+        serverId: event.serverId,
+        line: event.line,
+        source: event.source,
+        commandId: event.commandId,
+      });
+    },
   });
 
-  return { manager, sockets, emitted };
+  return { manager, sockets, emitted, runtimeEvents };
 }
 
 function createHandshakeTimeoutHarness() {
@@ -242,6 +256,7 @@ describe('StarmoteSessionManager', () => {
 
     const frame = harness.sockets[0]?.writes[0];
     expect(frame).toBeTruthy();
+     expect(Buffer.from(frame as Uint8Array).toString('ascii', 0, 4)).not.toBe('SM4T');
     const decoded = decodeStarmotePacket(frame as Uint8Array);
     expect(decoded.ok).toBe(true);
     if (decoded.ok) {
@@ -249,6 +264,34 @@ describe('StarmoteSessionManager', () => {
       expect(decoded.packet.commandId).toBe(STARMOTE_COMMAND_IDS.ADMIN_COMMAND);
       expect(Buffer.from(decoded.packet.payload).toString('utf8')).toBe('/player_list');
     }
+  });
+
+  it('supports explicit legacy-sm4t packet mode override for command send', async () => {
+    const sockets: FakeSocket[] = [];
+    const manager = new StarmoteSessionManager({
+      createSocket: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      adminCommandWireMode: 'legacy-sm4t',
+    });
+
+    await manager.connect({
+      serverId: 'srv-legacy-wire',
+      host: '127.0.0.1',
+      port: 4242,
+    });
+
+    const sendResult = await manager.sendAdminCommand({
+      serverId: 'srv-legacy-wire',
+      command: '/player_list',
+    });
+
+    expect(sendResult.success).toBe(true);
+    const frame = sockets[0]?.writes[0];
+    expect(frame).toBeTruthy();
+    expect(Buffer.from(frame as Uint8Array).toString('ascii', 0, 4)).toBe('SM4T');
   });
 
   it('rejects admin command sends when the session is not protocol-ready', async () => {
@@ -260,6 +303,94 @@ describe('StarmoteSessionManager', () => {
     expect(sendResult.success).toBe(false);
     expect(sendResult.reasonCode).toBe('not_ready');
     expect(sendResult.error).toContain('not protocol-ready');
+  });
+
+  it('rejects multiline admin commands', async () => {
+    await harness.manager.connect({
+      serverId: 'srv-command-validate',
+      host: '127.0.0.1',
+      port: 4242,
+    });
+
+    const sendResult = await harness.manager.sendAdminCommand({
+      serverId: 'srv-command-validate',
+      command: '/player_list\n/shutdown 10',
+    });
+
+    expect(sendResult.success).toBe(false);
+    expect(sendResult.reasonCode).toBe('invalid_command');
+    expect(sendResult.error).toContain('single line');
+  });
+
+  it('terminates session when an inbound frame advertises an oversized payload', async () => {
+    await harness.manager.connect({
+      serverId: 'srv-oversized-frame',
+      host: '127.0.0.1',
+      port: 4242,
+    });
+
+    const headerOnly = Buffer.alloc(11);
+    headerOnly.write('SM4T', 0, 'ascii');
+    headerOnly.writeUInt8(1, 4);
+    headerOnly.writeUInt16BE(0x1001, 5);
+    headerOnly.writeUInt32BE((256 * 1024) + 1, 7);
+
+    harness.sockets[0].emit('data', headerOnly);
+
+    const status = harness.manager.getStatusFor('srv-oversized-frame');
+    expect(status.state).toBe('error');
+    expect(status.reasonCode).toBe('socket_error');
+    expect(status.error).toContain('exceeds cap');
+  });
+
+  it('emits runtime events for framed packet payload lines', async () => {
+    await harness.manager.connect({
+      serverId: 'srv-runtime-framed',
+      host: '127.0.0.1',
+      port: 4242,
+    });
+
+    const frame = encodeStarmotePacket(0x2450, Buffer.from('SQL QUERY 19 BEGIN\nSQL#19: 1,2,3\n', 'utf8'));
+    harness.sockets[0].emit('data', Buffer.from(frame));
+
+    expect(harness.runtimeEvents).toEqual([
+      expect.objectContaining({
+        serverId: 'srv-runtime-framed',
+        source: 'framed-packet',
+        commandId: 0x2450,
+        line: 'SQL QUERY 19 BEGIN',
+      }),
+      expect.objectContaining({
+        serverId: 'srv-runtime-framed',
+        source: 'framed-packet',
+        commandId: 0x2450,
+        line: 'SQL#19: 1,2,3',
+      }),
+    ]);
+  });
+
+  it('falls back to plain text line parsing for non-framed inbound data', async () => {
+    await harness.manager.connect({
+      serverId: 'srv-runtime-text',
+      host: '127.0.0.1',
+      port: 4242,
+    });
+
+    harness.sockets[0].emit('data', Buffer.from(' [PL] Name: Alpha\nPARTIAL', 'utf8'));
+    harness.sockets[0].emit('data', Buffer.from('_TAIL\n', 'utf8'));
+
+    expect(harness.runtimeEvents).toEqual([
+      expect.objectContaining({
+        serverId: 'srv-runtime-text',
+        source: 'text-fallback',
+        line: '[PL] Name: Alpha',
+      }),
+      expect.objectContaining({
+        serverId: 'srv-runtime-text',
+        source: 'text-fallback',
+        line: 'PARTIAL_TAIL',
+      }),
+    ]);
   });
 
   it('does not emit debug logs when STARMOTE_DEBUG is not enabled', async () => {

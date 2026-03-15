@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 
 import { IPC } from '../../electron/ipc-channels.js';
 import { registerStarmoteIpcHandlers } from '../../electron/starmote-ipc.js';
-import { decodeStarmotePacket, STARMOTE_COMMAND_IDS } from '../../electron/starmote-protocol.js';
+import { decodeStarmotePacket, encodeStarmotePacket, STARMOTE_COMMAND_IDS } from '../../electron/starmote-protocol.js';
 
 class FakeSocket extends EventEmitter {
   public behavior: 'connect' | 'error' | 'timeout' = 'connect';
@@ -195,6 +195,7 @@ describe('StarMote IPC handlers', () => {
     expect(result.success).toBe(true);
     const frame = harness.sockets[0]?.writes[0];
     expect(frame).toBeTruthy();
+    expect(Buffer.from(frame as Uint8Array).toString('ascii', 0, 4)).not.toBe('SM4T');
 
     const decoded = decodeStarmotePacket(frame as Uint8Array);
     expect(decoded.ok).toBe(true);
@@ -213,6 +214,48 @@ describe('StarMote IPC handlers', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBe('Unsupported StarMote command payload version.');
+  });
+
+  it('rejects multiline StarMote admin commands', async () => {
+    await harness.call(IPC.STARMOTE_CONNECT, {
+      serverId: 'srv-command-validate',
+      host: '127.0.0.1',
+      port: 5003,
+    });
+
+    const result = await harness.call(IPC.STARMOTE_SEND_ADMIN_COMMAND, {
+      version: 1,
+      serverId: 'srv-command-validate',
+      command: '/player_list\n/shutdown 10',
+    }) as { success: boolean; reasonCode?: string; error?: string };
+
+    expect(result.success).toBe(false);
+    expect(result.reasonCode).toBe('invalid_command');
+    expect(result.error).toContain('single line');
+  });
+
+  it('broadcasts runtime events emitted from inbound StarMote socket data', async () => {
+    await harness.call(IPC.STARMOTE_CONNECT, {
+      serverId: 'srv-runtime-events',
+      host: '127.0.0.1',
+      port: 5002,
+    });
+
+    const frame = encodeStarmotePacket(0x2301, Buffer.from('SQL QUERY 2 BEGIN\n', 'utf8'));
+    harness.sockets[0].emit('data', Buffer.from(frame));
+
+    const runtimeEvents = harness.sent
+      .filter((entry) => entry.channel === IPC.STARMOTE_RUNTIME_EVENT)
+      .map((entry) => entry.payload as { serverId: string; line: string; source: string; commandId?: number });
+
+    expect(runtimeEvents).toEqual([
+      expect.objectContaining({
+        serverId: 'srv-runtime-events',
+        line: 'SQL QUERY 2 BEGIN',
+        source: 'framed-packet',
+        commandId: 0x2301,
+      }),
+    ]);
   });
 
   it('emits debug logs for IPC operations when STARMOTE_DEBUG is enabled', async () => {
