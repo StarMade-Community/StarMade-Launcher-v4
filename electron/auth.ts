@@ -35,6 +35,69 @@ function refreshKey(accountId: string): string {
 function expiryKey(accountId: string): string {
   return `auth_token_expiry_${accountId}`;
 }
+function usernameKey(accountId: string): string {
+  return `auth_username_${accountId}`;
+}
+
+interface CanonicalUsername {
+  username: string;
+  source: 'response' | 'token' | 'input';
+}
+
+function getNonEmptyString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  const parts = token.split('.');
+  if (parts.length < 2) return null;
+  try {
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(base64.length + (4 - (base64.length % 4 || 4)), '=');
+    const payload = Buffer.from(padded, 'base64').toString('utf8');
+    return JSON.parse(payload) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function resolveCanonicalUsername(
+  loginIdentifier: string,
+  response: Record<string, unknown>,
+  accessToken: string,
+): CanonicalUsername {
+  const responseCandidates: unknown[] = [
+    response.username,
+    response.user_name,
+    response.login,
+    response.name,
+    (response.user as Record<string, unknown> | undefined)?.username,
+    (response.user as Record<string, unknown> | undefined)?.name,
+  ];
+  for (const candidate of responseCandidates) {
+    const value = getNonEmptyString(candidate);
+    if (value) return { username: value, source: 'response' };
+  }
+
+  const jwt = decodeJwtPayload(accessToken);
+  if (jwt) {
+    const tokenCandidates: unknown[] = [
+      jwt.preferred_username,
+      jwt.username,
+      jwt.user_name,
+      jwt.login,
+      jwt.name,
+    ];
+    for (const candidate of tokenCandidates) {
+      const value = getNonEmptyString(candidate);
+      if (value) return { username: value, source: 'token' };
+    }
+  }
+
+  return { username: loginIdentifier.trim(), source: 'input' };
+}
 
 // ─── Token persistence ────────────────────────────────────────────────────────
 
@@ -142,9 +205,10 @@ export interface RegisterResult {
  */
 export async function loginWithPassword(username: string, password: string): Promise<LoginResult> {
   try {
+    const loginIdentifier = username.trim();
     const res = await httpsPost(TOKEN_URL, {
       grant_type: 'password',
-      username:   username.trim(),
+      username:   loginIdentifier,
       password,
       scope:      OAUTH_SCOPE,
     });
@@ -155,21 +219,27 @@ export async function loginWithPassword(username: string, password: string): Pro
       const accessToken  = json.access_token  as string;
       const refreshToken = json.refresh_token as string | undefined;
       const expiresIn    = typeof json.expires_in === 'number' ? json.expires_in : 3600;
+      const canonical = resolveCanonicalUsername(loginIdentifier, json, accessToken);
 
       // Derive a stable, store-friendly account id from the username
-      const accountId = `registry-${username.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_')}`;
+      const accountId = `registry-${canonical.username.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}`;
       const expiry    = Date.now() + expiresIn * 1000;
 
       storeToken(tokenKey(accountId), accessToken);
       if (refreshToken) storeToken(refreshKey(accountId), refreshToken);
       storeSet(expiryKey(accountId), expiry);
+      storeSet(usernameKey(accountId), canonical.username);
 
-      try { console.log(`[Auth] Logged in as ${username.trim()} (accountId=${accountId})`); } catch { /* EPIPE – stdout disconnected (AppImage) */ }
+      if (canonical.username.toLowerCase() !== loginIdentifier.toLowerCase()) {
+        console.warn(`[Auth] Login identifier '${loginIdentifier}' authenticated as '${canonical.username}'.`);
+      }
+
+      try { console.log(`[Auth] Logged in as ${canonical.username} (accountId=${accountId})`); } catch { /* EPIPE - stdout disconnected (AppImage) */ }
 
       return {
         success: true,
         accountId,
-        username: username.trim(),
+        username: canonical.username,
         expiresIn,
       };
     }
@@ -207,16 +277,19 @@ export async function refreshAccessToken(accountId: string): Promise<LoginResult
       const refreshToken = json.refresh_token as string | undefined;
       const expiresIn    = typeof json.expires_in === 'number' ? json.expires_in : 3600;
       const expiry       = Date.now() + expiresIn * 1000;
+      const storedUsername = storeGet(usernameKey(accountId));
+      const fallbackUsername = typeof storedUsername === 'string' && storedUsername.trim().length > 0
+        ? storedUsername
+        : accountId.replace(/^registry-/, '');
+      const canonical = resolveCanonicalUsername(fallbackUsername, json, accessToken);
 
       storeToken(tokenKey(accountId), accessToken);
       if (refreshToken) storeToken(refreshKey(accountId), refreshToken);
       storeSet(expiryKey(accountId), expiry);
+      storeSet(usernameKey(accountId), canonical.username);
 
-      // Recover username from the accountId convention
-      const username = accountId.replace(/^registry-/, '');
-
-      console.log(`[Auth] Refreshed token for ${username}`);
-      return { success: true, accountId, username, expiresIn };
+      console.log(`[Auth] Refreshed token for ${canonical.username} (accountId=${accountId})`);
+      return { success: true, accountId, username: canonical.username, expiresIn };
     }
 
     return { success: false, error: `Token refresh failed (HTTP ${res.statusCode}).` };
@@ -326,7 +399,8 @@ export async function getAccessTokenForLaunch(
     } else {
       // Access token was missing AND refresh failed.  The user will need to
       // log in again; log a clear warning so this shows up in the console.
-      console.warn(`[Auth] Token missing and refresh failed for ${accountId}: ${result.success ? 'unknown' : result.error}`);
+      const refreshError = 'error' in result ? result.error : 'unknown';
+      console.warn(`[Auth] Token missing and refresh failed for ${accountId}: ${refreshError}`);
     }
   }
 
@@ -338,12 +412,14 @@ export async function getAccessTokenForLaunch(
   return token;
 }
 
+
 // ─── Logout ───────────────────────────────────────────────────────────────────
 
 export function logoutAccount(accountId: string): void {
   deleteToken(tokenKey(accountId));
   deleteToken(refreshKey(accountId));
   storeDelete(expiryKey(accountId));
+  storeDelete(usernameKey(accountId));
   console.log(`[Auth] Logged out account: ${accountId}`);
 }
 

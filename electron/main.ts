@@ -26,7 +26,14 @@ import { launchGame, stopGame, getGameStatus, getAllRunningGames, hasRunningGame
 import type { UpdateInfo } from './updater.js';
 import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from './updater.js';
 import { createBackup, listBackups, restoreBackup } from './backup.js';
-import { loginWithPassword, refreshAccessToken, registerAccount, logoutAccount, getAuthStatus, getAccessTokenForLaunch } from './auth.js';
+import {
+  loginWithPassword,
+  refreshAccessToken,
+  registerAccount,
+  logoutAccount,
+  getAuthStatus,
+  getAccessTokenForLaunch,
+} from './auth.js';
 import { isRunningOnWayland } from './wayland-detect.js';
 import { isRunningAsAppImage } from './appimage-detect.js';
 import { registerAppImageDesktopIntegration } from './desktop-integration.js';

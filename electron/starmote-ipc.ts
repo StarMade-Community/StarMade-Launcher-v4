@@ -49,6 +49,7 @@ interface RegisterStarmoteIpcOptions {
   createSocket: () => SocketLike;
   adminCommandPassword?: string;
   resolveAuthTokenForAccount?: (accountId: string) => Promise<string | null>;
+  resolveUsernameForAccount?: (accountId: string) => Promise<string | null> | string | null;
   loginClientVersion?: string;
 }
 
@@ -58,6 +59,8 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
     getAllWindows,
     createSocket,
     adminCommandPassword,
+    resolveAuthTokenForAccount,
+    resolveUsernameForAccount,
     loginClientVersion,
   } = options;
   logStarmoteDebug('ipc.registered');
@@ -97,7 +100,34 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
       const port = Number.isFinite(payload?.port) ? Math.trunc(payload.port) : Number.NaN;
       const clientVersion = payload?.clientVersion?.trim() || undefined;
       const activeAccountId = payload?.activeAccountId?.trim() || undefined;
-      const username = payload?.username?.trim() || activeAccountId || undefined;
+      let username = payload?.username?.trim() || undefined;
+      let authToken: string | undefined;
+
+      if (!username && activeAccountId && resolveUsernameForAccount) {
+        try {
+          const resolved = await resolveUsernameForAccount(activeAccountId);
+          username = resolved?.trim() || undefined;
+        } catch (error) {
+          logStarmoteDebug('ipc.connect.username_resolve_failed', {
+            serverId,
+            activeAccountId,
+            error: String(error),
+          });
+        }
+      }
+
+      if (activeAccountId && resolveAuthTokenForAccount) {
+        try {
+          const resolved = await resolveAuthTokenForAccount(activeAccountId);
+          authToken = resolved?.trim() || undefined;
+        } catch (error) {
+          logStarmoteDebug('ipc.connect.auth_token_resolve_failed', {
+            serverId,
+            activeAccountId,
+            error: String(error),
+          });
+        }
+      }
 
       if (!serverId || !host || !Number.isInteger(port) || port < 1 || port > 65535) {
         logStarmoteDebug('ipc.connect.invalid_payload', {
@@ -114,6 +144,7 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
         username,
         clientVersion,
         activeAccountId,
+        hasAuthToken: !!authToken,
       });
 
       return manager.connect({
@@ -123,7 +154,7 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
         username,
         clientVersion,
         activeAccountId,
-        authToken: undefined,
+        authToken,
         userAgent: USER_AGENT_STAR_MOTE_STANDALONE,
       });
     },

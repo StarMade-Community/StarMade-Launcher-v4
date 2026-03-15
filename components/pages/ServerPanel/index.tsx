@@ -2242,14 +2242,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setRemoteConnectNameInput(server?.name ?? '');
     setRemoteConnectHostInput(defaultHost);
     setRemoteConnectPortInput(server?.port?.trim() || serverPortInput || '4242');
-    setRemoteConnectUsernameInput(activeAccount?.displayName?.trim() || '');
+    setRemoteConnectUsernameInput(activeAccount?.name?.trim() || '');
     setRemoteFileAccessProtocolInput(nextFileProtocol);
     setRemoteFileAccessHostInput(resolveDefaultRemoteFileAccessHost(server, defaultHost));
     setRemoteFileAccessPortInput(server?.remoteFileAccessPort?.trim() || getDefaultRemoteFileAccessPort(nextFileProtocol));
     setRemoteFileAccessUsernameInput(server?.remoteFileAccessUsername?.trim() || '');
     setRemoteFileAccessRootPathInput(server?.remoteFileAccessRootPath?.trim() || '/');
     setRemoteConnectError(null);
-  }, [activeAccount?.displayName, serverConfigValues.SERVER_LISTEN_IP, serverPortInput]);
+  }, [activeAccount?.name, serverConfigValues.SERVER_LISTEN_IP, serverPortInput]);
 
   const openRemoteConnectModal = useCallback(() => {
     if (!canShowRemoteConnectControls) {
@@ -2312,7 +2312,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     const sanitizedPort = String(parsedPort);
     const nextName = remoteConnectNameInput.trim() || targetServer.name;
-    const username = remoteConnectUsernameInput.trim() || undefined;
+    const username = remoteConnectUsernameInput.trim() || activeAccount?.name?.trim() || undefined;
     const nextRemoteFileProtocol = remoteFileAccessProtocolInput;
     const nextRemoteFileHost = remoteFileAccessHostInput.trim() || undefined;
     const nextRemoteFilePort = remoteFileAccessPortInput.trim() || undefined;

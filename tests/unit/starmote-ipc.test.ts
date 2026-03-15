@@ -126,6 +126,7 @@ type Handler = (event: unknown, payload?: unknown) => unknown;
 
 function createHarness(options?: {
   resolveAuthTokenForAccount?: (accountId: string) => Promise<string | null>;
+  resolveUsernameForAccount?: (accountId: string) => Promise<string | null> | string | null;
   loginResponseCode?: number;
   socketBehavior?: 'connect' | 'error' | 'timeout';
 }) {
@@ -155,6 +156,7 @@ function createHarness(options?: {
       return socket;
     },
     resolveAuthTokenForAccount: options?.resolveAuthTokenForAccount ?? (async () => 'token-abc'),
+    resolveUsernameForAccount: options?.resolveUsernameForAccount ?? ((accountId) => accountId),
   });
 
   return {
@@ -232,6 +234,42 @@ describe('StarMote IPC handlers', () => {
     );
 
     expect(harness.sent.some((entry) => entry.channel === IPC.STARMOTE_STATUS_CHANGED)).toBe(true);
+  });
+
+  it('resolves account auth tokens and sends them in the login handshake', async () => {
+    const resolveAuthTokenForAccount = vi.fn(async () => 'token-from-resolver-123');
+    harness = createHarness({ resolveAuthTokenForAccount });
+
+    const result = await harness.call(IPC.STARMOTE_CONNECT, {
+      serverId: 'srv-token-forward',
+      host: '127.0.0.1',
+      port: 4242,
+      username: 'admin',
+      activeAccountId: 'acct-1',
+    }) as { success: boolean };
+
+    expect(result.success).toBe(true);
+    expect(resolveAuthTokenForAccount).toHaveBeenCalledTimes(1);
+    expect(resolveAuthTokenForAccount).toHaveBeenCalledWith('acct-1');
+    const loginFrame = Buffer.from(harness.sockets[0]?.writes[0] as Uint8Array);
+    expect(loginFrame.includes(Buffer.from('token-from-resolver-123', 'utf8'))).toBe(true);
+  });
+
+  it('resolves login username from active account when payload username is omitted', async () => {
+    const resolveUsernameForAccount = vi.fn((accountId: string) => `name-for-${accountId}`);
+    harness = createHarness({ resolveUsernameForAccount });
+
+    const result = await harness.call(IPC.STARMOTE_CONNECT, {
+      serverId: 'srv-username-resolve',
+      host: '127.0.0.1',
+      port: 4242,
+      activeAccountId: 'acct-1',
+    }) as { success: boolean; status?: { username?: string } };
+
+    expect(result.success).toBe(true);
+    expect(resolveUsernameForAccount).toHaveBeenCalledTimes(1);
+    expect(resolveUsernameForAccount).toHaveBeenCalledWith('acct-1');
+    expect(result.status?.username).toBe('name-for-acct-1');
   });
 
   it('stores connection errors and exposes them via status', async () => {
