@@ -371,12 +371,17 @@ const resolvedStarmotePacketMode = (() => {
   return 'length-prefixed' as StarmoteWireMode;
 })();
 
+const starmoteAdminCommandPassword = process.env.STARMOTE_SUPER_ADMIN_PASSWORD
+  ?? process.env.STARMOTE_SERVER_PASSWORD
+  ?? '';
+
 if (isStarmoteRolloutEnabled()) {
   registerStarmoteIpcHandlers({
     ipcMain,
     getAllWindows: () => BrowserWindow.getAllWindows(),
     createSocket: () => new net.Socket(),
     adminCommandWireMode: resolvedStarmotePacketMode,
+    adminCommandPassword: starmoteAdminCommandPassword,
   });
 } else {
   console.info('[starmote] rollout disabled via STARMOTE_ENABLED=0');

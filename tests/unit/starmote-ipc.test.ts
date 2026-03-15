@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 
 import { IPC } from '../../electron/ipc-channels.js';
 import { registerStarmoteIpcHandlers } from '../../electron/starmote-ipc.js';
-import { decodeStarmotePacket, encodeStarmotePacket, STARMOTE_COMMAND_IDS } from '../../electron/starmote-protocol.js';
+import { encodeStarmotePacket } from '../../electron/starmote-protocol.js';
 
 class FakeSocket extends EventEmitter {
   public behavior: 'connect' | 'error' | 'timeout' = 'connect';
@@ -195,14 +195,11 @@ describe('StarMote IPC handlers', () => {
     expect(result.success).toBe(true);
     const frame = harness.sockets[0]?.writes[0];
     expect(frame).toBeTruthy();
-    expect(Buffer.from(frame as Uint8Array).toString('ascii', 0, 4)).not.toBe('SM4T');
-
-    const decoded = decodeStarmotePacket(frame as Uint8Array);
-    expect(decoded.ok).toBe(true);
-    if (decoded.ok) {
-      expect(decoded.packet.commandId).toBe(STARMOTE_COMMAND_IDS.ADMIN_COMMAND);
-      expect(Buffer.from(decoded.packet.payload).toString('utf8')).toBe('/player_list');
-    }
+    const raw = Buffer.from(frame as Uint8Array);
+    expect(raw.readUInt32BE(0)).toBe(raw.byteLength - 4);
+    expect(raw.readUInt8(4)).toBe(42);
+    expect(raw.readUInt8(7)).toBe(2);
+    expect(raw.subarray(19).toString('utf8')).toBe('/player_list');
   });
 
   it('rejects unsupported StarMote command payload versions', async () => {

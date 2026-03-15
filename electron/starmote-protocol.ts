@@ -2,6 +2,11 @@ const PROTOCOL_MAGIC = 'SM4T';
 const LENGTH_PREFIX_BYTES = 4;
 const PACKET_BODY_HEADER_BYTES = 7;
 
+const SCHINE_PACKET_BYTE = 42;
+const SCHINE_TYPE_PARAMETRIZED_COMMAND = 111;
+const SCHINE_TYPE_STRING = 4;
+const EXECUTE_ADMIN_COMMAND_ID = 2;
+
 export const STARMOTE_PROTOCOL_VERSION = 1;
 
 export type StarmoteWireMode = 'length-prefixed' | 'legacy-sm4t';
@@ -14,6 +19,54 @@ export interface StarmoteDecodedPacket {
   version: number;
   commandId: number;
   payload: Uint8Array;
+}
+
+function encodeJavaUtfString(value: string): Buffer {
+  const utfBytes = Buffer.from(value, 'utf8');
+  if (utfBytes.byteLength > 0xffff) {
+    throw new Error('String too long for Java writeUTF payload.');
+  }
+
+  const out = Buffer.allocUnsafe(2 + utfBytes.byteLength);
+  out.writeUInt16BE(utfBytes.byteLength, 0);
+  utfBytes.copy(out, 2);
+  return out;
+}
+
+export function encodeExecuteAdminCommandSuperPacket(command: string, serverPassword = ''): Uint8Array {
+  const passwordUtf = encodeJavaUtfString(serverPassword);
+  const commandUtf = encodeJavaUtfString(command);
+
+  const payloadSize = 5 + 4 + 2 + passwordUtf.byteLength + commandUtf.byteLength;
+  const payload = Buffer.allocUnsafe(payloadSize);
+
+  let offset = 0;
+  payload.writeInt8(SCHINE_PACKET_BYTE, offset);
+  offset += 1;
+  payload.writeInt16BE(-1, offset);
+  offset += 2;
+  payload.writeUInt8(EXECUTE_ADMIN_COMMAND_ID, offset);
+  offset += 1;
+  payload.writeUInt8(SCHINE_TYPE_PARAMETRIZED_COMMAND, offset);
+  offset += 1;
+
+  payload.writeInt32BE(2, offset);
+  offset += 4;
+
+  payload.writeUInt8(SCHINE_TYPE_STRING, offset);
+  offset += 1;
+  passwordUtf.copy(payload, offset);
+  offset += passwordUtf.byteLength;
+
+  payload.writeUInt8(SCHINE_TYPE_STRING, offset);
+  offset += 1;
+  commandUtf.copy(payload, offset);
+  offset += commandUtf.byteLength;
+
+  const frame = Buffer.allocUnsafe(LENGTH_PREFIX_BYTES + payload.byteLength);
+  frame.writeUInt32BE(payload.byteLength, 0);
+  payload.copy(frame, LENGTH_PREFIX_BYTES);
+  return frame;
 }
 
 function encodePacketBody(commandId: number, payload: Uint8Array): Buffer {

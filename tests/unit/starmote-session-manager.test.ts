@@ -5,8 +5,6 @@ import { StarmoteSessionManager } from '../../electron/starmote-session-manager.
 import {
   decodeStarmotePacket,
   encodeStarmotePacket,
-  STARMOTE_COMMAND_IDS,
-  STARMOTE_PROTOCOL_VERSION,
 } from '../../electron/starmote-protocol.js';
 
 class FakeSocket extends EventEmitter {
@@ -256,42 +254,18 @@ describe('StarmoteSessionManager', () => {
 
     const frame = harness.sockets[0]?.writes[0];
     expect(frame).toBeTruthy();
-     expect(Buffer.from(frame as Uint8Array).toString('ascii', 0, 4)).not.toBe('SM4T');
-    const decoded = decodeStarmotePacket(frame as Uint8Array);
-    expect(decoded.ok).toBe(true);
-    if (decoded.ok) {
-      expect(decoded.packet.version).toBe(STARMOTE_PROTOCOL_VERSION);
-      expect(decoded.packet.commandId).toBe(STARMOTE_COMMAND_IDS.ADMIN_COMMAND);
-      expect(Buffer.from(decoded.packet.payload).toString('utf8')).toBe('/player_list');
-    }
-  });
-
-  it('supports explicit legacy-sm4t packet mode override for command send', async () => {
-    const sockets: FakeSocket[] = [];
-    const manager = new StarmoteSessionManager({
-      createSocket: () => {
-        const socket = new FakeSocket();
-        sockets.push(socket);
-        return socket;
-      },
-      adminCommandWireMode: 'legacy-sm4t',
-    });
-
-    await manager.connect({
-      serverId: 'srv-legacy-wire',
-      host: '127.0.0.1',
-      port: 4242,
-    });
-
-    const sendResult = await manager.sendAdminCommand({
-      serverId: 'srv-legacy-wire',
-      command: '/player_list',
-    });
-
-    expect(sendResult.success).toBe(true);
-    const frame = sockets[0]?.writes[0];
-    expect(frame).toBeTruthy();
-    expect(Buffer.from(frame as Uint8Array).toString('ascii', 0, 4)).toBe('SM4T');
+    const raw = Buffer.from(frame as Uint8Array);
+    expect(raw.readUInt32BE(0)).toBe(raw.byteLength - 4);
+    expect(raw.readUInt8(4)).toBe(42);
+    expect(raw.readInt16BE(5)).toBe(-1);
+    expect(raw.readUInt8(7)).toBe(2);
+    expect(raw.readUInt8(8)).toBe(111);
+    expect(raw.readInt32BE(9)).toBe(2);
+    expect(raw.readUInt8(13)).toBe(4);
+    expect(raw.readUInt16BE(14)).toBe(0);
+    expect(raw.readUInt8(16)).toBe(4);
+    expect(raw.readUInt16BE(17)).toBe('/player_list'.length);
+    expect(raw.subarray(19).toString('utf8')).toBe('/player_list');
   });
 
   it('rejects admin command sends when the session is not protocol-ready', async () => {

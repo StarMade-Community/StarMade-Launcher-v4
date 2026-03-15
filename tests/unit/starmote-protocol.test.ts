@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import {
   decodeStarmotePacket,
   encodeAdminCommandPacket,
+  encodeExecuteAdminCommandSuperPacket,
   encodeStarmotePacket,
   STARMOTE_COMMAND_IDS,
   STARMOTE_PROTOCOL_VERSION,
@@ -43,6 +44,21 @@ describe('starmote-protocol framing', () => {
     if (decoded.ok === false) {
       expect(decoded.error).toContain('length');
     }
+  });
+
+  it('encodes ExecuteAdminCommand packet using schine header and typed string params', () => {
+    const frame = Buffer.from(encodeExecuteAdminCommandSuperPacket('/player_list', ''));
+    expect(frame.readUInt32BE(0)).toBe(frame.byteLength - 4);
+    expect(frame.readUInt8(4)).toBe(42);
+    expect(frame.readInt16BE(5)).toBe(-1);
+    expect(frame.readUInt8(7)).toBe(2);
+    expect(frame.readUInt8(8)).toBe(111);
+    expect(frame.readInt32BE(9)).toBe(2);
+    expect(frame.readUInt8(13)).toBe(4);
+    expect(frame.readUInt16BE(14)).toBe(0);
+    expect(frame.readUInt8(16)).toBe(4);
+    expect(frame.readUInt16BE(17)).toBe('/player_list'.length);
+    expect(frame.subarray(19).toString('utf8')).toBe('/player_list');
   });
 });
 

@@ -1,5 +1,5 @@
 import { logStarmoteDebug } from './starmote-debug.js';
-import { decodeStarmotePacket, encodeAdminCommandPacket, type StarmoteWireMode } from './starmote-protocol.js';
+import { decodeStarmotePacket, encodeExecuteAdminCommandSuperPacket } from './starmote-protocol.js';
 
 export interface SocketLike {
   setNoDelay(noDelay?: boolean): void;
@@ -81,7 +81,7 @@ interface StarmoteSessionManagerOptions {
   runAuthStage?: (params: StarmoteConnectParams) => Promise<void>;
   waitForCommandRegistry?: (params: StarmoteConnectParams, attempt: number) => Promise<void>;
   onRuntimeEvent?: (event: StarmoteRuntimeEvent) => void;
-  adminCommandWireMode?: StarmoteWireMode;
+  adminCommandPassword?: string;
   commandSendTimeoutMs?: number;
   handshakeTimeoutMs?: number;
   handshakeRetries?: number;
@@ -118,7 +118,7 @@ export class StarmoteSessionManager {
   private readonly runAuthStage: (params: StarmoteConnectParams) => Promise<void>;
   private readonly waitForCommandRegistry: (params: StarmoteConnectParams, attempt: number) => Promise<void>;
   private readonly onRuntimeEvent?: (event: StarmoteRuntimeEvent) => void;
-  private readonly adminCommandWireMode: StarmoteWireMode;
+  private readonly adminCommandPassword: string;
   private readonly commandSendTimeoutMs: number;
   private readonly handshakeTimeoutMs: number;
   private readonly handshakeRetries: number;
@@ -130,7 +130,7 @@ export class StarmoteSessionManager {
     this.runAuthStage = options.runAuthStage ?? (async () => undefined);
     this.waitForCommandRegistry = options.waitForCommandRegistry ?? (async () => undefined);
     this.onRuntimeEvent = options.onRuntimeEvent;
-    this.adminCommandWireMode = options.adminCommandWireMode ?? 'length-prefixed';
+    this.adminCommandPassword = options.adminCommandPassword?.trim() ?? '';
     this.commandSendTimeoutMs = Number.isFinite(options.commandSendTimeoutMs)
       ? Math.max(1000, Math.trunc(options.commandSendTimeoutMs as number))
       : 5000;
@@ -199,7 +199,7 @@ export class StarmoteSessionManager {
     }
 
     try {
-      const packet = encodeAdminCommandPacket(command, this.adminCommandWireMode);
+      const packet = encodeExecuteAdminCommandSuperPacket(command, this.adminCommandPassword);
       await this.writePacketWithTimeout(session.socket, packet, this.commandSendTimeoutMs);
       logStarmoteDebug('session.command.sent', { serverId, bytes: packet.byteLength });
       return {

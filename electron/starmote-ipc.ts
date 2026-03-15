@@ -5,7 +5,6 @@ import {
   type StarmoteConnectionStatus,
   type StarmoteRuntimeEvent,
 } from './starmote-session-manager.js';
-import type { StarmoteWireMode } from './starmote-protocol.js';
 import { logStarmoteDebug } from './starmote-debug.js';
 
 interface BrowserWindowLike {
@@ -44,11 +43,11 @@ interface RegisterStarmoteIpcOptions {
   ipcMain: IpcMainLike;
   getAllWindows: () => BrowserWindowLike[];
   createSocket: () => SocketLike;
-  adminCommandWireMode?: StarmoteWireMode;
+  adminCommandPassword?: string;
 }
 
 export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions): void {
-  const { ipcMain, getAllWindows, createSocket, adminCommandWireMode } = options;
+  const { ipcMain, getAllWindows, createSocket, adminCommandPassword } = options;
   logStarmoteDebug('ipc.registered');
 
   const broadcastStarmoteStatus = (status: StarmoteConnectionStatus): void => {
@@ -69,7 +68,7 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
     createSocket,
     onStatusChanged: broadcastStarmoteStatus,
     onRuntimeEvent: broadcastRuntimeEvent,
-    adminCommandWireMode,
+    adminCommandPassword,
   });
 
   ipcMain.handle(
