@@ -24,8 +24,10 @@ interface StarmoteConnectPayload {
   port: number;
   username?: string;
   clientVersion?: string;
-  activeAccountId: string;
+  activeAccountId?: string;
 }
+
+const USER_AGENT_STAR_MOTE_STANDALONE = 2;
 
 interface StarmoteDisconnectPayload {
   serverId: string;
@@ -56,7 +58,6 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
     getAllWindows,
     createSocket,
     adminCommandPassword,
-    resolveAuthTokenForAccount,
     loginClientVersion,
   } = options;
   logStarmoteDebug('ipc.registered');
@@ -81,14 +82,7 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
     onRuntimeEvent: broadcastRuntimeEvent,
     adminCommandPassword,
     loginClientVersion,
-    runAuthStage: async (params) => {
-      if (!params.activeAccountId) {
-        throw new Error('StarMade account authentication is required for StarMote.');
-      }
-      if (!params.authToken) {
-        throw new Error('Auth token missing or expired for the selected launcher account. Please sign in again.');
-      }
-    },
+    runAuthStage: async () => undefined,
   });
 
   ipcMain.handle(
@@ -113,10 +107,6 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
         });
         return { success: false, error: 'serverId, host, and a valid port are required.' };
       }
-      if (!activeAccountId) {
-        return { success: false, error: 'StarMade account authentication is required for StarMote.' };
-      }
-
       logStarmoteDebug('ipc.connect.request', {
         serverId,
         host,
@@ -126,22 +116,16 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
         activeAccountId,
       });
 
-      let authToken: string | undefined;
-      if (!resolveAuthTokenForAccount) {
-        return { success: false, error: 'Auth token resolver is unavailable in this build.' };
-      }
-
-      try {
-        const resolvedToken = await resolveAuthTokenForAccount(activeAccountId);
-        authToken = resolvedToken ?? undefined;
-      } catch (error) {
-        return { success: false, error: `Failed to resolve launcher auth token: ${String(error)}` };
-      }
-      if (!authToken) {
-        return { success: false, error: 'StarMade account authentication is required for StarMote. Please sign in again.' };
-      }
-
-      return manager.connect({ serverId, host, port, username, clientVersion, activeAccountId, authToken });
+      return manager.connect({
+        serverId,
+        host,
+        port,
+        username,
+        clientVersion,
+        activeAccountId,
+        authToken: undefined,
+        userAgent: USER_AGENT_STAR_MOTE_STANDALONE,
+      });
     },
   );
 

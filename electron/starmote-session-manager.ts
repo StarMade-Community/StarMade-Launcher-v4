@@ -58,6 +58,7 @@ export interface StarmoteConnectParams {
   clientVersion?: string;
   activeAccountId?: string;
   authToken?: string;
+  userAgent?: number;
 }
 
 export interface StarmoteRuntimeEvent {
@@ -273,6 +274,7 @@ export class StarmoteSessionManager {
       username: params.username,
       clientVersion: params.clientVersion,
       activeAccountId: params.activeAccountId,
+      userAgent: params.userAgent,
       hasAuthToken: typeof params.authToken === 'string' && params.authToken.length > 0,
     });
 
@@ -759,20 +761,24 @@ export class StarmoteSessionManager {
 
   private async performLoginHandshake(socket: SocketLike, params: StarmoteConnectParams, generation: number): Promise<void> {
     const playerName = params.username?.trim();
-    const authToken = params.authToken?.trim();
+    const authToken = params.authToken?.trim() ?? '';
     if (!playerName) {
       throw new Error('Missing StarMote login name.');
     }
-    if (!authToken) {
-      throw new Error('Missing StarMote auth token.');
-    }
+
+    // Release branch auth expects the session/server identity (host:port) here.
+    // Using launcher account ids can break token verification for StarMote logins.
+    const uniqueSessionId = `${params.host.trim()}:${params.port}`;
+    const userAgent = Number.isFinite(params.userAgent)
+      ? Math.trunc(params.userAgent as number)
+      : 2;
 
     const loginPacket = encodeLoginRequestSuperPacket({
       playerName,
       clientVersion: params.clientVersion?.trim() || this.loginClientVersion,
-      uniqueSessionId: params.activeAccountId ?? '',
+      uniqueSessionId,
       authToken,
-      userAgent: 1,
+      userAgent,
     });
 
     await this.writePacketWithTimeout(socket, loginPacket, this.commandSendTimeoutMs);

@@ -353,7 +353,7 @@ const launcherApi = {
       port: number;
       username?: string;
       clientVersion?: string;
-      activeAccountId: string;
+      activeAccountId?: string;
     }): Promise<{
       success: boolean;
       status?: {
