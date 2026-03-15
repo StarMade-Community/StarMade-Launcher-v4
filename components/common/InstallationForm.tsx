@@ -200,6 +200,11 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
   const [serverIp, setServerIp] = useState(item.serverIp ?? 'localhost');
   const [maxPlayers, setMaxPlayers] = useState(item.maxPlayers ?? 32);
   const [isRemoteServer, setIsRemoteServer] = useState(item.isRemote ?? false);
+  const [remoteFileAccessProtocol, setRemoteFileAccessProtocol] = useState<'none' | 'ftp' | 'sftp'>(item.remoteFileAccessProtocol ?? 'none');
+  const [remoteFileAccessHost, setRemoteFileAccessHost] = useState(item.remoteFileAccessHost ?? '');
+  const [remoteFileAccessPort, setRemoteFileAccessPort] = useState(item.remoteFileAccessPort ?? '');
+  const [remoteFileAccessUsername, setRemoteFileAccessUsername] = useState(item.remoteFileAccessUsername ?? '');
+  const [remoteFileAccessRootPath, setRemoteFileAccessRootPath] = useState(item.remoteFileAccessRootPath ?? '/');
   const [icon, setIcon] = useState(item.icon);
   const [type, setType] = useState<ItemType>(item.type === 'latest' ? 'release' : item.type);
   const [version, setVersion] = useState(item.version);
@@ -366,6 +371,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
 
     const normalizedServerIp = serverIp.trim() || 'localhost';
     const normalizedPort = String(Math.max(1, Math.min(65535, Number.parseInt(port, 10) || 4242)));
+    const normalizedRemoteFilePort = remoteFileAccessPort.trim();
 
     onSave({
         ...item,
@@ -386,6 +392,11 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
           port: normalizedPort,
           serverIp: normalizedServerIp,
           maxPlayers: Math.max(0, Math.round(maxPlayers || 0)),
+          remoteFileAccessProtocol: isRemoteServer ? remoteFileAccessProtocol : undefined,
+          remoteFileAccessHost: isRemoteServer ? (remoteFileAccessHost.trim() || undefined) : undefined,
+          remoteFileAccessPort: isRemoteServer ? (normalizedRemoteFilePort || undefined) : undefined,
+          remoteFileAccessUsername: isRemoteServer ? (remoteFileAccessUsername.trim() || undefined) : undefined,
+          remoteFileAccessRootPath: isRemoteServer ? (remoteFileAccessRootPath.trim() || undefined) : undefined,
         }),
     });
   };
@@ -473,6 +484,74 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
                     </p>
                     {pathError && <p className="text-xs text-red-400">{pathError}</p>}
                   </div>
+                )}
+                {isRemoteServer && (
+                  <>
+                    <div className="col-span-2 mt-2 rounded-md border border-cyan-500/20 bg-cyan-500/5 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-cyan-200">Remote File Access</p>
+                      <p className="mt-1 text-xs text-gray-400">
+                        Optional FTP/SFTP profile metadata for future Files and Configuration tab support. Passwords and keys will be added separately.
+                      </p>
+                    </div>
+                    <FormField label="File Access Protocol" htmlFor="remoteFileAccessProtocol">
+                      <select
+                        id="remoteFileAccessProtocol"
+                        value={remoteFileAccessProtocol}
+                        onChange={(event) => {
+                          const nextProtocol = event.target.value as 'none' | 'ftp' | 'sftp';
+                          setRemoteFileAccessProtocol(nextProtocol);
+                          if (!remoteFileAccessPort.trim()) {
+                            setRemoteFileAccessPort(nextProtocol === 'sftp' ? '22' : nextProtocol === 'ftp' ? '21' : '');
+                          }
+                        }}
+                        className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+                      >
+                        <option value="none">None yet</option>
+                        <option value="ftp">FTP</option>
+                        <option value="sftp">SFTP</option>
+                      </select>
+                    </FormField>
+                    <FormField label="File Access Host" htmlFor="remoteFileAccessHost">
+                      <input
+                        id="remoteFileAccessHost"
+                        type="text"
+                        value={remoteFileAccessHost}
+                        onChange={(event) => setRemoteFileAccessHost(event.target.value)}
+                        placeholder="Leave blank to reuse remote host"
+                        className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+                      />
+                    </FormField>
+                    <FormField label="File Access Port" htmlFor="remoteFileAccessPort">
+                      <input
+                        id="remoteFileAccessPort"
+                        type="text"
+                        value={remoteFileAccessPort}
+                        onChange={(event) => setRemoteFileAccessPort(event.target.value)}
+                        placeholder={remoteFileAccessProtocol === 'sftp' ? '22' : remoteFileAccessProtocol === 'ftp' ? '21' : 'Optional'}
+                        className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+                      />
+                    </FormField>
+                    <FormField label="File Access Username" htmlFor="remoteFileAccessUsername">
+                      <input
+                        id="remoteFileAccessUsername"
+                        type="text"
+                        value={remoteFileAccessUsername}
+                        onChange={(event) => setRemoteFileAccessUsername(event.target.value)}
+                        placeholder="Optional"
+                        className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+                      />
+                    </FormField>
+                    <FormField label="Remote Root Path" htmlFor="remoteFileAccessRootPath">
+                      <input
+                        id="remoteFileAccessRootPath"
+                        type="text"
+                        value={remoteFileAccessRootPath}
+                        onChange={(event) => setRemoteFileAccessRootPath(event.target.value)}
+                        placeholder="/home/starmade/server"
+                        className="bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent"
+                      />
+                    </FormField>
+                  </>
                 )}
               </>
             ) : (

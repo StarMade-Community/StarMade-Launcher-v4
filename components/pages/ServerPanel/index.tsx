@@ -4,6 +4,17 @@ import ConfigPanel, { type ConfigPanelModel } from '../../common/ConfigPanel';
 import { useData } from '../../../contexts/DataContext';
 import { useApp } from '../../../contexts/AppContext';
 import type { ManagedItem, ServerLifecycleState, ServerLogLevel } from '../../../types';
+import {
+  buildDatabaseEntityListSql,
+  getDefaultRemoteFileAccessPort,
+  isServerUpdateSupported,
+  matchesDatabaseSectorLoadFilter,
+  resolveDefaultRemoteConnectHost,
+  resolveDefaultRemoteFileAccessHost,
+  shouldAutoLoadDatabaseEntities,
+  type DatabaseSectorLoadFilter,
+  type RemoteFileAccessProtocol,
+} from '../../../utils/serverPanel';
 
 interface ServerPanelProps {
   serverId?: string;
@@ -80,11 +91,13 @@ interface ChatChannelInfo {
 interface RemoteConnectionStatus {
   serverId: string;
   connected: boolean;
+  state?: 'idle' | 'connecting' | 'connected' | 'error';
   host?: string;
   port?: number;
   username?: string;
   connectedAt?: string;
   error?: string;
+  reasonCode?: 'connected' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
 }
 
 const GENERAL_CHANNEL_ID = 'all';
@@ -214,6 +227,7 @@ interface DatabaseEntityRow {
   x: number;
   y: number;
   z: number;
+  sectorLoaded: boolean;
 }
 
 interface PendingDatabaseSqlRequest {
@@ -560,8 +574,9 @@ const parseDatabaseEntities = (table: DatabaseSqlTable): DatabaseEntityRow[] => 
   const xIdx   = getDbColIdx(table.columns, 'X');
   const yIdx   = getDbColIdx(table.columns, 'Y');
   const zIdx   = getDbColIdx(table.columns, 'Z');
+  const sectorLoadedIdx = getDbColIdx(table.columns, 'SECTOR_LOADED');
 
-  if ([idIdx, uidIdx, nmIdx, tyIdx, faIdx, xIdx, yIdx, zIdx].some((i) => i < 0)) return [];
+  if ([idIdx, uidIdx, nmIdx, tyIdx, faIdx, xIdx, yIdx, zIdx, sectorLoadedIdx].some((i) => i < 0)) return [];
 
   const result: DatabaseEntityRow[] = [];
   for (const row of table.rows) {
@@ -569,6 +584,7 @@ const parseDatabaseEntities = (table: DatabaseSqlTable): DatabaseEntityRow[] => 
     const y = Number.parseInt(row[yIdx] ?? '', 10);
     const z = Number.parseInt(row[zIdx] ?? '', 10);
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    const sectorLoadedValue = (row[sectorLoadedIdx] ?? '').trim().toLowerCase();
     result.push({
       id: row[idIdx] ?? '',
       uid: row[uidIdx] ?? '',
@@ -576,18 +592,14 @@ const parseDatabaseEntities = (table: DatabaseSqlTable): DatabaseEntityRow[] => 
       typeValue: row[tyIdx] ?? 'Unknown',
       factionValue: row[faIdx] ?? '0',
       x, y, z,
+      sectorLoaded: sectorLoadedValue === 'true' || sectorLoadedValue === '1',
     });
   }
   return result;
 };
 
-/** The default entity-browser query — joins on SECTORS to only show non-transient (loaded) sectors */
-const DATABASE_ENTITY_LIST_SQL =
-  'SELECT e.ID, e.UID, e.NAME, e.TYPE, e.FACTION, e.X, e.Y, e.Z ' +
-  'FROM ENTITIES e ' +
-  'JOIN SECTORS s ON s.X = e.X AND s.Y = e.Y AND s.Z = e.Z ' +
-  'WHERE s.TRANSIENT = FALSE ' +
-  'ORDER BY e.X, e.Y, e.Z, e.NAME';
+/** The default entity-browser query — includes all sectors and marks each row as loaded/unloaded. */
+const DATABASE_ENTITY_LIST_SQL = buildDatabaseEntityListSql();
 
 const DATABASE_CMD_BY_MODE: Record<DatabaseSqlMode, string> = {
   query:      'sql_query',
@@ -1981,6 +1993,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [remoteConnectHostInput, setRemoteConnectHostInput] = useState('');
   const [remoteConnectPortInput, setRemoteConnectPortInput] = useState('4242');
   const [remoteConnectUsernameInput, setRemoteConnectUsernameInput] = useState('');
+  const [remoteFileAccessProtocolInput, setRemoteFileAccessProtocolInput] = useState<RemoteFileAccessProtocol>('none');
+  const [remoteFileAccessHostInput, setRemoteFileAccessHostInput] = useState('');
+  const [remoteFileAccessPortInput, setRemoteFileAccessPortInput] = useState('');
+  const [remoteFileAccessUsernameInput, setRemoteFileAccessUsernameInput] = useState('');
+  const [remoteFileAccessRootPathInput, setRemoteFileAccessRootPathInput] = useState('/');
   const [remoteConnectError, setRemoteConnectError] = useState<string | null>(null);
   const [isRemoteConnectPending, setIsRemoteConnectPending] = useState(false);
   const [remoteConnectionStatus, setRemoteConnectionStatus] = useState<RemoteConnectionStatus | null>(null);
@@ -1999,6 +2016,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [databaseEntities, setDatabaseEntities] = useState<DatabaseEntityRow[]>([]);
   const [databaseEntityTypeFilter, setDatabaseEntityTypeFilter] = useState<string>('all');
   const [databaseFactionFilter, setDatabaseFactionFilter] = useState<string>('all');
+  const [databaseSectorLoadFilter, setDatabaseSectorLoadFilter] = useState<DatabaseSectorLoadFilter>('all');
   const [databaseSortKey, setDatabaseSortKey] = useState<DatabaseSortKey>('name-asc');
   const [databaseClipboardMsg, setDatabaseClipboardMsg] = useState<string | null>(null);
 
@@ -2007,6 +2025,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const pendingDbRequestRef = useRef<PendingDatabaseSqlRequest | null>(null);
   const dbLinesByRequestRef = useRef<Map<number, string[]>>(new Map());
   const dbTimeoutRef = useRef<number | null>(null);
+  const databaseAutoLoadedServerIdsRef = useRef<Set<string>>(new Set());
 
   const { navigate } = useApp();
   const {
@@ -2116,22 +2135,52 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     return flags;
   }, [remoteStatusesByServerId]);
 
+  const remoteConnectionDisplay = useMemo(() => {
+    if (remoteConnectionStatus?.state === 'connecting') {
+      return { label: 'Connecting', className: 'text-amber-300' };
+    }
+    if (remoteConnectionStatus?.connected) {
+      return { label: 'Connected', className: 'text-emerald-300' };
+    }
+    switch (remoteConnectionStatus?.reasonCode) {
+      case 'timeout':
+        return { label: 'Timed Out', className: 'text-red-300' };
+      case 'connect_failed':
+        return { label: 'Connect Failed', className: 'text-red-300' };
+      case 'socket_error':
+        return { label: 'Connection Error', className: 'text-red-300' };
+      default:
+        return { label: 'Disconnected', className: 'text-gray-300' };
+    }
+  }, [remoteConnectionStatus]);
+
   const handleSwitchServer = useCallback((nextServerId: string) => {
     setViewingServerId(nextServerId || null);
   }, []);
 
+  const populateRemoteConnectForm = useCallback((server: ManagedItem | null, fallbackServerId: string) => {
+    const defaultHost = resolveDefaultRemoteConnectHost(server, serverConfigValues.SERVER_LISTEN_IP);
+    const nextFileProtocol = server?.remoteFileAccessProtocol ?? 'none';
+
+    setRemoteConnectTargetServerId(server?.id ?? fallbackServerId);
+    setRemoteConnectNameInput(server?.name ?? '');
+    setRemoteConnectHostInput(defaultHost);
+    setRemoteConnectPortInput(server?.port?.trim() || serverPortInput || '4242');
+    setRemoteConnectUsernameInput(activeAccount?.displayName?.trim() || '');
+    setRemoteFileAccessProtocolInput(nextFileProtocol);
+    setRemoteFileAccessHostInput(resolveDefaultRemoteFileAccessHost(server, defaultHost));
+    setRemoteFileAccessPortInput(server?.remoteFileAccessPort?.trim() || getDefaultRemoteFileAccessPort(nextFileProtocol));
+    setRemoteFileAccessUsernameInput(server?.remoteFileAccessUsername?.trim() || '');
+    setRemoteFileAccessRootPathInput(server?.remoteFileAccessRootPath?.trim() || '/');
+    setRemoteConnectError(null);
+  }, [activeAccount?.displayName, serverConfigValues.SERVER_LISTEN_IP, serverPortInput]);
+
   const openRemoteConnectModal = useCallback(() => {
     const fallbackServerId = viewingServerId ?? selectedServerId ?? servers[0]?.id ?? '';
     const selectedServerForModal = servers.find((server) => server.id === fallbackServerId) ?? effectiveServer ?? null;
-
-    setRemoteConnectTargetServerId(selectedServerForModal?.id ?? fallbackServerId);
-    setRemoteConnectNameInput(selectedServerForModal?.name ?? '');
-    setRemoteConnectHostInput(selectedServerForModal?.serverIp?.trim() ?? serverConfigValues.SERVER_LISTEN_IP ?? '127.0.0.1');
-    setRemoteConnectPortInput(selectedServerForModal?.port?.trim() || serverPortInput || '4242');
-    setRemoteConnectUsernameInput(activeAccount?.displayName?.trim() || '');
-    setRemoteConnectError(null);
+    populateRemoteConnectForm(selectedServerForModal, fallbackServerId);
     setIsRemoteConnectModalOpen(true);
-  }, [activeAccount?.name, effectiveServer, selectedServerId, serverConfigValues.SERVER_LISTEN_IP, serverPortInput, servers, viewingServerId]);
+  }, [effectiveServer, populateRemoteConnectForm, selectedServerId, servers, viewingServerId]);
 
   const closeRemoteConnectModal = useCallback(() => {
     if (isRemoteConnectPending) return;
@@ -2174,6 +2223,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     const sanitizedPort = String(parsedPort);
     const nextName = remoteConnectNameInput.trim() || targetServer.name;
     const username = remoteConnectUsernameInput.trim() || undefined;
+    const nextRemoteFileProtocol = remoteFileAccessProtocolInput;
+    const nextRemoteFileHost = remoteFileAccessHostInput.trim() || undefined;
+    const nextRemoteFilePort = remoteFileAccessPortInput.trim() || undefined;
+    const nextRemoteFileUsername = remoteFileAccessUsernameInput.trim() || undefined;
+    const nextRemoteFileRootPath = remoteFileAccessRootPathInput.trim() || undefined;
 
     setIsRemoteConnectPending(true);
     setRemoteConnectError(null);
@@ -2201,15 +2255,16 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         name: nextName,
         serverIp: host,
         port: sanitizedPort,
+        remoteFileAccessProtocol: nextRemoteFileProtocol,
+        remoteFileAccessHost: nextRemoteFileHost,
+        remoteFileAccessPort: nextRemoteFilePort,
+        remoteFileAccessUsername: nextRemoteFileUsername,
+        remoteFileAccessRootPath: nextRemoteFileRootPath,
       });
 
       setViewingServerId(targetServer.id);
       setServerNameInput(nextName);
       setServerPortInput(sanitizedPort);
-      setServerConfigValues((previous) => ({
-        ...previous,
-        SERVER_LISTEN_IP: host,
-      }));
 
       setIsRemoteConnectModalOpen(false);
       setActionError(null);
@@ -2225,6 +2280,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     remoteConnectHostInput,
     remoteConnectNameInput,
     remoteConnectPortInput,
+    remoteFileAccessHostInput,
+    remoteFileAccessPortInput,
+    remoteFileAccessProtocolInput,
+    remoteFileAccessRootPathInput,
+    remoteFileAccessUsernameInput,
     remoteConnectTargetServerId,
     selectedServerId,
     servers,
@@ -2691,6 +2751,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setDatabaseEntities([]);
     setDatabaseEntityTypeFilter('all');
     setDatabaseFactionFilter('all');
+    setDatabaseSectorLoadFilter('all');
     setDatabaseSortKey('name-asc');
     setDatabaseClipboardMsg(null);
     pendingDbRequestRef.current = null;
@@ -4166,6 +4227,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   useEffect(() => {
     if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') {
+      if (effectiveServer?.id) {
+        databaseAutoLoadedServerIdsRef.current.delete(effectiveServer.id);
+      }
       setOnlinePlayers([]);
       setIsPlayersRefreshing(false);
       setPlayersError(null);
@@ -4192,10 +4256,20 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   // Auto-load entity list when switching to the database tab (only if no data yet)
   useEffect(() => {
-    if (activeTab !== 'database') return;
-    if (databaseEntities.length > 0 || databaseIsExecuting) return;
+    const currentServerId = effectiveServer?.id;
+    if (!shouldAutoLoadDatabaseEntities({
+      activeTab,
+      databaseIsExecuting,
+      lifecycleState,
+      serverId: currentServerId,
+      autoLoadedServerIds: databaseAutoLoadedServerIdsRef.current,
+    })) {
+      return;
+    }
+
+    databaseAutoLoadedServerIdsRef.current.add(currentServerId);
     void loadDatabaseEntities();
-  }, [activeTab, databaseEntities.length, databaseIsExecuting, loadDatabaseEntities]);
+  }, [activeTab, databaseIsExecuting, effectiveServer?.id, lifecycleState, loadDatabaseEntities]);
 
   // Cleanup pending DB request timeout on unmount
   useEffect(() => {
@@ -4244,6 +4318,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const filteredSortedDatabaseEntities = useMemo(() => {
     const filtered = databaseEntities.filter((e) => {
+      if (!matchesDatabaseSectorLoadFilter(e.sectorLoaded, databaseSectorLoadFilter)) return false;
       if (databaseEntityTypeFilter !== 'all' && e.typeValue !== databaseEntityTypeFilter) return false;
       if (databaseFactionFilter !== 'all' && e.factionValue !== databaseFactionFilter) return false;
       return true;
@@ -4255,7 +4330,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     });
 
     return filtered;
-  }, [databaseEntities, databaseEntityTypeFilter, databaseFactionFilter, databaseSortKey]);
+  }, [databaseEntities, databaseEntityTypeFilter, databaseFactionFilter, databaseSectorLoadFilter, databaseSortKey]);
 
   const databaseSectorGroups = useMemo(() => {
     const bySector = new Map<string, DatabaseEntityRow[]>();
@@ -4287,7 +4362,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const canStart = !!effectiveServer && !isUpdating && lifecycleState !== 'running' && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
   const canStop = !!effectiveServer && !isUpdating && (lifecycleState === 'running' || lifecycleState === 'starting');
   const canRestart = !!effectiveServer && !isUpdating && lifecycleState === 'running';
-  const canUpdate = !!effectiveServer && !isUpdating && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
+  const canUpdate = isServerUpdateSupported(effectiveServer) && !isUpdating && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
 
   const getLogLevelColor = (level: LogEntry['level']) => {
     switch (level) {
@@ -4544,12 +4619,16 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         : pendingServerAction === 'update'
           ? 'Scheduling Update...'
           : 'Update Server',
-      description: 'Download and verify the selected StarMade server version into this server path.',
-      detail: isUpdating
-        ? `Download state: ${serverDownloadStatus?.state ?? 'downloading'}`
-        : pendingServerAction === 'update'
-          ? 'Broadcasting update notice and waiting for timed shutdown.'
-        : 'Checks the current version manifest and updates local files.',
+      description: effectiveServer?.isRemote
+        ? 'Remote servers must be updated manually or through the remote host environment.'
+        : 'Download and verify the selected StarMade server version into this server path.',
+      detail: effectiveServer?.isRemote
+        ? 'Remote update is disabled until a universal remote-update workflow exists.'
+        : isUpdating
+          ? `Download state: ${serverDownloadStatus?.state ?? 'downloading'}`
+          : pendingServerAction === 'update'
+            ? 'Broadcasting update notice and waiting for timed shutdown.'
+            : 'Checks the current version manifest and updates local files.',
       enabled: canUpdate,
       isLoading: isUpdating || pendingServerAction === 'update',
       onClick: () => { void updateServer(); },
@@ -5035,11 +5114,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         }
       }
 
-      if (field.key === 'SERVER_LISTEN_IP') {
-        if (effectiveServer && effectiveServer.serverIp !== nextValue) {
-          updateServerItem({ ...effectiveServer, serverIp: nextValue });
-        }
-      }
 
       if (field.key === 'USE_STARMADE_AUTHENTICATION') {
         const enabled = parseCfgBoolean(nextValue, false);
@@ -5253,12 +5327,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         <div className="flex items-center justify-between gap-3 rounded-md border border-white/10 bg-black/20 px-3 py-2">
           <div className="space-y-1">
             <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-              Remote Target: <span className="text-gray-200">{effectiveServer?.serverIp?.trim() || 'Not set'}</span>
+              Remote Target: <span className="text-gray-200">{resolveDefaultRemoteConnectHost(effectiveServer, serverConfigValues.SERVER_LISTEN_IP)}</span>
             </p>
             <p className="text-[11px] text-gray-400">
               Status:{' '}
-              <span className={remoteConnectionStatus?.connected ? 'text-emerald-300' : 'text-gray-300'}>
-                {remoteConnectionStatus?.connected ? 'Connected' : 'Disconnected'}
+              <span className={remoteConnectionDisplay.className}>
+                {remoteConnectionDisplay.label}
               </span>
               {remoteConnectionStatus?.connectedAt ? ` · ${new Date(remoteConnectionStatus.connectedAt).toLocaleTimeString()}` : ''}
             </p>
@@ -5337,7 +5411,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               <span className="mb-1 block text-gray-300">Server Profile</span>
               <select
                 value={remoteConnectTargetServerId}
-                onChange={(event) => setRemoteConnectTargetServerId(event.target.value)}
+                onChange={(event) => {
+                  const nextServerId = event.target.value;
+                  const nextServer = servers.find((server) => server.id === nextServerId) ?? null;
+                  populateRemoteConnectForm(nextServer, nextServerId);
+                }}
                 disabled={isRemoteConnectPending || servers.length === 0}
                 className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
               >
@@ -5395,6 +5473,77 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 />
               </label>
             </div>
+
+            <div className="rounded-md border border-cyan-500/20 bg-cyan-500/5 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-cyan-200">Remote File Access</p>
+              <p className="mt-1 text-xs text-gray-400">
+                Optional FTP/SFTP profile details for future Files and Configuration tab support. Passwords and SSH keys will be added separately.
+              </p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-300">Protocol</span>
+                <select
+                  value={remoteFileAccessProtocolInput}
+                  onChange={(event) => {
+                    const nextProtocol = event.target.value as RemoteFileAccessProtocol;
+                    setRemoteFileAccessProtocolInput(nextProtocol);
+                    setRemoteFileAccessPortInput((previous) => previous.trim() || getDefaultRemoteFileAccessPort(nextProtocol));
+                  }}
+                  disabled={isRemoteConnectPending}
+                  className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                >
+                  <option value="none">None yet</option>
+                  <option value="ftp">FTP</option>
+                  <option value="sftp">SFTP</option>
+                </select>
+              </label>
+
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-300">File Host</span>
+                <input
+                  value={remoteFileAccessHostInput}
+                  onChange={(event) => setRemoteFileAccessHostInput(event.target.value)}
+                  disabled={isRemoteConnectPending}
+                  placeholder="Leave blank to reuse remote host"
+                  className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                />
+              </label>
+
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-300">File Port</span>
+                <input
+                  value={remoteFileAccessPortInput}
+                  onChange={(event) => setRemoteFileAccessPortInput(event.target.value)}
+                  disabled={isRemoteConnectPending}
+                  placeholder={remoteFileAccessProtocolInput === 'sftp' ? '22' : remoteFileAccessProtocolInput === 'ftp' ? '21' : 'Optional'}
+                  className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                />
+              </label>
+
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-300">File Username</span>
+                <input
+                  value={remoteFileAccessUsernameInput}
+                  onChange={(event) => setRemoteFileAccessUsernameInput(event.target.value)}
+                  disabled={isRemoteConnectPending}
+                  placeholder="Optional"
+                  className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                />
+              </label>
+            </div>
+
+            <label className="block text-sm">
+              <span className="mb-1 block text-gray-300">Remote Root Path</span>
+              <input
+                value={remoteFileAccessRootPathInput}
+                onChange={(event) => setRemoteFileAccessRootPathInput(event.target.value)}
+                disabled={isRemoteConnectPending}
+                placeholder="/home/starmade/server"
+                className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+              />
+            </label>
 
             {remoteConnectError && (
               <p className="rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
@@ -7165,18 +7314,27 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
         <div className="border-b border-white/10 px-3 py-2">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">Entities by Loaded Sector</h3>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">Entities by Sector</h3>
             <span className="rounded border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wider text-gray-400">
               {filteredSortedDatabaseEntities.length} visible
             </span>
           </div>
           <p className="text-xs text-gray-500">
-            Grouped by sector coords. Only sectors with <code className="text-gray-400">TRANSIENT = FALSE</code> are shown.
+            Grouped by sector coords. Use the sector filter to show loaded, unloaded, or all sectors.
           </p>
         </div>
 
         {/* Filters + sort */}
         <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-3 py-2">
+          <select
+            value={databaseSectorLoadFilter}
+            onChange={(e) => setDatabaseSectorLoadFilter(e.target.value as DatabaseSectorLoadFilter)}
+            className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-starmade-accent"
+          >
+            <option value="all">All sectors</option>
+            <option value="loaded">Loaded sectors</option>
+            <option value="unloaded">Unloaded sectors</option>
+          </select>
           <select
             value={databaseEntityTypeFilter}
             onChange={(e) => setDatabaseEntityTypeFilter(e.target.value)}
@@ -7225,7 +7383,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                     <h4 className="font-mono text-xs font-semibold text-gray-200">
                       Sector <span className="text-starmade-accent/80">{group.sector}</span>
                     </h4>
-                    <span className="text-[11px] text-gray-500">{group.entities.length} {group.entities.length === 1 ? 'entity' : 'entities'}</span>
+                    <div className="flex items-center gap-2">
+                      <span className={`rounded border px-2 py-0.5 text-[10px] uppercase tracking-wider ${group.entities[0]?.sectorLoaded
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                        : 'border-amber-500/30 bg-amber-500/10 text-amber-200'}`}>
+                        {group.entities[0]?.sectorLoaded ? 'Loaded' : 'Unloaded'}
+                      </span>
+                      <span className="text-[11px] text-gray-500">{group.entities.length} {group.entities.length === 1 ? 'entity' : 'entities'}</span>
+                    </div>
                   </div>
 
                   <div className="divide-y divide-white/5">

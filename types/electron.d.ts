@@ -265,11 +265,13 @@ declare global {
           status?: {
             serverId: string;
             connected: boolean;
+            state?: 'idle' | 'connecting' | 'connected' | 'error';
             host?: string;
             port?: number;
             username?: string;
             connectedAt?: string;
             error?: string;
+            reasonCode?: 'connected' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
           };
           error?: string;
         }>;
@@ -280,11 +282,13 @@ declare global {
           status?: {
             serverId: string;
             connected: boolean;
+            state?: 'idle' | 'connecting' | 'connected' | 'error';
             host?: string;
             port?: number;
             username?: string;
             connectedAt?: string;
             error?: string;
+            reasonCode?: 'connected' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
           };
           error?: string;
         }>;
@@ -294,11 +298,13 @@ declare global {
           statuses: Array<{
             serverId: string;
             connected: boolean;
+            state?: 'idle' | 'connecting' | 'connected' | 'error';
             host?: string;
             port?: number;
             username?: string;
             connectedAt?: string;
             error?: string;
+            reasonCode?: 'connected' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
           }>;
         }>;
 
@@ -306,11 +312,13 @@ declare global {
         onStatusChanged: (cb: (status: {
           serverId: string;
           connected: boolean;
+          state?: 'idle' | 'connecting' | 'connected' | 'error';
           host?: string;
           port?: number;
           username?: string;
           connectedAt?: string;
           error?: string;
+          reasonCode?: 'connected' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
         }) => void) => () => void;
       };
 

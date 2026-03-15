@@ -341,7 +341,7 @@ const launcherApi = {
     },
   },
 
-  // ─── StarMote remote connection ────────────────────────────────────────────
+ // ─── StarMote remote connection ────────────────────────────────────────────
 
   starmote: {
     /** Open a remote StarMote TCP session for a server profile. */
@@ -355,11 +355,13 @@ const launcherApi = {
       status?: {
         serverId: string;
         connected: boolean;
+       state?: 'idle' | 'connecting' | 'connected' | 'error';
         host?: string;
         port?: number;
         username?: string;
         connectedAt?: string;
         error?: string;
+        reasonCode?: 'connected' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
       };
       error?: string;
     }> => ipcRenderer.invoke(IPC.STARMOTE_CONNECT, payload),
@@ -370,11 +372,13 @@ const launcherApi = {
       status?: {
         serverId: string;
         connected: boolean;
+        state?: 'idle' | 'connecting' | 'connected' | 'error';
         host?: string;
         port?: number;
         username?: string;
         connectedAt?: string;
         error?: string;
+        reasonCode?: 'connected' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
       };
       error?: string;
     }> => ipcRenderer.invoke(IPC.STARMOTE_DISCONNECT, { serverId }),
@@ -384,11 +388,13 @@ const launcherApi = {
       statuses: Array<{
         serverId: string;
         connected: boolean;
+        state?: 'idle' | 'connecting' | 'connected' | 'error';
         host?: string;
         port?: number;
         username?: string;
         connectedAt?: string;
         error?: string;
+        reasonCode?: 'connected' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
       }>;
     }> => ipcRenderer.invoke(IPC.STARMOTE_STATUS, { serverId }),
 
@@ -396,20 +402,24 @@ const launcherApi = {
     onStatusChanged: (cb: (status: {
       serverId: string;
       connected: boolean;
+      state?: 'idle' | 'connecting' | 'connected' | 'error';
       host?: string;
       port?: number;
       username?: string;
       connectedAt?: string;
       error?: string;
+      reasonCode?: 'connected' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
     }) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, status: {
         serverId: string;
         connected: boolean;
+        state?: 'idle' | 'connecting' | 'connected' | 'error';
         host?: string;
         port?: number;
         username?: string;
         connectedAt?: string;
         error?: string;
+        reasonCode?: 'connected' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
       }) => cb(status);
       ipcRenderer.on(IPC.STARMOTE_STATUS_CHANGED, listener);
       return () => ipcRenderer.removeListener(IPC.STARMOTE_STATUS_CHANGED, listener);
