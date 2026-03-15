@@ -3,9 +3,46 @@ import { EventEmitter } from 'events';
 
 import { StarmoteSessionManager } from '../../electron/starmote-session-manager.js';
 import {
-  decodeStarmotePacket,
   encodeStarmotePacket,
 } from '../../electron/starmote-protocol.js';
+
+function encodeJavaUtf(value: string): Buffer {
+  const bytes = Buffer.from(value, 'utf8');
+  const out = Buffer.allocUnsafe(2 + bytes.byteLength);
+  out.writeUInt16BE(bytes.byteLength, 0);
+  bytes.copy(out, 2);
+  return out;
+}
+
+function createExecuteAdminCommandResponseFrame(lines: string[]): Buffer {
+  const encoded = lines.map((line) => encodeJavaUtf(line));
+  const payloadLength = 1 + 2 + 1 + 1 + 4 + encoded.reduce((sum, part) => sum + 1 + part.byteLength, 0);
+  const payload = Buffer.allocUnsafe(payloadLength);
+
+  let offset = 0;
+  payload.writeUInt8(42, offset);
+  offset += 1;
+  payload.writeInt16BE(-1, offset);
+  offset += 2;
+  payload.writeUInt8(2, offset);
+  offset += 1;
+  payload.writeUInt8(111, offset);
+  offset += 1;
+  payload.writeInt32BE(encoded.length, offset);
+  offset += 4;
+
+  for (const part of encoded) {
+    payload.writeUInt8(4, offset);
+    offset += 1;
+    part.copy(payload, offset);
+    offset += part.byteLength;
+  }
+
+  const frame = Buffer.allocUnsafe(4 + payload.byteLength);
+  frame.writeUInt32BE(payload.byteLength, 0);
+  payload.copy(frame, 4);
+  return frame;
+}
 
 class FakeSocket extends EventEmitter {
   public behavior: 'connect' | 'error' | 'timeout' | 'manual' = 'connect';
@@ -363,6 +400,43 @@ describe('StarmoteSessionManager', () => {
         serverId: 'srv-runtime-text',
         source: 'text-fallback',
         line: 'PARTIAL_TAIL',
+      }),
+    ]);
+  });
+
+  it('decodes ExecuteAdminCommand return packets into framed runtime lines', async () => {
+    await harness.manager.connect({
+      serverId: 'srv-runtime-execute-admin',
+      host: '127.0.0.1',
+      port: 4242,
+    });
+
+    const frame = createExecuteAdminCommandResponseFrame([
+      '[PL] Name: Alpha',
+      'SQL QUERY 19 BEGIN',
+      'SQL#19: 1,2,3',
+    ]);
+
+    harness.sockets[0].emit('data', frame);
+
+    expect(harness.runtimeEvents).toEqual([
+      expect.objectContaining({
+        serverId: 'srv-runtime-execute-admin',
+        source: 'framed-packet',
+        commandId: 2,
+        line: '[PL] Name: Alpha',
+      }),
+      expect.objectContaining({
+        serverId: 'srv-runtime-execute-admin',
+        source: 'framed-packet',
+        commandId: 2,
+        line: 'SQL QUERY 19 BEGIN',
+      }),
+      expect.objectContaining({
+        serverId: 'srv-runtime-execute-admin',
+        source: 'framed-packet',
+        commandId: 2,
+        line: 'SQL#19: 1,2,3',
       }),
     ]);
   });

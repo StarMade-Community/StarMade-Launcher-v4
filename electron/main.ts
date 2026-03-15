@@ -33,7 +33,6 @@ import { registerAppImageDesktopIntegration } from './desktop-integration.js';
 import { parseVersionTxt } from './legacy.js';
 import { getManagedPathCandidates } from './install-paths.js';
 import { registerStarmoteIpcHandlers } from './starmote-ipc.js';
-import type { StarmoteWireMode } from './starmote-protocol.js';
 import { isStarmoteRolloutEnabled } from './starmote-feature-flag.js';
 import {
   listModsForInstallation,
@@ -363,14 +362,6 @@ ipcMain.handle(IPC.WINDOW_OPEN_SERVER_PANEL, async (_event, payload?: { serverId
 
 // ─── StarMote IPC handlers ───────────────────────────────────────────────────
 
-const resolvedStarmotePacketMode = (() => {
-  const raw = process.env.STARMOTE_PACKET_MODE?.trim().toLowerCase();
-  if (!raw || raw === 'length-prefixed') return 'length-prefixed' as StarmoteWireMode;
-  if (raw === 'legacy-sm4t') return 'legacy-sm4t' as StarmoteWireMode;
-  console.warn(`[starmote] unknown STARMOTE_PACKET_MODE="${raw}"; falling back to length-prefixed.`);
-  return 'length-prefixed' as StarmoteWireMode;
-})();
-
 const starmoteAdminCommandPassword = process.env.STARMOTE_SUPER_ADMIN_PASSWORD
   ?? process.env.STARMOTE_SERVER_PASSWORD
   ?? '';
@@ -380,7 +371,6 @@ if (isStarmoteRolloutEnabled()) {
     ipcMain,
     getAllWindows: () => BrowserWindow.getAllWindows(),
     createSocket: () => new net.Socket(),
-    adminCommandWireMode: resolvedStarmotePacketMode,
     adminCommandPassword: starmoteAdminCommandPassword,
   });
 } else {

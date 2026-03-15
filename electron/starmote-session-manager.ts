@@ -1,5 +1,9 @@
 import { logStarmoteDebug } from './starmote-debug.js';
-import { decodeStarmotePacket, encodeExecuteAdminCommandSuperPacket } from './starmote-protocol.js';
+import {
+  decodeExecuteAdminCommandReturnPacket,
+  decodeStarmotePacket,
+  encodeExecuteAdminCommandSuperPacket,
+} from './starmote-protocol.js';
 
 export interface SocketLike {
   setNoDelay(noDelay?: boolean): void;
@@ -527,6 +531,13 @@ export class StarmoteSessionManager {
       }
       if (prefixedFrame.kind === 'frame') {
         session.inboundBuffer = session.inboundBuffer.subarray(prefixedFrame.frame.byteLength);
+        const executeAdminResponse = decodeExecuteAdminCommandReturnPacket(prefixedFrame.frame);
+        if (executeAdminResponse.ok) {
+          const text = `${executeAdminResponse.packet.stringParams.join('\n')}\n`;
+          this.emitRuntimeTextLines(serverId, Buffer.from(text, 'utf8'), 'framed-packet', executeAdminResponse.packet.commandId);
+          continue;
+        }
+
         const decoded = decodeStarmotePacket(prefixedFrame.frame);
         if (!decoded.ok) {
           this.emitRuntimeTextLines(serverId, prefixedFrame.frame, 'text-fallback');

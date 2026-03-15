@@ -21,6 +21,11 @@ export interface StarmoteDecodedPacket {
   payload: Uint8Array;
 }
 
+export interface ExecuteAdminCommandReturnPacket {
+  commandId: number;
+  stringParams: string[];
+}
+
 function encodeJavaUtfString(value: string): Buffer {
   const utfBytes = Buffer.from(value, 'utf8');
   if (utfBytes.byteLength > 0xffff) {
@@ -31,6 +36,27 @@ function encodeJavaUtfString(value: string): Buffer {
   out.writeUInt16BE(utfBytes.byteLength, 0);
   utfBytes.copy(out, 2);
   return out;
+}
+
+function decodeJavaUtfString(data: Buffer, offset: number):
+  | { ok: true; value: string; nextOffset: number }
+  | { ok: false; error: string } {
+  if (offset + 2 > data.byteLength) {
+    return { ok: false, error: 'Missing Java UTF length prefix.' };
+  }
+
+  const byteLength = data.readUInt16BE(offset);
+  const start = offset + 2;
+  const end = start + byteLength;
+  if (end > data.byteLength) {
+    return { ok: false, error: 'Truncated Java UTF payload.' };
+  }
+
+  return {
+    ok: true,
+    value: data.subarray(start, end).toString('utf8'),
+    nextOffset: end,
+  };
 }
 
 export function encodeExecuteAdminCommandSuperPacket(command: string, serverPassword = ''): Uint8Array {
@@ -61,12 +87,79 @@ export function encodeExecuteAdminCommandSuperPacket(command: string, serverPass
   payload.writeUInt8(SCHINE_TYPE_STRING, offset);
   offset += 1;
   commandUtf.copy(payload, offset);
-  offset += commandUtf.byteLength;
 
   const frame = Buffer.allocUnsafe(LENGTH_PREFIX_BYTES + payload.byteLength);
   frame.writeUInt32BE(payload.byteLength, 0);
   payload.copy(frame, LENGTH_PREFIX_BYTES);
   return frame;
+}
+
+export function decodeExecuteAdminCommandReturnPacket(frame: Uint8Array):
+  | { ok: true; packet: ExecuteAdminCommandReturnPacket }
+  | { ok: false; error: string } {
+  const data = Buffer.from(frame);
+  if (data.byteLength < LENGTH_PREFIX_BYTES + 9) {
+    return { ok: false, error: 'Frame too short for ExecuteAdminCommand header.' };
+  }
+
+  const declaredPayloadLength = data.readUInt32BE(0);
+  if (declaredPayloadLength !== data.byteLength - LENGTH_PREFIX_BYTES) {
+    return { ok: false, error: 'Length-prefixed frame length mismatch.' };
+  }
+
+  const payload = data.subarray(LENGTH_PREFIX_BYTES);
+  if (payload.readUInt8(0) !== SCHINE_PACKET_BYTE) {
+    return { ok: false, error: 'Not a Schine super-packet frame.' };
+  }
+
+  const commandId = payload.readUInt8(3);
+  if (commandId !== EXECUTE_ADMIN_COMMAND_ID) {
+    return { ok: false, error: 'Not an ExecuteAdminCommand packet.' };
+  }
+
+  const packetType = payload.readUInt8(4);
+  if (packetType !== SCHINE_TYPE_PARAMETRIZED_COMMAND) {
+    return { ok: false, error: 'Unexpected ExecuteAdminCommand packet type.' };
+  }
+
+  const parameterCount = payload.readInt32BE(5);
+  if (parameterCount < 0 || parameterCount > 128) {
+    return { ok: false, error: 'ExecuteAdminCommand parameter count is invalid.' };
+  }
+
+  let offset = 9;
+  const stringParams: string[] = [];
+  for (let index = 0; index < parameterCount; index += 1) {
+    if (offset >= payload.byteLength) {
+      return { ok: false, error: 'ExecuteAdminCommand parameter list is truncated.' };
+    }
+
+    const parameterType = payload.readUInt8(offset);
+    offset += 1;
+    if (parameterType !== SCHINE_TYPE_STRING) {
+      return { ok: false, error: `Unsupported ExecuteAdminCommand parameter type: ${parameterType}` };
+    }
+
+    const decodedString = decodeJavaUtfString(payload, offset);
+    if (decodedString.ok === false) {
+      return { ok: false, error: decodedString.error };
+    }
+
+    offset = decodedString.nextOffset;
+    stringParams.push(decodedString.value);
+  }
+
+  if (offset !== payload.byteLength) {
+    return { ok: false, error: 'Unexpected trailing bytes in ExecuteAdminCommand payload.' };
+  }
+
+  return {
+    ok: true,
+    packet: {
+      commandId,
+      stringParams,
+    },
+  };
 }
 
 function encodePacketBody(commandId: number, payload: Uint8Array): Buffer {
