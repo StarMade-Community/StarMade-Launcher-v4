@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { logStarmoteDebug } from './starmote-debug.js';
 import {
   decodeExecuteAdminCommandReturnPacket,
@@ -146,6 +147,33 @@ function formatSocketError(error: unknown): string {
     return String((error as { message?: unknown }).message);
   }
   return String(error);
+}
+
+function describeTokenForDebug(rawToken: string): {
+  hasAuthToken: boolean;
+  authTokenLength: number;
+  authTokenHashPrefix?: string;
+} {
+  if (!rawToken) {
+    return {
+      hasAuthToken: false,
+      authTokenLength: 0,
+    };
+  }
+
+  const token = rawToken.trim();
+  if (!token) {
+    return {
+      hasAuthToken: false,
+      authTokenLength: 0,
+    };
+  }
+
+  return {
+    hasAuthToken: true,
+    authTokenLength: token.length,
+    authTokenHashPrefix: createHash('sha256').update(token).digest('hex').slice(0, 12),
+  };
 }
 
 export class StarmoteSessionManager {
@@ -762,6 +790,7 @@ export class StarmoteSessionManager {
   private async performLoginHandshake(socket: SocketLike, params: StarmoteConnectParams, generation: number): Promise<void> {
     const playerName = params.username?.trim();
     const authToken = params.authToken?.trim() ?? '';
+    const tokenDebug = describeTokenForDebug(authToken);
     if (!playerName) {
       throw new Error('Missing StarMote login name.');
     }
@@ -772,6 +801,18 @@ export class StarmoteSessionManager {
     const userAgent = Number.isFinite(params.userAgent)
       ? Math.trunc(params.userAgent as number)
       : 2;
+
+    logStarmoteDebug('session.login.request', {
+      serverId: params.serverId,
+      host: params.host,
+      port: params.port,
+      activeAccountId: params.activeAccountId,
+      playerName,
+      clientVersion: params.clientVersion?.trim() || this.loginClientVersion,
+      uniqueSessionId,
+      userAgent,
+      ...tokenDebug,
+    });
 
     const loginPacket = encodeLoginRequestSuperPacket({
       playerName,
@@ -784,6 +825,16 @@ export class StarmoteSessionManager {
     await this.writePacketWithTimeout(socket, loginPacket, this.commandSendTimeoutMs);
     const loginResponse = await this.awaitLoginResponse(socket, params.serverId, generation, this.loginResponseTimeoutMs);
     if (loginResponse.code < 0) {
+      logStarmoteDebug('session.login.failure', {
+        serverId: params.serverId,
+        playerName,
+        uniqueSessionId,
+        code: loginResponse.code,
+        extraReason: loginResponse.extraReason,
+        serverVersion: loginResponse.serverVersion,
+        clientId: loginResponse.clientId,
+        ...tokenDebug,
+      });
       const codeMessage = getLoginRejectMessage(loginResponse.code);
       const suffix = loginResponse.extraReason?.trim()
         ? ` (${loginResponse.extraReason.trim()})`
@@ -797,7 +848,7 @@ export class StarmoteSessionManager {
     serverId: string,
     generation: number,
     timeoutMs: number,
-  ): Promise<{ code: number; extraReason?: string }> {
+  ): Promise<{ code: number; extraReason?: string; clientId: number; serverVersion: string }> {
     return new Promise((resolve, reject) => {
       let buffer = Buffer.alloc(0);
 
@@ -820,7 +871,19 @@ export class StarmoteSessionManager {
         }
 
         cleanup();
-        resolve({ code: login.packet.code, extraReason: login.packet.extraReason });
+        logStarmoteDebug('session.login.response', {
+          serverId,
+          code: login.packet.code,
+          extraReason: login.packet.extraReason,
+          clientId: login.packet.clientId,
+          serverVersion: login.packet.serverVersion,
+        });
+        resolve({
+          code: login.packet.code,
+          extraReason: login.packet.extraReason,
+          clientId: login.packet.clientId,
+          serverVersion: login.packet.serverVersion,
+        });
         return true;
       };
 
@@ -872,10 +935,20 @@ export class StarmoteSessionManager {
         }
       };
 
-      const onError = (error: unknown) => finishError(new Error(formatSocketError(error)));
-      const onClose = () => finishError(new Error('Socket closed before login completed.'));
+      const onError = (error: unknown) => {
+        const errorText = formatSocketError(error);
+        logStarmoteDebug('session.login.response_error', { serverId, error: errorText });
+        finishError(new Error(errorText));
+      };
+      const onClose = () => {
+        logStarmoteDebug('session.login.response_closed', { serverId });
+        finishError(new Error('Socket closed before login completed.'));
+      };
       const timeoutId = setTimeout(
-        () => finishError(new Error(`StarMote login response timed out after ${timeoutMs}ms.`)),
+        () => {
+          logStarmoteDebug('session.login.response_timeout', { serverId, timeoutMs });
+          finishError(new Error(`StarMote login response timed out after ${timeoutMs}ms.`));
+        },
         timeoutMs,
       );
 

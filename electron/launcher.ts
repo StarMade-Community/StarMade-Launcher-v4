@@ -309,7 +309,7 @@ export interface LaunchOptions {
   isServer?: boolean;
   serverPort?: number;
   launcherDir: string;
-  /** Access token from the StarMade registry. Passed as `-auth <token>` when present. */
+  /** Access token from the StarMade registry. Passed as `-auth <token>` for client launches when present. */
   authToken?: string;
   /**
    * Server address for the `-uplink` argument (direct-connect to a world/server).
@@ -365,7 +365,8 @@ export function buildLaunchArgs(options: LaunchCommandArgOptions): string[] {
     }
   }
 
-  if (authToken) {
+  // Dedicated server startup does not require registry auth tokens.
+  if (!isServer && authToken) {
     args.push('-auth', authToken);
   }
 
@@ -495,8 +496,8 @@ export async function launchGame(options: LaunchOptions): Promise<LaunchResult> 
       modIds,
     });
 
-    // Keep auth-injected status log for easier diagnostics.
-    if (authToken) {
+    // Only client launches inject registry auth tokens.
+    if (!isServer && authToken) {
       sendLogEvent(installationId, 'INFO', 'Auth token injected.');
     }
 

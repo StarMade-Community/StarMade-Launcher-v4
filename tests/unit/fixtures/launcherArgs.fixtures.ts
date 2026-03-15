@@ -23,7 +23,7 @@ export const LAUNCH_ARG_FIXTURES: LaunchArgFixture[] = [
     expectedSafeArgs: ['-Xms1024M', '-Xmx2048M', '-jar', 'StarMade.jar', '-force'],
   },
   {
-    name: 'server launch includes port and auth token redaction',
+    name: 'server launch includes port but skips auth token arguments',
     options: {
       jvmArgList: ['-Xms1536M', '-Xmx4096M'],
       isServer: true,
@@ -39,8 +39,6 @@ export const LAUNCH_ARG_FIXTURES: LaunchArgFixture[] = [
       '-server',
       '-port',
       '4242',
-      '-auth',
-      'token-abc-123',
     ],
     expectedSafeArgs: [
       '-Xms1536M',
@@ -51,8 +49,6 @@ export const LAUNCH_ARG_FIXTURES: LaunchArgFixture[] = [
       '-server',
       '-port',
       '4242',
-      '-auth',
-      '[REDACTED]',
     ],
   },
   {

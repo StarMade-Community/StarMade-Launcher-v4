@@ -382,6 +382,57 @@ describe('StarmoteSessionManager', () => {
     expect(result.status.error).toContain('requires StarMade account authentication');
   });
 
+  it('logs safe handshake diagnostics without exposing raw auth tokens', async () => {
+    process.env.STARMOTE_DEBUG = '1';
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+
+    class LoginRejectSocket extends FakeSocket {
+      override write(data: Uint8Array): boolean {
+        const raw = Buffer.from(data);
+        const isLoginPacket = raw.byteLength >= 9 && raw.readUInt8(4) === 42 && raw.readUInt8(7) === 0;
+        if (isLoginPacket) {
+          setTimeout(() => {
+            this.emit('data', createTimestampedLoginResponseFrame(-10, 'auth required'));
+          }, 0);
+        }
+        return super.write(data);
+      }
+    }
+
+    const manager = new StarmoteSessionManager({
+      createSocket: () => new LoginRejectSocket(),
+      loginHandshakeEnabled: true,
+    });
+
+    const sensitiveToken = 'token-sensitive-123';
+    await manager.connect({
+      serverId: 'srv-login-debug',
+      host: '127.0.0.1',
+      port: 4242,
+      activeAccountId: 'acct-debug',
+      username: 'AdminUser',
+      authToken: sensitiveToken,
+    });
+
+    const requestCall = debugSpy.mock.calls.find((call) => String(call[0]).includes('[StarMote] session.login.request'));
+    const responseCall = debugSpy.mock.calls.find((call) => String(call[0]).includes('[StarMote] session.login.response'));
+    const failureCall = debugSpy.mock.calls.find((call) => String(call[0]).includes('[StarMote] session.login.failure'));
+
+    expect(requestCall).toBeTruthy();
+    expect(responseCall).toBeTruthy();
+    expect(failureCall).toBeTruthy();
+    expect(requestCall?.[1]).toEqual(expect.objectContaining({
+      hasAuthToken: true,
+      authTokenLength: sensitiveToken.length,
+      authTokenHashPrefix: expect.any(String),
+      playerName: 'AdminUser',
+      uniqueSessionId: '127.0.0.1:4242',
+    }));
+
+    const callText = debugSpy.mock.calls.map((call) => JSON.stringify(call)).join('\n');
+    expect(callText).not.toContain(sensitiveToken);
+  });
+
   it('fails with protocol_timeout when command-registry handshake times out', async () => {
     const timeoutHarness = createHandshakeTimeoutHarness();
 
