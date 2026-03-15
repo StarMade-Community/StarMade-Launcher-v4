@@ -52,6 +52,16 @@ export function matchesDatabaseSectorLoadFilter(sectorLoaded: boolean, filter: D
   return true;
 }
 
+export function isRemoteCommandActionEnabled(options: {
+  isRemoteServer: boolean;
+  remoteState?: string;
+  isRemoteReady?: boolean;
+}): boolean {
+  const { isRemoteServer, remoteState, isRemoteReady } = options;
+  if (!isRemoteServer) return true;
+  return isRemoteReady === true || remoteState === 'ready';
+}
+
 export function buildDatabaseEntityListSql(): string {
   return (
     'SELECT e.ID, e.UID, e.NAME, e.TYPE, e.FACTION, e.X, e.Y, e.Z, ' +

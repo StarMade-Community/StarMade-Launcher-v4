@@ -5,6 +5,7 @@ import {
   buildDatabaseEntityListSql,
   formatDatabaseEntityType,
   getDefaultRemoteFileAccessPort,
+  isRemoteCommandActionEnabled,
   isServerUpdateSupported,
   matchesDatabaseSectorLoadFilter,
   normalizeRemoteConnectHost,
@@ -121,6 +122,14 @@ describe('serverPanel helpers', () => {
     expect(getDefaultRemoteFileAccessPort('sftp')).toBe('22');
     expect(getDefaultRemoteFileAccessPort('ftp')).toBe('21');
     expect(getDefaultRemoteFileAccessPort('none')).toBe('');
+  });
+
+  it('requires StarMote ready state before enabling remote command actions', () => {
+    expect(isRemoteCommandActionEnabled({ isRemoteServer: false, remoteState: undefined, isRemoteReady: false })).toBe(true);
+    expect(isRemoteCommandActionEnabled({ isRemoteServer: true, remoteState: 'connected', isRemoteReady: false })).toBe(false);
+    expect(isRemoteCommandActionEnabled({ isRemoteServer: true, remoteState: 'authenticating', isRemoteReady: false })).toBe(false);
+    expect(isRemoteCommandActionEnabled({ isRemoteServer: true, remoteState: 'ready', isRemoteReady: false })).toBe(true);
+    expect(isRemoteCommandActionEnabled({ isRemoteServer: true, remoteState: 'connected', isRemoteReady: true })).toBe(true);
   });
 
   it('resolves the remote file-access host from explicit metadata or the remote server host', () => {

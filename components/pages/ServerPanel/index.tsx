@@ -8,6 +8,7 @@ import {
   buildDatabaseEntityListSql,
   formatDatabaseEntityType,
   getDefaultRemoteFileAccessPort,
+  isRemoteCommandActionEnabled,
   isServerUpdateSupported,
   matchesDatabaseSectorLoadFilter,
   resolveDefaultRemoteConnectHost,
@@ -2163,6 +2164,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
   }, [remoteConnectionStatus]);
 
+  const isRemoteServerProfile = !!effectiveServer?.isRemote;
+  const canExecuteRemoteCommandActions = isRemoteCommandActionEnabled({
+    isRemoteServer: isRemoteServerProfile,
+    remoteState: remoteConnectionStatus?.state,
+    isRemoteReady: remoteConnectionStatus?.isReady,
+  });
+
   const handleSwitchServer = useCallback((nextServerId: string) => {
     setViewingServerId(nextServerId || null);
   }, []);
@@ -2568,6 +2576,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const handleSendChatMessage = useCallback(async () => {
     const text = chatInput.trim();
     if (!text || !effectiveServer || !hasGameApi || !selectedChatChannelId) return;
+    if (!canExecuteRemoteCommandActions) {
+      setChatError('Remote StarMote session is not ready to send commands yet.');
+      return;
+    }
 
     setChatInput('');
     setChatError(null);
@@ -2585,10 +2597,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       command = `/server_message_broadcast plain "${text}"`;
     }
 
-    const result = await window.launcher.game.sendServerCommand(effectiveServer.id, command);
-    if (!result.success) {
-      setChatError(result.error ?? 'Failed to send message.');
-    } else {
+    try {
+      await sendServerCommandOrThrow(command);
       // Optimistically add the message to the local buffer as a system message
       const optimistic: ChatMessage = {
         timestamp: new Date().toISOString().replace('T', ' - ').replace(/\.\d+Z$/, ''),
@@ -2601,8 +2611,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         const existing = prev[selectedChatChannelId] ?? [];
         return { ...prev, [selectedChatChannelId]: [...existing, optimistic] };
       });
+    } catch (error) {
+      setChatError(String(error));
     }
-  }, [chatChannels, chatInput, effectiveServer, hasGameApi, selectedChatChannelId]);
+  }, [
+    canExecuteRemoteCommandActions,
+    chatChannels,
+    chatInput,
+    effectiveServer,
+    hasGameApi,
+    selectedChatChannelId,
+  ]);
 
   // Load chat channels when chat tab is active
   useEffect(() => {
@@ -3776,15 +3795,18 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     if (!effectiveServer || !hasGameApi) {
       throw new Error('Server context unavailable.');
     }
+    if (!canExecuteRemoteCommandActions) {
+      throw new Error('Remote StarMote session is not ready to execute commands yet.');
+    }
 
     const result = await window.launcher.game.sendServerCommand(effectiveServer.id, command);
     if (!result.success) {
       throw new Error(result.error ?? `Failed to execute command: ${command}`);
     }
-  }, [effectiveServer, hasGameApi]);
+  }, [canExecuteRemoteCommandActions, effectiveServer, hasGameApi]);
 
   const refreshPlayers = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') {
+    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running' || !canExecuteRemoteCommandActions) {
       setOnlinePlayers([]);
       setIsPlayersRefreshing(false);
       return;
@@ -3811,14 +3833,15 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     playersListCollectionRef.current = { token, names, timeoutId };
 
-    const result = await window.launcher.game.sendServerCommand(effectiveServer.id, '/player_list');
-    if (!result.success) {
+    try {
+      await sendServerCommandOrThrow('/player_list');
+    } catch (error) {
       window.clearTimeout(timeoutId);
       playersListCollectionRef.current = null;
       setIsPlayersRefreshing(false);
-      setPlayersError(result.error ?? 'Failed to request player list.');
+      setPlayersError(String(error));
     }
-  }, [effectiveServer, hasGameApi, lifecycleState]);
+  }, [canExecuteRemoteCommandActions, effectiveServer, hasGameApi, lifecycleState, sendServerCommandOrThrow]);
 
   const handleKickPlayer = useCallback(async (playerName: string) => {
     if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') return;
@@ -4027,6 +4050,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setDatabaseSqlError('Server must be running to execute SQL admin commands.');
       return;
     }
+    if (!canExecuteRemoteCommandActions) {
+      setDatabaseSqlError('Remote StarMote session is not ready to execute SQL admin commands yet.');
+      return;
+    }
 
     clearPendingDatabaseSql();
     setDatabaseSqlError(null);
@@ -4049,7 +4076,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       clearPendingDatabaseSql();
       setDatabaseSqlError('Timed out (15 s) waiting for SQL response in server log.');
     }, 15_000);
-  }, [clearPendingDatabaseSql, effectiveServer, hasGameApi, lifecycleState]);
+  }, [canExecuteRemoteCommandActions, clearPendingDatabaseSql, effectiveServer, hasGameApi, lifecycleState]);
 
   const loadDatabaseEntities = useCallback(async () => {
     setDatabaseSqlInput(DATABASE_ENTITY_LIST_SQL);
