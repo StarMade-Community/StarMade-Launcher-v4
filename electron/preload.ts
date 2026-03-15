@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { IPC } from './ipc-channels.js';
+import { isStarmoteRolloutEnabled } from './starmote-feature-flag.js';
 
 /**
  * Typed IPC bridge exposed to the renderer as `window.launcher`.
@@ -343,6 +344,7 @@ const launcherApi = {
 
  // ─── StarMote remote connection ────────────────────────────────────────────
 
+  ...(isStarmoteRolloutEnabled() ? {
   starmote: {
     /** Open a remote StarMote TCP session for a server profile. */
     connect: (payload: {
@@ -362,7 +364,7 @@ const launcherApi = {
         username?: string;
         connectedAt?: string;
         error?: string;
-        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
+        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
       };
       error?: string;
     }> => ipcRenderer.invoke(IPC.STARMOTE_CONNECT, payload),
@@ -380,10 +382,33 @@ const launcherApi = {
         username?: string;
         connectedAt?: string;
         error?: string;
-        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
+        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
       };
       error?: string;
     }> => ipcRenderer.invoke(IPC.STARMOTE_DISCONNECT, { serverId }),
+
+    /** Send a versioned admin command through a protocol-ready StarMote session. */
+    sendAdminCommand: (payload: {
+      version: 1;
+      serverId: string;
+      command: string;
+    }): Promise<{
+      success: boolean;
+      status?: {
+        serverId: string;
+        connected: boolean;
+        state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
+        isReady?: boolean;
+        host?: string;
+        port?: number;
+        username?: string;
+        connectedAt?: string;
+        error?: string;
+        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
+      };
+      error?: string;
+      reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
+    }> => ipcRenderer.invoke(IPC.STARMOTE_SEND_ADMIN_COMMAND, payload),
 
     /** Fetch current StarMote connection status for one profile or all profiles. */
     getStatus: (serverId?: string): Promise<{
@@ -397,7 +422,7 @@ const launcherApi = {
         username?: string;
         connectedAt?: string;
         error?: string;
-        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
+        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
       }>;
     }> => ipcRenderer.invoke(IPC.STARMOTE_STATUS, { serverId }),
 
@@ -412,7 +437,7 @@ const launcherApi = {
       username?: string;
       connectedAt?: string;
       error?: string;
-      reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
+      reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
     }) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, status: {
         serverId: string;
@@ -424,12 +449,13 @@ const launcherApi = {
         username?: string;
         connectedAt?: string;
         error?: string;
-        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
+        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
       }) => cb(status);
       ipcRenderer.on(IPC.STARMOTE_STATUS_CHANGED, listener);
       return () => ipcRenderer.removeListener(IPC.STARMOTE_STATUS_CHANGED, listener);
     },
   },
+  } : {}),
 
   /** Dialog APIs (folder picker, etc.) */
   dialog: {

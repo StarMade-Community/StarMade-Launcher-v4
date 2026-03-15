@@ -2,10 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
 
 import { StarmoteSessionManager } from '../../electron/starmote-session-manager.js';
+import { decodeStarmotePacket, STARMOTE_COMMAND_IDS, STARMOTE_PROTOCOL_VERSION } from '../../electron/starmote-protocol.js';
 
 class FakeSocket extends EventEmitter {
   public behavior: 'connect' | 'error' | 'timeout' | 'manual' = 'connect';
   public destroyed = false;
+  public writes: Uint8Array[] = [];
 
   setNoDelay(): void {
     // no-op for tests
@@ -26,6 +28,11 @@ class FakeSocket extends EventEmitter {
         this.emit('timeout');
       }
     });
+  }
+
+  write(data: Uint8Array): boolean {
+    this.writes.push(data);
+    return true;
   }
 
   destroy(): void {
@@ -55,6 +62,19 @@ function createHarness() {
   });
 
   return { manager, sockets, emitted };
+}
+
+function createHandshakeTimeoutHarness() {
+  const manager = new StarmoteSessionManager({
+    createSocket: () => new FakeSocket(),
+    waitForCommandRegistry: async () => {
+      await new Promise<void>(() => undefined);
+    },
+    handshakeTimeoutMs: 20,
+    handshakeRetries: 1,
+  });
+
+  return { manager };
 }
 
 function createAuthFailHarness() {
@@ -177,7 +197,7 @@ describe('StarmoteSessionManager', () => {
     expect(recoveredStatus.error).toBeUndefined();
   });
 
-  it('transitions to auth_failed when auth stage throws', async () => {
+  it('transitions to registry_unavailable when auth stage throws', async () => {
     const authFailHarness = createAuthFailHarness();
     const result = await authFailHarness.manager.connect({
       serverId: 'srv-auth-fail',
@@ -187,8 +207,59 @@ describe('StarmoteSessionManager', () => {
 
     expect(result.success).toBe(false);
     expect(result.status.state).toBe('error');
-    expect(result.status.reasonCode).toBe('auth_failed');
-    expect(result.status.error).toContain('Authentication failed: bad credentials');
+    expect(result.status.reasonCode).toBe('registry_unavailable');
+    expect(result.status.error).toContain('Authentication/registry setup failed: bad credentials');
+  });
+
+  it('fails with protocol_timeout when command-registry handshake times out', async () => {
+    const timeoutHarness = createHandshakeTimeoutHarness();
+
+    const result = await timeoutHarness.manager.connect({
+      serverId: 'srv-handshake-timeout',
+      host: '127.0.0.1',
+      port: 4242,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.status.state).toBe('error');
+    expect(result.status.reasonCode).toBe('protocol_timeout');
+    expect(result.status.error).toContain('Protocol handshake timed out');
+  });
+
+  it('sends admin commands only after protocol-ready state and writes encoded packets', async () => {
+    const connectResult = await harness.manager.connect({
+      serverId: 'srv-send-command',
+      host: '127.0.0.1',
+      port: 4242,
+    });
+    expect(connectResult.success).toBe(true);
+
+    const sendResult = await harness.manager.sendAdminCommand({
+      serverId: 'srv-send-command',
+      command: '/player_list',
+    });
+    expect(sendResult.success).toBe(true);
+
+    const frame = harness.sockets[0]?.writes[0];
+    expect(frame).toBeTruthy();
+    const decoded = decodeStarmotePacket(frame as Uint8Array);
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok) {
+      expect(decoded.packet.version).toBe(STARMOTE_PROTOCOL_VERSION);
+      expect(decoded.packet.commandId).toBe(STARMOTE_COMMAND_IDS.ADMIN_COMMAND);
+      expect(Buffer.from(decoded.packet.payload).toString('utf8')).toBe('/player_list');
+    }
+  });
+
+  it('rejects admin command sends when the session is not protocol-ready', async () => {
+    const sendResult = await harness.manager.sendAdminCommand({
+      serverId: 'srv-not-ready',
+      command: '/player_list',
+    });
+
+    expect(sendResult.success).toBe(false);
+    expect(sendResult.reasonCode).toBe('not_ready');
+    expect(sendResult.error).toContain('not protocol-ready');
   });
 
   it('does not emit debug logs when STARMOTE_DEBUG is not enabled', async () => {

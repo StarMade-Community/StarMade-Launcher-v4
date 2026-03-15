@@ -32,6 +32,12 @@ interface StarmoteStatusPayload {
   serverId?: string;
 }
 
+interface StarmoteAdminCommandPayload {
+  version: number;
+  serverId: string;
+  command: string;
+}
+
 interface RegisterStarmoteIpcOptions {
   ipcMain: IpcMainLike;
   getAllWindows: () => BrowserWindowLike[];
@@ -112,6 +118,32 @@ export function registerStarmoteIpcHandlers(options: RegisterStarmoteIpcOptions)
       }
 
       return { statuses: manager.getStatuses() };
+    },
+  );
+
+  ipcMain.handle(
+    IPC.STARMOTE_SEND_ADMIN_COMMAND,
+    async (
+      _event,
+      payloadRaw,
+    ): Promise<{ success: boolean; status?: StarmoteConnectionStatus; error?: string; reasonCode?: string }> => {
+      const payload = (payloadRaw ?? {}) as Partial<StarmoteAdminCommandPayload>;
+      const version = Number.isFinite(payload?.version) ? Math.trunc(payload.version as number) : Number.NaN;
+      const serverId = payload?.serverId?.trim();
+      const command = payload?.command?.trim();
+
+      if (version !== 1) {
+        return { success: false, error: 'Unsupported StarMote command payload version.' };
+      }
+      if (!serverId) {
+        return { success: false, error: 'serverId is required.' };
+      }
+      if (!command) {
+        return { success: false, error: 'command is required.' };
+      }
+
+      logStarmoteDebug('ipc.command.send', { serverId, version });
+      return manager.sendAdminCommand({ serverId, command });
     },
   );
 }

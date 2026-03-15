@@ -33,6 +33,7 @@ import { registerAppImageDesktopIntegration } from './desktop-integration.js';
 import { parseVersionTxt } from './legacy.js';
 import { getManagedPathCandidates } from './install-paths.js';
 import { registerStarmoteIpcHandlers } from './starmote-ipc.js';
+import { isStarmoteRolloutEnabled } from './starmote-feature-flag.js';
 import {
   listModsForInstallation,
   listSmdMods,
@@ -361,11 +362,15 @@ ipcMain.handle(IPC.WINDOW_OPEN_SERVER_PANEL, async (_event, payload?: { serverId
 
 // ─── StarMote IPC handlers ───────────────────────────────────────────────────
 
-registerStarmoteIpcHandlers({
-  ipcMain,
-  getAllWindows: () => BrowserWindow.getAllWindows(),
-  createSocket: () => new net.Socket(),
-});
+if (isStarmoteRolloutEnabled()) {
+  registerStarmoteIpcHandlers({
+    ipcMain,
+    getAllWindows: () => BrowserWindow.getAllWindows(),
+    createSocket: () => new net.Socket(),
+  });
+} else {
+  console.info('[starmote] rollout disabled via STARMOTE_ENABLED=0');
+}
 
 // ─── Store IPC handlers ───────────────────────────────────────────────────────
 

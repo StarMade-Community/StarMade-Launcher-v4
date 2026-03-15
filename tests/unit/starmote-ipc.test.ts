@@ -3,10 +3,12 @@ import { EventEmitter } from 'events';
 
 import { IPC } from '../../electron/ipc-channels.js';
 import { registerStarmoteIpcHandlers } from '../../electron/starmote-ipc.js';
+import { decodeStarmotePacket, STARMOTE_COMMAND_IDS } from '../../electron/starmote-protocol.js';
 
 class FakeSocket extends EventEmitter {
   public behavior: 'connect' | 'error' | 'timeout' = 'connect';
   public destroyed = false;
+  public writes: Uint8Array[] = [];
 
   setNoDelay(): void {
     // no-op for tests
@@ -32,6 +34,11 @@ class FakeSocket extends EventEmitter {
     this.destroyed = true;
     this.emit('close');
     return this;
+  }
+
+  write(data: Uint8Array): boolean {
+    this.writes.push(data);
+    return true;
   }
 }
 
@@ -170,6 +177,42 @@ describe('StarMote IPC handlers', () => {
       error: undefined,
       reasonCode: 'disconnected',
     });
+  });
+
+  it('sends a versioned admin command through protocol-ready StarMote sessions', async () => {
+    await harness.call(IPC.STARMOTE_CONNECT, {
+      serverId: 'srv-command',
+      host: '127.0.0.1',
+      port: 5001,
+    });
+
+    const result = await harness.call(IPC.STARMOTE_SEND_ADMIN_COMMAND, {
+      version: 1,
+      serverId: 'srv-command',
+      command: '/player_list',
+    }) as { success: boolean; error?: string };
+
+    expect(result.success).toBe(true);
+    const frame = harness.sockets[0]?.writes[0];
+    expect(frame).toBeTruthy();
+
+    const decoded = decodeStarmotePacket(frame as Uint8Array);
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok) {
+      expect(decoded.packet.commandId).toBe(STARMOTE_COMMAND_IDS.ADMIN_COMMAND);
+      expect(Buffer.from(decoded.packet.payload).toString('utf8')).toBe('/player_list');
+    }
+  });
+
+  it('rejects unsupported StarMote command payload versions', async () => {
+    const result = await harness.call(IPC.STARMOTE_SEND_ADMIN_COMMAND, {
+      version: 2,
+      serverId: 'srv-command',
+      command: '/player_list',
+    }) as { success: boolean; error?: string };
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Unsupported StarMote command payload version.');
   });
 
   it('emits debug logs for IPC operations when STARMOTE_DEBUG is enabled', async () => {

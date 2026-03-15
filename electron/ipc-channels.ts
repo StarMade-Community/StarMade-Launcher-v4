@@ -381,6 +381,12 @@ export const IPC = {
 
   /** Main → Renderer: StarMote connection status changed for a server profile. */
   STARMOTE_STATUS_CHANGED: 'starmote:status-changed',
+
+  /**
+   * Renderer → Main (invoke): send a versioned admin command over a protocol-ready StarMote session.
+   * Payload: { version: 1; serverId: string; command: string }
+   */
+  STARMOTE_SEND_ADMIN_COMMAND: 'starmote:send-admin-command',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

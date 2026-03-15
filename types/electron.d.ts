@@ -252,8 +252,8 @@ declare global {
         } | null>;
       };
 
-      /** StarMote remote connection APIs */
-      starmote: {
+      /** StarMote remote connection APIs (present when StarMote rollout is enabled). */
+      starmote?: {
         /** Open a remote StarMote TCP session for a server profile. */
         connect: (payload: {
           serverId: string;
@@ -272,7 +272,7 @@ declare global {
             username?: string;
             connectedAt?: string;
             error?: string;
-            reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
+            reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
           };
           error?: string;
         }>;
@@ -290,9 +290,32 @@ declare global {
             username?: string;
             connectedAt?: string;
             error?: string;
-            reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
+            reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
           };
           error?: string;
+        }>;
+
+        /** Send a versioned admin command through a protocol-ready StarMote session. */
+        sendAdminCommand: (payload: {
+          version: 1;
+          serverId: string;
+          command: string;
+        }) => Promise<{
+          success: boolean;
+          status?: {
+            serverId: string;
+            connected: boolean;
+            state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
+            isReady?: boolean;
+            host?: string;
+            port?: number;
+            username?: string;
+            connectedAt?: string;
+            error?: string;
+            reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
+          };
+          error?: string;
+          reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
         }>;
 
         /** Fetch StarMote connection status for one profile or all profiles. */
@@ -307,7 +330,7 @@ declare global {
             username?: string;
             connectedAt?: string;
             error?: string;
-            reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
+            reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
           }>;
         }>;
 
@@ -322,7 +345,7 @@ declare global {
           username?: string;
           connectedAt?: string;
           error?: string;
-          reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
+          reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
         }) => void) => () => void;
       };
 

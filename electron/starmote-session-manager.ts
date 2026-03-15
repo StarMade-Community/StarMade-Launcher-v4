@@ -1,11 +1,14 @@
 import { logStarmoteDebug } from './starmote-debug.js';
+import { encodeAdminCommandPacket } from './starmote-protocol.js';
 
 export interface SocketLike {
   setNoDelay(noDelay?: boolean): void;
   setTimeout(timeout: number): void;
   once(event: 'connect' | 'timeout' | 'error' | 'close', listener: (...args: unknown[]) => void): this;
   on(event: 'error' | 'close', listener: (...args: unknown[]) => void): this;
+  removeListener(event: 'error' | 'close', listener: (...args: unknown[]) => void): this;
   connect(port: number, host: string): void;
+  write(data: Uint8Array): boolean;
   removeAllListeners(): this;
   destroy(): void;
 }
@@ -19,6 +22,11 @@ export type StarmoteReasonCode =
   | 'timeout'
   | 'connect_failed'
   | 'socket_error'
+  | 'protocol_timeout'
+  | 'registry_unavailable'
+  | 'not_ready'
+  | 'invalid_command'
+  | 'send_failed'
   | 'closed'
   | 'disconnected'
   | 'replaced';
@@ -53,6 +61,7 @@ interface StarmoteSessionRecord {
   state: StarmoteSessionState;
   error?: string;
   reasonCode?: StarmoteReasonCode;
+  commandRegistryReady: boolean;
   generation: number;
 }
 
@@ -60,7 +69,23 @@ interface StarmoteSessionManagerOptions {
   createSocket: () => SocketLike;
   onStatusChanged?: (status: StarmoteConnectionStatus) => void;
   runAuthStage?: (params: StarmoteConnectParams) => Promise<void>;
+  waitForCommandRegistry?: (params: StarmoteConnectParams, attempt: number) => Promise<void>;
+  commandSendTimeoutMs?: number;
+  handshakeTimeoutMs?: number;
+  handshakeRetries?: number;
 }
+
+interface StarmoteSendAdminCommandParams {
+  serverId: string;
+  command: string;
+}
+
+type StarmoteSendAdminCommandResult = {
+  success: boolean;
+  status: StarmoteConnectionStatus;
+  error?: string;
+  reasonCode?: StarmoteReasonCode;
+};
 
 function formatSocketError(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in (error as Record<string, unknown>)) {
@@ -73,12 +98,26 @@ export class StarmoteSessionManager {
   private readonly createSocket: () => SocketLike;
   private readonly onStatusChanged?: (status: StarmoteConnectionStatus) => void;
   private readonly runAuthStage: (params: StarmoteConnectParams) => Promise<void>;
+  private readonly waitForCommandRegistry: (params: StarmoteConnectParams, attempt: number) => Promise<void>;
+  private readonly commandSendTimeoutMs: number;
+  private readonly handshakeTimeoutMs: number;
+  private readonly handshakeRetries: number;
   private readonly sessions = new Map<string, StarmoteSessionRecord>();
 
   constructor(options: StarmoteSessionManagerOptions) {
     this.createSocket = options.createSocket;
     this.onStatusChanged = options.onStatusChanged;
     this.runAuthStage = options.runAuthStage ?? (async () => undefined);
+    this.waitForCommandRegistry = options.waitForCommandRegistry ?? (async () => undefined);
+    this.commandSendTimeoutMs = Number.isFinite(options.commandSendTimeoutMs)
+      ? Math.max(1000, Math.trunc(options.commandSendTimeoutMs as number))
+      : 5000;
+    this.handshakeTimeoutMs = Number.isFinite(options.handshakeTimeoutMs)
+      ? Math.max(1000, Math.trunc(options.handshakeTimeoutMs as number))
+      : 3000;
+    this.handshakeRetries = Number.isFinite(options.handshakeRetries)
+      ? Math.max(0, Math.trunc(options.handshakeRetries as number))
+      : 1;
   }
 
   getStatusFor(serverId: string): StarmoteConnectionStatus {
@@ -103,6 +142,49 @@ export class StarmoteSessionManager {
       error: session.error,
       reasonCode: session.reasonCode,
     };
+  }
+
+  async sendAdminCommand(params: StarmoteSendAdminCommandParams): Promise<StarmoteSendAdminCommandResult> {
+    const serverId = params.serverId.trim();
+    const command = params.command.trim();
+    const session = this.sessions.get(serverId);
+
+    if (!session || !session.socket || session.state !== 'ready' || !session.commandRegistryReady) {
+      return {
+        success: false,
+        status: this.getStatusFor(serverId),
+        error: 'Remote StarMote session is not protocol-ready yet.',
+        reasonCode: 'not_ready',
+      };
+    }
+
+    if (!command) {
+      return {
+        success: false,
+        status: this.getStatusFor(serverId),
+        error: 'Command text is required.',
+        reasonCode: 'invalid_command',
+      };
+    }
+
+    try {
+      const packet = encodeAdminCommandPacket(command);
+      await this.writePacketWithTimeout(session.socket, packet, this.commandSendTimeoutMs);
+      logStarmoteDebug('session.command.sent', { serverId, bytes: packet.byteLength });
+      return {
+        success: true,
+        status: this.getStatusFor(serverId),
+      };
+    } catch (error) {
+      const errorText = `Failed to send admin command: ${formatSocketError(error)}`;
+      logStarmoteDebug('session.command.send_failed', { serverId, error: errorText });
+      return {
+        success: false,
+        status: this.getStatusFor(serverId),
+        error: errorText,
+        reasonCode: 'send_failed',
+      };
+    }
   }
 
   getStatuses(): StarmoteConnectionStatus[] {
@@ -134,6 +216,7 @@ export class StarmoteSessionManager {
       username: params.username,
       socket,
       state: 'connecting',
+      commandRegistryReady: false,
       generation,
     };
     this.sessions.set(params.serverId, session);
@@ -205,16 +288,35 @@ export class StarmoteSessionManager {
 
     active.state = 'authenticating';
     active.reasonCode = 'authenticating';
+    active.commandRegistryReady = false;
     this.emitStatus(params.serverId);
 
     try {
       await this.runAuthStage(params);
+
+      const attempts = this.handshakeRetries + 1;
+      for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        const ready = await this.runHandshakeAttempt(params, attempt);
+        if (!ready) {
+          continue;
+        }
+        if (active.generation !== generation) {
+          throw new Error('Connection attempt was replaced by a newer session.');
+        }
+        active.commandRegistryReady = true;
+        break;
+      }
     } catch (error) {
+      const errorText = formatSocketError(error);
+      const isTimeout = /timed out/i.test(errorText);
       active.socket = undefined;
       active.connectedAt = undefined;
       active.state = 'error';
-      active.error = `Authentication failed: ${formatSocketError(error)}`;
-      active.reasonCode = 'auth_failed';
+      active.error = isTimeout
+        ? `Protocol handshake timed out: ${errorText}`
+        : `Authentication/registry setup failed: ${errorText}`;
+      active.reasonCode = isTimeout ? 'protocol_timeout' : 'registry_unavailable';
+      active.commandRegistryReady = false;
       try {
         socket.removeAllListeners();
         socket.destroy();
@@ -244,6 +346,7 @@ export class StarmoteSessionManager {
       current.state = 'error';
       current.error = `Connection error: ${formatSocketError(error)}`;
       current.reasonCode = 'socket_error';
+      current.commandRegistryReady = false;
       try {
         socket.removeAllListeners();
         socket.destroy();
@@ -266,6 +369,7 @@ export class StarmoteSessionManager {
       if (current.state === 'connected' || current.state === 'authenticating' || current.state === 'ready') {
         current.state = 'idle';
         current.reasonCode = 'closed';
+        current.commandRegistryReady = false;
       }
       this.emitStatus(params.serverId);
       logStarmoteDebug('session.socket.closed', {
@@ -309,6 +413,7 @@ export class StarmoteSessionManager {
     session.state = 'idle';
     session.reasonCode = reasonCode;
     session.error = preserveError && !hadSocket ? existingError : undefined;
+    session.commandRegistryReady = false;
 
     if (socket) {
       try {
@@ -334,6 +439,84 @@ export class StarmoteSessionManager {
 
   private emitStatus(serverId: string): void {
     this.onStatusChanged?.(this.getStatusFor(serverId));
+  }
+
+  private async runHandshakeAttempt(params: StarmoteConnectParams, attempt: number): Promise<boolean> {
+    try {
+      await this.withTimeout(
+        this.waitForCommandRegistry(params, attempt),
+        this.handshakeTimeoutMs,
+        `Command registry handshake timed out after ${this.handshakeTimeoutMs}ms`,
+      );
+      logStarmoteDebug('session.handshake.ready', {
+        serverId: params.serverId,
+        attempt,
+      });
+      return true;
+    } catch (error) {
+      if (attempt > this.handshakeRetries) {
+        throw error;
+      }
+
+      logStarmoteDebug('session.handshake.retry', {
+        serverId: params.serverId,
+        attempt,
+        error: formatSocketError(error),
+      });
+      return false;
+    }
+  }
+
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    message: string,
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+
+      promise
+        .then((value) => {
+          clearTimeout(timeoutId);
+          resolve(value);
+        })
+        .catch((error) => {
+          clearTimeout(timeoutId);
+          reject(error);
+        });
+    });
+  }
+
+  private async writePacketWithTimeout(socket: SocketLike, packet: Uint8Array, timeoutMs: number): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        socket.removeListener('error', onError);
+        socket.removeListener('close', onClose);
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+
+      const onError = (error: unknown) => finish(new Error(formatSocketError(error)));
+      const onClose = () => finish(new Error('Socket closed while sending packet.'));
+      const timeoutId = setTimeout(() => finish(new Error(`Packet send timed out after ${timeoutMs}ms.`)), timeoutMs);
+
+      socket.on('error', onError);
+      socket.on('close', onClose);
+
+      try {
+        socket.write(packet);
+        finish();
+      } catch (error) {
+        finish(new Error(formatSocketError(error)));
+      }
+    });
   }
 }
 

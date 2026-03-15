@@ -24,6 +24,7 @@ interface ServerPanelProps {
 }
 
 type ServerPanelTab = 'control' | 'actions' | 'logs' | 'chat' | 'configuration' | 'files' | 'database';
+const REMOTE_UNSUPPORTED_TABS: ServerPanelTab[] = ['logs', 'configuration', 'files'];
 const CONFIG_EDITOR_TABS = [
   { id: 'server-cfg', label: 'server.cfg' },
   { id: 'game-config-xml', label: 'GameConfig.xml' },
@@ -100,7 +101,7 @@ interface RemoteConnectionStatus {
   username?: string;
   connectedAt?: string;
   error?: string;
-  reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'closed' | 'disconnected' | 'replaced';
+  reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
 }
 
 const GENERAL_CHANNEL_ID = 'all';
@@ -2076,7 +2077,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const effectiveServerName = effectiveServer?.name || serverName || 'Server';
   const hasGameApi = typeof window !== 'undefined' && !!window.launcher?.game;
-  const hasStarmoteApi = typeof window !== 'undefined' && !!window.launcher?.starmote;
+  const starmoteApi = typeof window !== 'undefined' ? window.launcher?.starmote : undefined;
+  const hasStarmoteApi = !!starmoteApi;
   const hasDownloadApi = typeof window !== 'undefined' && !!window.launcher?.download;
   const hasStoreApi = typeof window !== 'undefined' && !!window.launcher?.store;
   const isPoppedOutPanel = typeof window !== 'undefined'
@@ -2096,7 +2098,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const isUpdating = serverDownloadStatus?.state === 'checksums' || serverDownloadStatus?.state === 'downloading';
 
   const refreshRemoteConnectionStatus = useCallback(async (targetServerId?: string): Promise<void> => {
-    if (!hasStarmoteApi) {
+    if (!hasStarmoteApi || !starmoteApi) {
       setRemoteConnectionStatus(null);
       setRemoteStatusesByServerId({});
       return;
@@ -2104,7 +2106,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     try {
       if (targetServerId) {
-        const result = await window.launcher.starmote.getStatus(targetServerId);
+        const result = await starmoteApi.getStatus(targetServerId);
         const status = result.statuses.find((entry) => entry.serverId === targetServerId) ?? null;
         if (status) {
           setRemoteStatusesByServerId((previous) => ({ ...previous, [status.serverId]: status }));
@@ -2118,7 +2120,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         return;
       }
 
-      const result = await window.launcher.starmote.getStatus();
+      const result = await starmoteApi.getStatus();
       const nextByServerId: Record<string, RemoteConnectionStatus> = {};
       for (const status of result.statuses) {
         nextByServerId[status.serverId] = status;
@@ -2129,7 +2131,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } catch {
       setRemoteConnectionStatus(null);
     }
-  }, [effectiveServer?.id, hasStarmoteApi]);
+  }, [effectiveServer?.id, hasStarmoteApi, starmoteApi]);
 
   const hasConnectedRemoteByServerId = useMemo<Record<string, boolean>>(() => {
     const flags: Record<string, boolean> = {};
@@ -2159,10 +2161,36 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         return { label: 'Connect Failed', className: 'text-red-300' };
       case 'socket_error':
         return { label: 'Connection Error', className: 'text-red-300' };
+      case 'protocol_timeout':
+        return { label: 'Handshake Timeout', className: 'text-red-300' };
+      case 'registry_unavailable':
+        return { label: 'Protocol Error', className: 'text-red-300' };
       default:
         return { label: 'Disconnected', className: 'text-gray-300' };
     }
   }, [remoteConnectionStatus]);
+
+  const remoteDiagnosticsHint = useMemo(() => {
+    switch (remoteConnectionStatus?.reasonCode) {
+      case 'timeout':
+      case 'connect_failed':
+        return 'Verify host/port, firewall rules, and that the game server is listening for StarMote.';
+      case 'auth_failed':
+        return 'Authentication failed; refresh credentials and reconnect.';
+      case 'protocol_timeout':
+        return 'Socket connected but protocol setup timed out. Reconnect and check server-side StarMote compatibility.';
+      case 'registry_unavailable':
+        return 'Protocol registry did not initialize. Ensure server build matches expected command registry.';
+      case 'not_ready':
+        return 'Session is connected but not protocol-ready. Wait for Ready state before issuing commands.';
+      case 'send_failed':
+        return 'Command transfer failed mid-session. Reconnect if this continues.';
+      case 'socket_error':
+        return 'Transport dropped after connect. Inspect server logs and network stability.';
+      default:
+        return null;
+    }
+  }, [remoteConnectionStatus?.reasonCode]);
 
   const isRemoteServerProfile = !!effectiveServer?.isRemote;
   const canExecuteRemoteCommandActions = isRemoteCommandActionEnabled({
@@ -2170,6 +2198,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     remoteState: remoteConnectionStatus?.state,
     isRemoteReady: remoteConnectionStatus?.isReady,
   });
+  const isRemoteCommandRuntimeReady = isRemoteServerProfile && canExecuteRemoteCommandActions;
+  const isCommandRuntimeReady = isRemoteServerProfile
+    ? isRemoteCommandRuntimeReady
+    : lifecycleState === 'running';
 
   const handleSwitchServer = useCallback((nextServerId: string) => {
     setViewingServerId(nextServerId || null);
@@ -2212,7 +2244,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const handleRemoteConnect = useCallback(async () => {
     if (isRemoteConnectPending) return;
 
-    if (!hasStarmoteApi) {
+    if (!hasStarmoteApi || !starmoteApi) {
       setRemoteConnectError('StarMote API is unavailable in this build.');
       return;
     }
@@ -2254,7 +2286,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setRemoteConnectError(null);
 
     try {
-      const connectResult = await window.launcher.starmote.connect({
+      const connectResult = await starmoteApi.connect({
         serverId: targetServer.id,
         host,
         port: parsedPort,
@@ -2311,14 +2343,15 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     servers,
     updateServerItem,
     viewingServerId,
+    starmoteApi,
   ]);
 
   const handleRemoteDisconnect = useCallback(async () => {
-    if (!hasStarmoteApi || !effectiveServer || isRemoteDisconnectPending) return;
+    if (!hasStarmoteApi || !starmoteApi || !effectiveServer || isRemoteDisconnectPending) return;
     setIsRemoteDisconnectPending(true);
     setRemoteConnectError(null);
     try {
-      const result = await window.launcher.starmote.disconnect(effectiveServer.id);
+      const result = await starmoteApi.disconnect(effectiveServer.id);
       if (!result.success) {
         setRemoteConnectError(result.error ?? 'Failed to disconnect remote session.');
       }
@@ -2328,15 +2361,15 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setIsRemoteDisconnectPending(false);
     }
-  }, [effectiveServer, hasStarmoteApi, isRemoteDisconnectPending, refreshRemoteConnectionStatus]);
+  }, [effectiveServer, hasStarmoteApi, isRemoteDisconnectPending, refreshRemoteConnectionStatus, starmoteApi]);
 
   useEffect(() => {
     void refreshRemoteConnectionStatus();
   }, [refreshRemoteConnectionStatus]);
 
   useEffect(() => {
-    if (!hasStarmoteApi) return;
-    const unsubscribe = window.launcher.starmote.onStatusChanged((status) => {
+    if (!hasStarmoteApi || !starmoteApi) return;
+    const unsubscribe = starmoteApi.onStatusChanged((status) => {
       setRemoteStatusesByServerId((previous) => ({
         ...previous,
         [status.serverId]: status,
@@ -2345,7 +2378,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setRemoteConnectionStatus(status);
     });
     return unsubscribe;
-  }, [effectiveServer, hasStarmoteApi]);
+  }, [effectiveServer, hasStarmoteApi, starmoteApi]);
+
+  useEffect(() => {
+    if (!isRemoteServerProfile) return;
+    setLifecycleState(isRemoteCommandRuntimeReady ? 'running' : 'stopped');
+  }, [isRemoteCommandRuntimeReady, isRemoteServerProfile]);
 
   const allLogFiles = useMemo(() => {
     return logCategories
@@ -2575,7 +2613,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const handleSendChatMessage = useCallback(async () => {
     const text = chatInput.trim();
-    if (!text || !effectiveServer || !hasGameApi || !selectedChatChannelId) return;
+    if (!text || !effectiveServer || !selectedChatChannelId) return;
+    if (!isCommandRuntimeReady) {
+      setChatError(isRemoteServerProfile
+        ? 'Remote StarMote session is not ready to send commands yet.'
+        : 'Server is not running. Start the server to send messages.');
+      return;
+    }
     if (!canExecuteRemoteCommandActions) {
       setChatError('Remote StarMote session is not ready to send commands yet.');
       return;
@@ -2618,8 +2662,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     canExecuteRemoteCommandActions,
     chatChannels,
     chatInput,
+    isCommandRuntimeReady,
+    isRemoteServerProfile,
     effectiveServer,
-    hasGameApi,
     selectedChatChannelId,
   ]);
 
@@ -2687,6 +2732,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       return;
     }
 
+    if (effectiveServer.isRemote) {
+      setRuntimePid(undefined);
+      setRuntimeUptimeMs(undefined);
+      setLifecycleState(isRemoteCommandRuntimeReady ? 'running' : 'stopped');
+      return;
+    }
+
     try {
       const status = await window.launcher.game.status(effectiveServer.id);
       setRuntimePid(status.pid);
@@ -2697,7 +2749,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setLifecycleState('error');
       setActionError('Failed to query server status.');
     }
-  }, [effectiveServer, hasGameApi]);
+  }, [effectiveServer, hasGameApi, isRemoteCommandRuntimeReady]);
 
   useEffect(() => {
     void refreshRuntimeStatus();
@@ -3792,21 +3844,40 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [effectiveServer, hasGameApi, activeAccount?.id, refreshRuntimeStatus]);
 
   const sendServerCommandOrThrow = useCallback(async (command: string) => {
-    if (!effectiveServer || !hasGameApi) {
+    if (!effectiveServer) {
       throw new Error('Server context unavailable.');
     }
-    if (!canExecuteRemoteCommandActions) {
+    if (isRemoteServerProfile && !canExecuteRemoteCommandActions) {
       throw new Error('Remote StarMote session is not ready to execute commands yet.');
+    }
+
+    if (isRemoteServerProfile) {
+      if (!hasStarmoteApi || !starmoteApi) {
+        throw new Error('StarMote API unavailable in this build.');
+      }
+      const remoteResult = await starmoteApi.sendAdminCommand({
+        version: 1,
+        serverId: effectiveServer.id,
+        command,
+      });
+      if (!remoteResult.success) {
+        throw new Error(remoteResult.error ?? `Failed to execute remote command: ${command}`);
+      }
+      return;
+    }
+
+    if (!hasGameApi) {
+      throw new Error('Game API unavailable for local command execution.');
     }
 
     const result = await window.launcher.game.sendServerCommand(effectiveServer.id, command);
     if (!result.success) {
       throw new Error(result.error ?? `Failed to execute command: ${command}`);
     }
-  }, [canExecuteRemoteCommandActions, effectiveServer, hasGameApi]);
+  }, [canExecuteRemoteCommandActions, effectiveServer, hasGameApi, hasStarmoteApi, isRemoteServerProfile, starmoteApi]);
 
   const refreshPlayers = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running' || !canExecuteRemoteCommandActions) {
+    if (!effectiveServer || !isCommandRuntimeReady) {
       setOnlinePlayers([]);
       setIsPlayersRefreshing(false);
       return;
@@ -3841,10 +3912,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setIsPlayersRefreshing(false);
       setPlayersError(String(error));
     }
-  }, [canExecuteRemoteCommandActions, effectiveServer, hasGameApi, lifecycleState, sendServerCommandOrThrow]);
+  }, [effectiveServer, isCommandRuntimeReady, sendServerCommandOrThrow]);
 
   const handleKickPlayer = useCallback(async (playerName: string) => {
-    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') return;
+    if (!effectiveServer || !isCommandRuntimeReady) return;
     if (kickingPlayerName || isPlayerMessageSending || isPlayersBroadcasting) return;
 
     const confirmed = typeof window !== 'undefined'
@@ -3878,18 +3949,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
   }, [
     effectiveServer,
-    hasGameApi,
+    isCommandRuntimeReady,
     isPlayerMessageSending,
     isPlayersBroadcasting,
     kickingPlayerName,
-    lifecycleState,
     playerMessageTarget,
     refreshPlayers,
     sendServerCommandOrThrow,
   ]);
 
   const sendPlayerMessage = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') return;
+    if (!effectiveServer || !isCommandRuntimeReady) return;
     if (!playerMessageTarget || isPlayerMessageSending || kickingPlayerName || isPlayersBroadcasting) return;
 
     const text = playerMessageText.trim();
@@ -3912,9 +3982,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
   }, [
     effectiveServer,
-    hasGameApi,
+    isCommandRuntimeReady,
     kickingPlayerName,
-    lifecycleState,
     isPlayersBroadcasting,
     playerMessageTarget,
     playerMessageText,
@@ -3923,7 +3992,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   ]);
 
   const messageAllOnlinePlayers = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') return;
+    if (!effectiveServer || !isCommandRuntimeReady) return;
     if (isPlayersBroadcasting || isPlayerMessageSending || kickingPlayerName) return;
 
     const messageRaw = typeof window !== 'undefined'
@@ -3945,8 +4014,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
   }, [
     effectiveServer,
-    hasGameApi,
-    lifecycleState,
+    isCommandRuntimeReady,
     isPlayersBroadcasting,
     isPlayerMessageSending,
     kickingPlayerName,
@@ -3993,6 +4061,25 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const stopServer = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) return;
 
+    if (isRemoteServerProfile) {
+      if (!isRemoteCommandRuntimeReady) {
+        setActionError('Remote StarMote session is not ready to stop this server yet.');
+        return;
+      }
+
+      setActionError(null);
+      setPendingServerAction('stop');
+      try {
+        await scheduleTimedShutdown(STOP_SHUTDOWN_SECONDS);
+        setActionError('Remote shutdown command sent. Refresh after the countdown to confirm status.');
+      } catch (error) {
+        setActionError(`Failed to schedule remote shutdown: ${String(error)}`);
+      } finally {
+        setPendingServerAction(null);
+      }
+      return;
+    }
+
     setActionError(null);
     setPendingServerAction('stop');
     setLifecycleState('stopping');
@@ -4014,7 +4101,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setPendingServerAction(null);
     }
-  }, [effectiveServer, hasGameApi, scheduleTimedShutdown, waitForServerToStop]);
+  }, [effectiveServer, hasGameApi, isRemoteCommandRuntimeReady, isRemoteServerProfile, scheduleTimedShutdown, waitForServerToStop]);
 
   const forceStopServer = useCallback(async () => {
     if (!effectiveServer || !hasGameApi || pendingServerAction !== 'stop') return;
@@ -4045,12 +4132,15 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const executeDatabaseSql = useCallback(async (query: string, mode: DatabaseSqlMode) => {
     const trimmed = query.trim();
-    if (!trimmed || !effectiveServer || !hasGameApi) return;
-    if (lifecycleState !== 'running') {
-      setDatabaseSqlError('Server must be running to execute SQL admin commands.');
+    const canRunCommands = isRemoteServerProfile ? hasStarmoteApi : hasGameApi;
+    if (!trimmed || !effectiveServer || !canRunCommands) return;
+    if (!isCommandRuntimeReady) {
+      setDatabaseSqlError(isRemoteServerProfile
+        ? 'Remote StarMote session is not ready to execute SQL admin commands yet.'
+        : 'Server must be running to execute SQL admin commands.');
       return;
     }
-    if (!canExecuteRemoteCommandActions) {
+    if (isRemoteServerProfile && !canExecuteRemoteCommandActions) {
       setDatabaseSqlError('Remote StarMote session is not ready to execute SQL admin commands yet.');
       return;
     }
@@ -4064,10 +4154,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setDatabaseIsExecuting(true);
 
     const command = `/${DATABASE_CMD_BY_MODE[mode]} ${quoteServerCommandArg(trimmed)}`;
-    const result = await window.launcher.game.sendServerCommand(effectiveServer.id, command);
-    if (!result.success) {
+    try {
+      await sendServerCommandOrThrow(command);
+    } catch (error) {
       clearPendingDatabaseSql();
-      setDatabaseSqlError(result.error ?? 'Failed to submit SQL command.');
+      setDatabaseSqlError(String(error));
       return;
     }
 
@@ -4076,7 +4167,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       clearPendingDatabaseSql();
       setDatabaseSqlError('Timed out (15 s) waiting for SQL response in server log.');
     }, 15_000);
-  }, [canExecuteRemoteCommandActions, clearPendingDatabaseSql, effectiveServer, hasGameApi, lifecycleState]);
+  }, [canExecuteRemoteCommandActions, clearPendingDatabaseSql, effectiveServer, hasGameApi, hasStarmoteApi, isCommandRuntimeReady, isRemoteServerProfile, sendServerCommandOrThrow]);
 
   const loadDatabaseEntities = useCallback(async () => {
     setDatabaseSqlInput(DATABASE_ENTITY_LIST_SQL);
@@ -4099,6 +4190,27 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const restartServer = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) return;
+
+    if (isRemoteServerProfile) {
+      if (!isRemoteCommandRuntimeReady) {
+        setActionError('Remote StarMote session is not ready to restart this server yet.');
+        return;
+      }
+
+      setActionError(null);
+      setPendingServerAction('restart');
+
+      try {
+        await sendBroadcastNotice(`Server restart in ${RESTART_SHUTDOWN_SECONDS} seconds.`);
+        await scheduleTimedShutdown(RESTART_SHUTDOWN_SECONDS);
+        setActionError('Remote restart command sent. Refresh after the countdown to confirm status.');
+      } catch (error) {
+        setActionError(`Failed to restart remote server: ${String(error)}`);
+      } finally {
+        setPendingServerAction(null);
+      }
+      return;
+    }
 
     setActionError(null);
     setPendingServerAction('restart');
@@ -4125,7 +4237,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setPendingServerAction(null);
     }
-  }, [effectiveServer, hasGameApi, scheduleTimedShutdown, sendBroadcastNotice, startServer, waitForServerToStop]);
+  }, [effectiveServer, hasGameApi, isRemoteCommandRuntimeReady, isRemoteServerProfile, scheduleTimedShutdown, sendBroadcastNotice, startServer, waitForServerToStop]);
 
   const updateServer = useCallback(async () => {
     if (!effectiveServer || !hasDownloadApi) return;
@@ -4282,7 +4394,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [closeDatabaseInspectModal, databaseInspectEntity]);
 
   useEffect(() => {
-    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') {
+    if (!effectiveServer || !isCommandRuntimeReady) {
       if (effectiveServer?.id) {
         databaseAutoLoadedServerIdsRef.current.delete(effectiveServer.id);
       }
@@ -4308,7 +4420,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         playersListCollectionRef.current = null;
       }
     };
-  }, [effectiveServer?.id, hasGameApi, lifecycleState, refreshPlayers]);
+  }, [effectiveServer?.id, isCommandRuntimeReady, refreshPlayers]);
 
   // Auto-load entity list when switching to the database tab (only if no data yet)
   useEffect(() => {
@@ -4434,9 +4546,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setActiveLogFilters([...LOG_FILTER_OPTIONS]);
   }, []);
 
-  const canStart = !!effectiveServer && !isUpdating && lifecycleState !== 'running' && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
-  const canStop = !!effectiveServer && !isUpdating && (lifecycleState === 'running' || lifecycleState === 'starting');
-  const canRestart = !!effectiveServer && !isUpdating && lifecycleState === 'running';
+  const canStart = !!effectiveServer && !effectiveServer.isRemote && !isUpdating && lifecycleState !== 'running' && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
+  const canStop = !!effectiveServer && !isUpdating && (effectiveServer.isRemote ? isRemoteCommandRuntimeReady : (lifecycleState === 'running' || lifecycleState === 'starting'));
+  const canRestart = !!effectiveServer && !isUpdating && (effectiveServer.isRemote ? isRemoteCommandRuntimeReady : lifecycleState === 'running');
   const canUpdate = isServerUpdateSupported(effectiveServer) && !isUpdating && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
 
   const getLogLevelColor = (level: LogEntry['level']) => {
@@ -4647,8 +4759,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       id: 'start',
       label: 'Start Server',
       buttonLabel: lifecycleState === 'starting' ? 'Starting...' : 'Start Server',
-      description: 'Launch the selected StarMade server using its current install and Java settings.',
-      detail: lifecycleState === 'running' ? 'Server is already online.' : 'Starts the dedicated server process.',
+      description: effectiveServer?.isRemote
+        ? 'Remote servers are started from their host machine or orchestration layer.'
+        : 'Launch the selected StarMade server using its current install and Java settings.',
+      detail: effectiveServer?.isRemote
+        ? 'Remote start is unavailable in this launcher.'
+        : (lifecycleState === 'running' ? 'Server is already online.' : 'Starts the dedicated server process.'),
       enabled: canStart,
       isLoading: lifecycleState === 'starting',
       emphasis: 'accent',
@@ -4657,16 +4773,20 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     {
       id: 'stop',
       label: 'Stop Server',
-      description: 'Gracefully stop the currently running dedicated server process.',
-      buttonLabel: pendingServerAction === 'stop' ? 'Force Stop' : 'Stop Server',
-      detail: pendingServerAction === 'stop'
-        ? 'Timed shutdown is in progress. Click Force Stop to kill the process immediately.'
-        : lifecycleState === 'stopped'
-          ? 'Server is currently offline.'
-          : 'Schedules a timed shutdown and waits for the process to stop.',
-      enabled: pendingServerAction === 'stop' ? true : canStop,
+      description: effectiveServer?.isRemote
+        ? 'Send a remote /shutdown command over StarMote.'
+        : 'Gracefully stop the currently running dedicated server process.',
+      buttonLabel: pendingServerAction === 'stop' && !effectiveServer?.isRemote ? 'Force Stop' : 'Stop Server',
+      detail: effectiveServer?.isRemote
+        ? 'Schedules a timed shutdown command on the remote host.'
+        : (pendingServerAction === 'stop'
+          ? 'Timed shutdown is in progress. Click Force Stop to kill the process immediately.'
+          : lifecycleState === 'stopped'
+            ? 'Server is currently offline.'
+            : 'Schedules a timed shutdown and waits for the process to stop.'),
+      enabled: pendingServerAction === 'stop' && !effectiveServer?.isRemote ? true : canStop,
       isLoading: pendingServerAction === 'stop',
-      allowClickWhileLoading: pendingServerAction === 'stop',
+      allowClickWhileLoading: pendingServerAction === 'stop' && !effectiveServer?.isRemote,
       emphasis: 'danger',
       onClick: () => {
         if (pendingServerAction === 'stop') {
@@ -4680,8 +4800,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       id: 'restart',
       label: 'Restart Server',
       buttonLabel: pendingServerAction === 'restart' ? 'Restarting...' : 'Restart Server',
-      description: 'Stop and then start the server again with the current configuration.',
-      detail: 'Useful after config changes or when you want a clean runtime reset.',
+      description: effectiveServer?.isRemote
+        ? 'Send remote restart notices and timed shutdown commands over StarMote.'
+        : 'Stop and then start the server again with the current configuration.',
+      detail: effectiveServer?.isRemote
+        ? 'Remote restart does not spawn local processes; it dispatches remote commands only.'
+        : 'Useful after config changes or when you want a clean runtime reset.',
       enabled: canRestart,
       isLoading: pendingServerAction === 'restart',
       onClick: () => { void restartServer(); },
@@ -5429,6 +5553,18 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             </button>
           </div>
         </div>
+        <div className="rounded-md border border-white/10 bg-black/15 px-3 py-2 text-[11px] text-gray-300">
+          <p className="font-semibold uppercase tracking-wider text-gray-400">Protocol Diagnostics</p>
+          <p className="mt-1 text-gray-300">
+            Reason Code: <span className="font-mono text-gray-100">{remoteConnectionStatus?.reasonCode ?? 'none'}</span>
+          </p>
+          {remoteConnectionStatus?.error && (
+            <p className="mt-1 text-red-200">Last Error: {remoteConnectionStatus.error}</p>
+          )}
+          {remoteDiagnosticsHint && (
+            <p className="mt-1 text-amber-200">Hint: {remoteDiagnosticsHint}</p>
+          )}
+        </div>
         {renderDashboardConfigField('SERVER_LISTEN_IP', { labelWidthClassName: 'w-28' })}
         <label className="flex items-center gap-3 text-sm">
           <span className="w-28 text-gray-300">Server Port:</span>
@@ -5733,7 +5869,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 setDatabaseSqlMode('query');
                 void executeDatabaseSql(q, 'query');
               }}
-              disabled={databaseIsExecuting || lifecycleState !== 'running'}
+              disabled={databaseIsExecuting || !isCommandRuntimeReady}
               className="rounded-md border border-cyan-500/35 bg-cyan-500/10 px-3 py-1.5 text-sm font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
             >
               Query Full Row
@@ -5759,7 +5895,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         <div className="flex items-center gap-2">
           <button
             onClick={() => { void messageAllOnlinePlayers(); }}
-            disabled={lifecycleState !== 'running' || !hasGameApi || isPlayersBroadcasting || isPlayersRefreshing || !!kickingPlayerName || isPlayerMessageSending || onlinePlayers.length === 0}
+            disabled={!isCommandRuntimeReady || isPlayersBroadcasting || isPlayersRefreshing || !!kickingPlayerName || isPlayerMessageSending || onlinePlayers.length === 0}
             className="rounded border border-cyan-500/35 bg-cyan-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <span className="inline-flex items-center gap-1.5">
@@ -5774,7 +5910,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           </button>
           <button
             onClick={() => { void refreshPlayers(); }}
-            disabled={lifecycleState !== 'running' || isPlayersRefreshing || !hasGameApi || !!kickingPlayerName || isPlayerMessageSending || isPlayersBroadcasting}
+            disabled={!isCommandRuntimeReady || isPlayersRefreshing || !!kickingPlayerName || isPlayerMessageSending || isPlayersBroadcasting}
             className="rounded border border-white/15 bg-black/25 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-200 transition-colors hover:bg-black/40 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <span className="inline-flex items-center gap-1.5">
@@ -5794,8 +5930,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         {playersError && (
           <p className="mb-2 text-red-300">{playersError}</p>
         )}
-        {lifecycleState !== 'running' ? (
-          <p className="text-gray-500">Server is offline. Start the server to view connected players.</p>
+        {!isCommandRuntimeReady ? (
+          <p className="text-gray-500">
+            {isRemoteServerProfile
+              ? 'Remote session is not ready. Connect and wait for Ready before requesting players.'
+              : 'Server is offline. Start the server to view connected players.'}
+          </p>
         ) : onlinePlayers.length === 0 ? (
           <p className="text-gray-500">No players online.</p>
         ) : (
@@ -5854,12 +5994,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 }
               }}
               placeholder="Type a direct server message..."
-              disabled={isPlayerMessageSending || !!kickingPlayerName || lifecycleState !== 'running'}
+              disabled={isPlayerMessageSending || !!kickingPlayerName || !isCommandRuntimeReady}
               className="flex-1 rounded border border-white/15 bg-black/25 px-2 py-1.5 text-xs text-gray-100 placeholder-gray-500"
             />
             <button
               onClick={() => { void sendPlayerMessage(); }}
-              disabled={!playerMessageText.trim() || isPlayerMessageSending || !!kickingPlayerName || isPlayersBroadcasting || lifecycleState !== 'running'}
+              disabled={!playerMessageText.trim() || isPlayerMessageSending || !!kickingPlayerName || isPlayersBroadcasting || !isCommandRuntimeReady}
               className="rounded border border-cyan-400/40 bg-cyan-500/10 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-cyan-200 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isPlayerMessageSending ? 'Sending...' : 'Send'}
@@ -7189,8 +7329,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               <h3 className="font-display text-lg font-bold uppercase tracking-wider text-white">Server Chat</h3>
               <p className="text-sm text-gray-400">
                 {selectedChannel ? `${selectedChannel.channelLabel}` : 'Select a channel'}
-                {lifecycleState !== 'running' && (
-                  <span className="ml-2 text-amber-400">(server not running — showing saved logs)</span>
+                {!isCommandRuntimeReady && (
+                  <span className="ml-2 text-amber-400">
+                    {isRemoteServerProfile ? '(remote session not ready — showing saved logs)' : '(server not running — showing saved logs)'}
+                  </span>
                 )}
               </p>
             </div>
@@ -7317,9 +7459,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
             {/* Message input */}
             <div className="border-t border-white/10 bg-black/20 px-3 py-2">
-              {lifecycleState !== 'running' && (
+              {!isCommandRuntimeReady && (
                 <p className="mb-2 text-xs text-amber-400">
-                  ⚠ Server is not running. Messages will not be sent.
+                  {isRemoteServerProfile
+                    ? '⚠ Remote session is not ready. Messages will not be sent.'
+                    : '⚠ Server is not running. Messages will not be sent.'}
                 </p>
               )}
               {selectedChannel?.channelType === 'direct' && (
@@ -7342,16 +7486,16 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   placeholder={
                     !selectedChatChannelId
                       ? 'Select a channel first...'
-                      : lifecycleState !== 'running'
-                        ? 'Server not running...'
+                      : !isCommandRuntimeReady
+                        ? (isRemoteServerProfile ? 'Remote session not ready...' : 'Server not running...')
                         : `Message ${selectedChannel?.channelLabel ?? selectedChatChannelId}...`
                   }
-                  disabled={!selectedChatChannelId || lifecycleState !== 'running'}
+                  disabled={!selectedChatChannelId || !isCommandRuntimeReady}
                   className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-starmade-accent disabled:cursor-not-allowed disabled:opacity-50"
                 />
                 <button
                   onClick={() => { void handleSendChatMessage(); }}
-                  disabled={!chatInput.trim() || !selectedChatChannelId || lifecycleState !== 'running'}
+                  disabled={!chatInput.trim() || !selectedChatChannelId || !isCommandRuntimeReady}
                   className="rounded-md bg-starmade-accent px-4 py-2 text-sm font-semibold uppercase tracking-wider text-white hover:bg-starmade-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Send
@@ -7407,14 +7551,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             </select>
             <button
               onClick={() => { void executeDatabaseSql(databaseSqlInput, databaseSqlMode); }}
-              disabled={databaseIsExecuting || lifecycleState !== 'running'}
+              disabled={databaseIsExecuting || !isCommandRuntimeReady}
               className="rounded bg-starmade-accent px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-white hover:bg-starmade-accent/80 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {databaseIsExecuting ? 'Running…' : 'Execute'}
             </button>
             <button
               onClick={() => { void loadDatabaseEntities(); }}
-              disabled={databaseIsExecuting || lifecycleState !== 'running'}
+              disabled={databaseIsExecuting || !isCommandRuntimeReady}
               className="rounded border border-white/15 bg-black/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
             >
               Reload Entities
@@ -7438,8 +7582,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             )}
             {databaseSqlError && <p className="text-red-300">{databaseSqlError}</p>}
             {databaseClipboardMsg && <p className="text-cyan-300">{databaseClipboardMsg}</p>}
-            {lifecycleState !== 'running' && (
-              <p className="text-amber-300">⚠ Server must be running to execute SQL commands.</p>
+            {!isCommandRuntimeReady && (
+              <p className="text-amber-300">
+                {isRemoteServerProfile
+                  ? '⚠ Remote session must be Ready to execute SQL commands.'
+                  : '⚠ Server must be running to execute SQL commands.'}
+              </p>
             )}
           </div>
 
@@ -7652,6 +7800,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   );
 
   const renderActiveTab = () => {
+    if (isRemoteServerProfile && REMOTE_UNSUPPORTED_TABS.includes(activeTab)) {
+      return renderPlaceholderTab(
+        `${tabItems.find((tab) => tab.id === activeTab)?.label ?? 'Tab'} unavailable for remote profiles`,
+        'This tab currently depends on local installation files/log streams. Use Dashboard, Actions, Chat, and Database while connected through StarMote.',
+      );
+    }
+
     if (activeTab === 'control') return renderControlPanel();
     if (activeTab === 'actions') return renderActionsPanel();
     if (activeTab === 'logs') return renderLogs();
@@ -7670,19 +7825,29 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       <div className="flex h-full min-h-0 flex-col">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            {tabItems.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`rounded-md border px-3 py-1.5 text-sm font-semibold transition-colors ${
-                  activeTab === tab.id
-                    ? 'border-starmade-accent bg-starmade-accent/20 text-white'
-                    : 'border-white/10 bg-black/20 text-gray-300 hover:bg-black/35'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
+            {tabItems.map((tab) => {
+              const isDisabledForRemote = isRemoteServerProfile && REMOTE_UNSUPPORTED_TABS.includes(tab.id);
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    if (isDisabledForRemote) return;
+                    setActiveTab(tab.id);
+                  }}
+                  disabled={isDisabledForRemote}
+                  title={isDisabledForRemote ? 'This tab is not available for remote profiles yet.' : undefined}
+                  className={`rounded-md border px-3 py-1.5 text-sm font-semibold transition-colors ${
+                    activeTab === tab.id
+                      ? 'border-starmade-accent bg-starmade-accent/20 text-white'
+                      : isDisabledForRemote
+                        ? 'border-white/5 bg-black/10 text-gray-500 cursor-not-allowed'
+                        : 'border-white/10 bg-black/20 text-gray-300 hover:bg-black/35'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
           </div>
 
           <div className="flex items-center gap-2">
