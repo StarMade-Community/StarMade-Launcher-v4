@@ -132,7 +132,7 @@ function getLoginRejectMessage(code: number): string {
     case -9:
       return 'The StarMote login name is invalid for this server.';
     case -10:
-      return 'This server requires StarMade account authentication. Sign in and try again.';
+      return 'This server requires StarMade account authentication. Your launcher auth token may be expired — sign out and sign in again to refresh it, then retry.';
     case -11:
       return 'StarMote login requires server admin permissions for this account.';
     default:
@@ -392,7 +392,7 @@ export class StarmoteSessionManager {
       const errorText = formatSocketError(error);
       const normalizedError = errorText.toLowerCase();
       const isTimeout = /timed out/i.test(errorText);
-      const isAuthFailure = /\bauth\b|token|credential|login|expired/.test(normalizedError);
+      const isAuthFailure = /auth|token|credential|login|sign.in|expired/.test(normalizedError);
       active.socket = undefined;
       active.connectedAt = undefined;
       active.state = 'error';

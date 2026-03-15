@@ -372,7 +372,9 @@ if (isStarmoteRolloutEnabled()) {
     getAllWindows: () => BrowserWindow.getAllWindows(),
     createSocket: () => new net.Socket(),
     adminCommandPassword: starmoteAdminCommandPassword,
-    resolveAuthTokenForAccount: getAccessTokenForLaunch,
+    // Always force-refresh the OAuth token before sending it to the game server.
+    // This prevents stale/expired tokens from causing code -10 registry rejections.
+    resolveAuthTokenForAccount: (accountId) => getAccessTokenForLaunch(accountId, { forceRefresh: true }),
   });
 } else {
   console.info('[starmote] rollout disabled via STARMOTE_ENABLED=0');

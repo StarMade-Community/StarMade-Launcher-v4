@@ -278,22 +278,33 @@ export async function registerAccount(
  *
  * Returns `null` for guest accounts (no token required for offline play).
  */
-export async function getAccessTokenForLaunch(accountId: string): Promise<string | null> {
+export async function getAccessTokenForLaunch(
+  accountId: string,
+  options?: { forceRefresh?: boolean },
+): Promise<string | null> {
   // Guest accounts have no token
   if (accountId.startsWith('offline-') || accountId.startsWith('guest-')) return null;
 
   const token = loadToken(tokenKey(accountId));
   if (!token) return null;
 
-  // Check expiry — refresh proactively if less than 5 minutes remain
+  // Refresh proactively when:
+  //   • forceRefresh is explicitly requested (e.g. StarMote connection)
+  //   • expiry is unknown — could mean token is already expired
+  //   • token expires in less than 5 minutes
   const expiry = storeGet(expiryKey(accountId));
-  if (typeof expiry === 'number' && expiry - Date.now() < 5 * 60 * 1000) {
-    console.log(`[Auth] Token for ${accountId} is near expiry — refreshing…`);
+  const expiryUnknown = typeof expiry !== 'number';
+  const nearExpiry = !expiryUnknown && (expiry as number) - Date.now() < 5 * 60 * 1000;
+
+  if (options?.forceRefresh || expiryUnknown || nearExpiry) {
+    const reason = options?.forceRefresh ? 'forced refresh' : expiryUnknown ? 'expiry unknown' : 'near expiry';
+    console.log(`[Auth] Refreshing token for ${accountId} (${reason})…`);
     const result = await refreshAccessToken(accountId);
     if (result.success) {
       return loadToken(tokenKey(accountId));
     }
-    // Refresh failed — try the stored token anyway; game will reject if it's truly expired
+    // Refresh failed — fall through and try the stored token anyway
+    console.warn(`[Auth] Token refresh failed for ${accountId}, using stored token as fallback.`);
   }
 
   return token;
