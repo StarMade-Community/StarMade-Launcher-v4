@@ -260,6 +260,8 @@ export interface AppContextType {
 
 export interface DataContextType {
     // State
+    /** True once persisted launcher data has been hydrated from the store. */
+    isLoaded: boolean;
     accounts: Account[];
     activeAccount: Account | null;
     installations: ManagedItem[];
