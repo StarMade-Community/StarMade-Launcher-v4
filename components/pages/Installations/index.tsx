@@ -9,6 +9,7 @@ import type { ManagedItem, InstallationsTab } from '../../../types';
 import PageContainer from '../../common/PageContainer';
 import { useData } from '../../../contexts/DataContext';
 import { useApp } from '../../../contexts/AppContext';
+import { formatPlayTime } from '../../../utils/formatPlayTime';
 
 interface InstallationsProps {
   initialTab?: InstallationsTab;
@@ -40,6 +41,8 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
         installations, 
         servers,
         downloadStatuses,
+        playTimeByInstallationMs,
+        totalInstallPlayTimeMs,
         addInstallation,
         updateInstallation,
         deleteInstallation,
@@ -68,7 +71,7 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
         items: installations, 
         itemTypeName: 'Installation', 
         cardActionButtonText: 'Play', 
-        cardStatusLabel: 'Last played' 
+        cardStatusLabel: 'Play time' 
       }
     : { 
         items: servers, 
@@ -294,6 +297,11 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
                         <TabButton isActive={activeTab === 'servers'} onClick={handleServersTabClick}>
                             Servers
                         </TabButton>
+                        {activeTab === 'installations' && (
+                            <p className="text-sm text-gray-300 border border-white/10 rounded-md px-3 py-1 bg-black/20">
+                                Total play time: <span className="text-white font-semibold">{formatPlayTime(totalInstallPlayTimeMs)}</span>
+                            </p>
+                        )}
                     </div>
                     <button
                         onClick={handleCreateNew}
@@ -316,6 +324,9 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
                             onDelete={handleDelete}
                             actionButtonText={cardActionButtonText}
                             statusLabel={cardStatusLabel}
+                            statusValue={activeTab === 'installations'
+                                ? formatPlayTime(playTimeByInstallationMs[item.id] ?? 0)
+                                : item.lastPlayed}
                             downloadStatus={downloadStatuses[item.id]}
                             onDownload={() => handleItemDownload(item.id)}
                             onCancelDownload={() => handleItemCancelDownload(item.id)}

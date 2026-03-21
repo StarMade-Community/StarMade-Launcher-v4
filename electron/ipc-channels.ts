@@ -70,6 +70,8 @@ export const IPC = {
   GAME_STATUS: 'game:status',
   /** Renderer → Main (invoke): get all running games/servers. */
   GAME_LIST_RUNNING: 'game:list-running',
+  /** Renderer → Main (invoke): get tracked play-time totals (ms) by installation id. */
+  GAME_GET_PLAY_TIME_TOTALS: 'game:get-play-time-totals',
   /** Main → Renderer: game log output line. */
   GAME_LOG: 'game:log',
   /** Renderer → Main (invoke): get log file path for a running game. */
@@ -127,6 +129,14 @@ export const IPC = {
   GAME_FILE_READ: 'game:file-read',
   /** Renderer → Main (invoke): write a text file to an installation path. */
   GAME_FILE_WRITE: 'game:file-write',
+  /** Renderer → Main (invoke): rename a file/directory inside an installation path. */
+  GAME_FILE_RENAME: 'game:file-rename',
+  /** Renderer → Main (invoke): copy a file/directory inside an installation path. */
+  GAME_FILE_COPY: 'game:file-copy',
+  /** Renderer → Main (invoke): move a file/directory inside an installation path. */
+  GAME_FILE_MOVE: 'game:file-move',
+  /** Renderer → Main (invoke): delete a file/directory inside an installation path. */
+  GAME_FILE_DELETE: 'game:file-delete',
   /**
    * Renderer → Main (invoke): read the `launcher-session.json` file written by
    * the game into an installation directory.  Returns the parsed object or
@@ -149,6 +159,15 @@ export const IPC = {
   APP_GET_SYSTEM_MEMORY: 'app:get-system-memory',
   /** Renderer → Main (invoke): get server panel schema JSON used by config editors. */
   APP_GET_SERVER_PANEL_SCHEMA: 'app:get-server-panel-schema',
+
+  // ─── Licenses ───────────────────────────────────────────────────────────────
+
+  /** Renderer → Main (invoke): list bundled third-party license files. */
+  LICENSES_LIST: 'licenses:list',
+  /** Renderer → Main (invoke): read one bundled third-party license file. */
+  LICENSES_READ: 'licenses:read',
+  /** Renderer → Main (invoke): copy bundled third-party licenses to userData. */
+  LICENSES_COPY_TO_USER_DATA: 'licenses:copy-to-user-data',
 
   // ─── Installation file management ───────────────────────────────────────────
 
@@ -193,6 +212,8 @@ export const IPC = {
 
   /** Renderer → Main (invoke): list available background image paths. */
   BACKGROUNDS_LIST: 'backgrounds:list',
+  /** Renderer → Main (invoke): get preferred launcher background URL. */
+  BACKGROUNDS_GET_PREFERRED: 'backgrounds:get-preferred',
 
   // ─── Icons ──────────────────────────────────────────────────────────────────
 
@@ -200,6 +221,40 @@ export const IPC = {
   ICONS_LIST: 'icons:list',
   /** Renderer → Main (invoke): import an icon image into the user icons directory. */
   ICONS_IMPORT: 'icons:import',
+
+  // ─── Screenshots ───────────────────────────────────────────────────────────
+
+  /** Renderer → Main (invoke): list PNG screenshots for an installation. */
+  SCREENSHOTS_LIST: 'screenshots:list',
+  /** Renderer → Main (invoke): copy a screenshot to clipboard. */
+  SCREENSHOTS_COPY_TO_CLIPBOARD: 'screenshots:copy-to-clipboard',
+  /** Renderer → Main (invoke): open screenshot containing folder. */
+  SCREENSHOTS_OPEN_CONTAINING_FOLDER: 'screenshots:open-containing-folder',
+  /** Renderer → Main (invoke): delete a screenshot file from an installation. */
+  SCREENSHOTS_DELETE: 'screenshots:delete',
+  /** Renderer → Main (invoke): set screenshot as launcher background. */
+  SCREENSHOTS_SET_AS_LAUNCHER_BACKGROUND: 'screenshots:set-as-launcher-background',
+  /** Renderer → Main (invoke): copy screenshot to installation loading-screens folder. */
+  SCREENSHOTS_SET_AS_LOADING_SCREEN: 'screenshots:set-as-loading-screen',
+
+  // ─── Mods ───────────────────────────────────────────────────────────────────
+
+  /** Renderer → Main (invoke): list mod JARs for an installation. */
+  MODS_LIST: 'mods:list',
+  /** Renderer → Main (invoke): browse StarMade Dock StarLoader mods. */
+  MODS_SMD_LIST: 'mods:smd-list',
+  /** Renderer → Main (invoke): install/update latest SMD mod by resource id. */
+  MODS_SMD_INSTALL_OR_UPDATE: 'mods:smd-install-or-update',
+  /** Renderer → Main (invoke): check installed SMD mods for newer versions. */
+  MODS_SMD_CHECK_UPDATES: 'mods:smd-check-updates',
+  /** Renderer → Main (invoke): remove a mod JAR from an installation. */
+  MODS_REMOVE: 'mods:remove',
+  /** Renderer → Main (invoke): enable/disable a mod by moving between folders. */
+  MODS_SET_ENABLED: 'mods:set-enabled',
+  /** Renderer → Main (invoke): export link-only modpack manifest JSON. */
+  MODS_EXPORT_MODPACK: 'mods:export-modpack',
+  /** Renderer → Main (invoke): import modpack manifest and download listed mods. */
+  MODS_IMPORT_MODPACK: 'mods:import-modpack',
 
   // ─── Legacy installation detection ──────────────────────────────────────────
 

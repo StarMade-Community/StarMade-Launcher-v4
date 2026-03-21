@@ -197,7 +197,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
 
   const [name, setName] = useState(item.name);
   const [port, setPort] = useState(item.port ?? '4242');
-  const [serverIp, setServerIp] = useState(item.serverIp ?? '127.0.0.1');
+  const [serverIp, setServerIp] = useState(item.serverIp ?? 'localhost');
   const [maxPlayers, setMaxPlayers] = useState(item.maxPlayers ?? 32);
   const [icon, setIcon] = useState(item.icon);
   const [type, setType] = useState<ItemType>(item.type === 'latest' ? 'release' : item.type);
@@ -368,7 +368,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         customJavaPath: javaPath || undefined,
         ...(itemTypeName === 'Server' && {
           port,
-          serverIp: serverIp.trim() || '127.0.0.1',
+          serverIp: serverIp.trim() || 'localhost',
           maxPlayers: Math.max(0, Math.round(maxPlayers || 0)),
         }),
     });

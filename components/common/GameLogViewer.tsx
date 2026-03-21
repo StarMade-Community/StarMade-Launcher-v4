@@ -16,6 +16,24 @@ interface LogEntry {
   message: string;
 }
 
+const CRASH_CONTEXT_RADIUS = 50;
+
+const CRASH_MARKERS: Array<{ label: string; pattern: RegExp }> = [
+  { label: 'exiting normal', pattern: /exiting normal/i },
+  { label: 'critical gl error', pattern: /critical gl error/i },
+];
+
+const findCrashMarker = (entries: LogEntry[]): { index: number; label: string } | null => {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const marker = CRASH_MARKERS.find(({ pattern }) => pattern.test(entries[index].message));
+    if (marker) {
+      return { index, label: marker.label };
+    }
+  }
+
+  return null;
+};
+
 const GameLogViewer: React.FC<GameLogViewerProps> = ({ 
   installationId, 
   installationName,
@@ -35,7 +53,10 @@ const GameLogViewer: React.FC<GameLogViewerProps> = ({
   /**
    * Generate a comprehensive crash report with context
    */
-  const generateCrashReport = async (crashLogs: LogEntry[]): Promise<string> => {
+  const generateCrashReport = async (
+    crashLogs: LogEntry[],
+    markerContext?: { index: number; label: string }
+  ): Promise<string> => {
     const report: string[] = [];
     
     report.push('═══════════════════════════════════════════════════════════');
@@ -49,12 +70,20 @@ const GameLogViewer: React.FC<GameLogViewerProps> = ({
     report.push(`User Agent: ${navigator.userAgent}`);
     report.push('');
     report.push('───────────────────────────────────────────────────────────');
-    report.push('CRASH LOG (Last 100 entries before crash)');
+    if (markerContext) {
+      report.push(`CRASH LOG (${CRASH_CONTEXT_RADIUS} entries above/below "${markerContext.label}")`);
+    } else {
+      report.push('CRASH LOG (Last 100 entries before crash)');
+    }
     report.push('───────────────────────────────────────────────────────────');
     report.push('');
-    
-    // Get last 100 log entries leading up to crash
-    const relevantLogs = crashLogs.slice(-100);
+
+    const relevantLogs = markerContext
+      ? crashLogs.slice(
+          Math.max(0, markerContext.index - CRASH_CONTEXT_RADIUS),
+          Math.min(crashLogs.length, markerContext.index + CRASH_CONTEXT_RADIUS + 1)
+        )
+      : crashLogs.slice(-100);
     
     relevantLogs.forEach(log => {
       const levelPadded = log.level.padEnd(8);
@@ -118,36 +147,49 @@ const GameLogViewer: React.FC<GameLogViewerProps> = ({
           const updated = [...prev, newLog];
           
           if (!crashDetected) {
-            // Only detect a crash when the game process has actually stopped.
-            //
-            // The launcher emits:
-            //   INFO  "Process exited with code <N>[, signal <S>]"  on normal/abnormal exit
-            //   ERROR "Process error: ..."                           if the JVM couldn't start
-            //
-            // A non-zero exit code = crash; exit code 0 = clean shutdown.
-
             const processExitMatch = data.message.match(/Process exited with code (-?\d+)/);
             const isProcessError = data.level === 'ERROR' && /^Process error:/.test(data.message);
+            const hasProcessTerminalMessage = Boolean(processExitMatch) || isProcessError;
 
-            let shouldCrash = false;
+            if (hasProcessTerminalMessage) {
+              const markerContext = findCrashMarker(updated);
 
-            if (isProcessError) {
-              shouldCrash = true;
-            } else if (processExitMatch) {
-              const exitCode = parseInt(processExitMatch[1], 10);
-              shouldCrash = exitCode !== 0;
-            }
+              // Prefer known crash markers over generic process-exit fallback.
+              if (markerContext) {
+                setCrashDetected(true);
+                generateCrashReport(updated, markerContext).then(report => {
+                  setCrashReport(report);
+                  setShowCrashReportModal(true);
+                }).catch(err => {
+                  console.error('[Crash Report] Failed to generate report:', err);
+                  setCrashReport('Failed to generate full crash report. Check console logs.');
+                  setShowCrashReportModal(true);
+                });
 
-            if (shouldCrash) {
-              setCrashDetected(true);
-              generateCrashReport(updated).then(report => {
-                setCrashReport(report);
-                setShowCrashReportModal(true);
-              }).catch(err => {
-                console.error('[Crash Report] Failed to generate report:', err);
-                setCrashReport('Failed to generate full crash report. Check console logs.');
-                setShowCrashReportModal(true);
-              });
+                return updated;
+              }
+
+              // Fallback detection when no crash markers are present.
+              let shouldCrash = false;
+
+              if (isProcessError) {
+                shouldCrash = true;
+              } else if (processExitMatch) {
+                const exitCode = parseInt(processExitMatch[1], 10);
+                shouldCrash = exitCode !== 0;
+              }
+
+              if (shouldCrash) {
+                setCrashDetected(true);
+                generateCrashReport(updated).then(report => {
+                  setCrashReport(report);
+                  setShowCrashReportModal(true);
+                }).catch(err => {
+                  console.error('[Crash Report] Failed to generate report:', err);
+                  setCrashReport('Failed to generate full crash report. Check console logs.');
+                  setShowCrashReportModal(true);
+                });
+              }
             }
           }
           

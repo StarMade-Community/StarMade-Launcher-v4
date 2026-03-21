@@ -6,19 +6,22 @@ import {
   Menu,
   shell,
   dialog,
+  clipboard,
+  nativeImage,
 } from 'electron';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import fs from 'fs';
 import os from 'os';
 import { Worker } from 'worker_threads';
+import { config as loadDotEnv } from 'dotenv';
 import { IPC } from './ipc-channels.js';
 import { storeGet, storeSet, storeDelete, storeClearAll } from './store.js';
 import { fetchAllVersions, invalidateVersionCache } from './versions.js';
 import { startDownload, cancelDownload } from './downloader.js';
 import type { DownloadProgress } from './downloader.js';
 import { downloadJava, detectSystemJava, resolveJavaPath, getDefaultJavaPaths, findJavaExecutableInDir } from './java.js';
-import { launchGame, stopGame, getGameStatus, getAllRunningGames, hasRunningGames, stopAllGames, getLogPath, openLogLocation, clearServerLogFiles, getGraphicsInfo, listServerLogFiles, readServerLogFile, sendServerStdin, listChatFiles, readChatFile } from './launcher.js';
+import { launchGame, stopGame, getGameStatus, getAllRunningGames, hasRunningGames, stopAllGames, getLogPath, openLogLocation, clearServerLogFiles, getGraphicsInfo, listServerLogFiles, readServerLogFile, sendServerStdin, listChatFiles, readChatFile, getPlayTimeTotals } from './launcher.js';
 import type { UpdateInfo } from './updater.js';
 import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage } from './updater.js';
 import { createBackup, listBackups, restoreBackup } from './backup.js';
@@ -28,11 +31,46 @@ import { isRunningAsAppImage } from './appimage-detect.js';
 import { registerAppImageDesktopIntegration } from './desktop-integration.js';
 import { parseVersionTxt } from './legacy.js';
 import { getManagedPathCandidates } from './install-paths.js';
+import {
+  listModsForInstallation,
+  listSmdMods,
+  installOrUpdateSmdModForInstallation,
+  checkSmdUpdatesForInstalled,
+  removeModForInstallation,
+  setModEnabledForInstallation,
+  createModpackManifest,
+  importModpackFromFile,
+  writeModpackManifest,
+} from './mods.js';
 
 // ─── ES Module compatibility ─────────────────────────────────────────────────
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+function loadLocalEnvIfPresent(): void {
+  const fileNames = ['.env.local', '.env'];
+  const roots = [
+    process.cwd(),
+    app.getAppPath(),
+    path.dirname(process.execPath),
+  ];
+
+  const tried = new Set<string>();
+  for (const root of roots) {
+    for (const fileName of fileNames) {
+      const candidate = path.resolve(root, fileName);
+      if (tried.has(candidate)) continue;
+      tried.add(candidate);
+
+      if (!fs.existsSync(candidate)) continue;
+      loadDotEnv({ path: candidate, override: false });
+      return;
+    }
+  }
+}
+
+loadLocalEnvIfPresent();
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -489,6 +527,10 @@ ipcMain.handle(IPC.GAME_LIST_RUNNING, () => {
   return getAllRunningGames();
 });
 
+ipcMain.handle(IPC.GAME_GET_PLAY_TIME_TOTALS, (_event, installationIds?: string[]) => {
+  return getPlayTimeTotals(Array.isArray(installationIds) ? installationIds : undefined);
+});
+
 ipcMain.handle(IPC.GAME_GET_LOG_PATH, (_event, installationId: string) => {
   return getLogPath(installationId);
 });
@@ -789,6 +831,192 @@ function writeInstallationTextFile(installationPath: string, relativePath: strin
   return { success: true };
 }
 
+function normalizeRelativePath(installationPath: string, absolutePath: string): string {
+  return path.relative(path.resolve(installationPath), absolutePath).split(path.sep).join('/');
+}
+
+function assertValidLeafName(nextName: string): string {
+  const trimmed = nextName.trim();
+  if (!trimmed) {
+    throw new Error('Name cannot be empty.');
+  }
+  if (trimmed === '.' || trimmed === '..') {
+    throw new Error('Invalid file or directory name.');
+  }
+  if (trimmed.includes('/') || trimmed.includes('\\')) {
+    throw new Error('Name cannot include path separators.');
+  }
+  return trimmed;
+}
+
+function toUniqueDestinationPath(initialPath: string): string {
+  if (!fs.existsSync(initialPath)) return initialPath;
+
+  const dirPath = path.dirname(initialPath);
+  const ext = path.extname(initialPath);
+  const stem = path.basename(initialPath, ext);
+
+  let index = 1;
+  while (true) {
+    const candidate = path.join(dirPath, `${stem} (${index})${ext}`);
+    if (!fs.existsSync(candidate)) {
+      return candidate;
+    }
+    index += 1;
+  }
+}
+
+function copyPathRecursive(sourcePath: string, destinationPath: string): void {
+  const sourceStats = fs.statSync(sourcePath);
+  if (sourceStats.isDirectory()) {
+    fs.cpSync(sourcePath, destinationPath, { recursive: true, errorOnExist: true, force: false });
+    return;
+  }
+
+  fs.copyFileSync(sourcePath, destinationPath, fs.constants.COPYFILE_EXCL);
+}
+
+function renameInstallationEntry(
+  installationPath: string,
+  relativePath: string,
+  nextName: string,
+): { success: boolean; oldRelativePath: string; newRelativePath: string } {
+  const trimmedRelativePath = relativePath.trim();
+  if (!trimmedRelativePath) {
+    throw new Error('relativePath is required.');
+  }
+
+  const absoluteSourcePath = resolveInstallationTargetPath(installationPath, trimmedRelativePath);
+  if (!fs.existsSync(absoluteSourcePath)) {
+    throw new Error(`Path not found: ${trimmedRelativePath}`);
+  }
+
+  const validName = assertValidLeafName(nextName);
+  const parentPath = path.dirname(absoluteSourcePath);
+  const absoluteDestinationPath = path.join(parentPath, validName);
+  const destinationRelativePath = normalizeRelativePath(installationPath, absoluteDestinationPath);
+  const safeDestinationPath = resolveInstallationTargetPath(installationPath, destinationRelativePath);
+
+  if (safeDestinationPath === absoluteSourcePath) {
+    return { success: true, oldRelativePath: trimmedRelativePath, newRelativePath: trimmedRelativePath };
+  }
+
+  if (fs.existsSync(safeDestinationPath)) {
+    throw new Error(`A file or directory named "${validName}" already exists.`);
+  }
+
+  fs.renameSync(absoluteSourcePath, safeDestinationPath);
+  return {
+    success: true,
+    oldRelativePath: normalizeRelativePath(installationPath, absoluteSourcePath),
+    newRelativePath: destinationRelativePath,
+  };
+}
+
+function copyInstallationEntry(
+  installationPath: string,
+  sourceRelativePath: string,
+  destinationDir: string,
+): { success: boolean; sourceRelativePath: string; destinationRelativePath: string } {
+  const sourcePath = resolveInstallationTargetPath(installationPath, sourceRelativePath);
+  if (!fs.existsSync(sourcePath)) {
+    throw new Error(`Path not found: ${sourceRelativePath}`);
+  }
+
+  const destinationDirPath = resolveInstallationTargetPath(installationPath, destinationDir || '.');
+  if (!fs.existsSync(destinationDirPath) || !fs.statSync(destinationDirPath).isDirectory()) {
+    throw new Error('Destination path is not a directory.');
+  }
+
+  const sourceStats = fs.statSync(sourcePath);
+  if (sourceStats.isDirectory() && (destinationDirPath === sourcePath || destinationDirPath.startsWith(`${sourcePath}${path.sep}`))) {
+    throw new Error('Cannot copy a directory into itself.');
+  }
+
+  let absoluteDestinationPath = path.join(destinationDirPath, path.basename(sourcePath));
+  if (absoluteDestinationPath === sourcePath || fs.existsSync(absoluteDestinationPath)) {
+    absoluteDestinationPath = toUniqueDestinationPath(absoluteDestinationPath);
+  }
+
+  copyPathRecursive(sourcePath, absoluteDestinationPath);
+
+  return {
+    success: true,
+    sourceRelativePath: normalizeRelativePath(installationPath, sourcePath),
+    destinationRelativePath: normalizeRelativePath(installationPath, absoluteDestinationPath),
+  };
+}
+
+function moveInstallationEntry(
+  installationPath: string,
+  sourceRelativePath: string,
+  destinationDir: string,
+): { success: boolean; sourceRelativePath: string; destinationRelativePath: string } {
+  const sourcePath = resolveInstallationTargetPath(installationPath, sourceRelativePath);
+  if (!fs.existsSync(sourcePath)) {
+    throw new Error(`Path not found: ${sourceRelativePath}`);
+  }
+
+  const destinationDirPath = resolveInstallationTargetPath(installationPath, destinationDir || '.');
+  if (!fs.existsSync(destinationDirPath) || !fs.statSync(destinationDirPath).isDirectory()) {
+    throw new Error('Destination path is not a directory.');
+  }
+
+  const sourceStats = fs.statSync(sourcePath);
+  if (sourceStats.isDirectory() && (destinationDirPath === sourcePath || destinationDirPath.startsWith(`${sourcePath}${path.sep}`))) {
+    throw new Error('Cannot move a directory into itself.');
+  }
+
+  let absoluteDestinationPath = path.join(destinationDirPath, path.basename(sourcePath));
+  if (absoluteDestinationPath === sourcePath) {
+    return {
+      success: true,
+      sourceRelativePath: normalizeRelativePath(installationPath, sourcePath),
+      destinationRelativePath: normalizeRelativePath(installationPath, sourcePath),
+    };
+  }
+  if (fs.existsSync(absoluteDestinationPath)) {
+    absoluteDestinationPath = toUniqueDestinationPath(absoluteDestinationPath);
+  }
+
+  try {
+    fs.renameSync(sourcePath, absoluteDestinationPath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code !== 'EXDEV') throw error;
+
+    copyPathRecursive(sourcePath, absoluteDestinationPath);
+    fs.rmSync(sourcePath, { recursive: true, force: false });
+  }
+
+  return {
+    success: true,
+    sourceRelativePath: normalizeRelativePath(installationPath, sourcePath),
+    destinationRelativePath: normalizeRelativePath(installationPath, absoluteDestinationPath),
+  };
+}
+
+function deleteInstallationEntry(
+  installationPath: string,
+  relativePath: string,
+): { success: boolean; deletedRelativePath: string } {
+  const trimmedRelativePath = relativePath.trim();
+  if (!trimmedRelativePath) {
+    throw new Error('relativePath is required.');
+  }
+
+  const targetPath = resolveInstallationTargetPath(installationPath, trimmedRelativePath);
+  if (!fs.existsSync(targetPath)) {
+    throw new Error(`Path not found: ${trimmedRelativePath}`);
+  }
+
+  fs.rmSync(targetPath, { recursive: true, force: false });
+  return {
+    success: true,
+    deletedRelativePath: normalizeRelativePath(installationPath, targetPath),
+  };
+}
+
 ipcMain.handle(IPC.GAME_SERVER_CFG_GET, (_event, installationPath: string, key: string) => {
   if (!installationPath || !key) return null;
   try {
@@ -882,6 +1110,58 @@ ipcMain.handle(IPC.GAME_FILE_WRITE, (_event, installationPath: string, relativeP
   }
 });
 
+ipcMain.handle(IPC.GAME_FILE_RENAME, (_event, installationPath: string, relativePath: string, nextName: string) => {
+  if (!installationPath || !relativePath || !nextName) {
+    return { success: false, error: 'installationPath, relativePath, and nextName are required.' };
+  }
+
+  try {
+    return renameInstallationEntry(installationPath, relativePath, nextName);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, error: message };
+  }
+});
+
+ipcMain.handle(IPC.GAME_FILE_COPY, (_event, installationPath: string, sourceRelativePath: string, destinationDir: string) => {
+  if (!installationPath || !sourceRelativePath) {
+    return { success: false, error: 'installationPath and sourceRelativePath are required.' };
+  }
+
+  try {
+    return copyInstallationEntry(installationPath, sourceRelativePath, destinationDir ?? '');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, error: message };
+  }
+});
+
+ipcMain.handle(IPC.GAME_FILE_MOVE, (_event, installationPath: string, sourceRelativePath: string, destinationDir: string) => {
+  if (!installationPath || !sourceRelativePath) {
+    return { success: false, error: 'installationPath and sourceRelativePath are required.' };
+  }
+
+  try {
+    return moveInstallationEntry(installationPath, sourceRelativePath, destinationDir ?? '');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, error: message };
+  }
+});
+
+ipcMain.handle(IPC.GAME_FILE_DELETE, (_event, installationPath: string, relativePath: string) => {
+  if (!installationPath || !relativePath) {
+    return { success: false, error: 'installationPath and relativePath are required.' };
+  }
+
+  try {
+    return deleteInstallationEntry(installationPath, relativePath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, error: message };
+  }
+});
+
 // ─── Session file reader ─────────────────────────────────────────────────────
 
 /** Narrow a value to a plain (non-null, non-array) object. */
@@ -962,7 +1242,7 @@ ipcMain.handle(IPC.DIALOG_OPEN_FOLDER, async (_event, defaultPath?: string) => {
   return result.filePaths[0];
 });
 
-ipcMain.handle(IPC.DIALOG_OPEN_FILE, async (_event, defaultPath?: string, type?: 'image') => {
+ipcMain.handle(IPC.DIALOG_OPEN_FILE, async (_event, defaultPath?: string, type?: 'image' | 'java' | 'modpack') => {
   const imageFilters = [
     { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'] },
     { name: 'All Files', extensions: ['*'] },
@@ -971,11 +1251,16 @@ ipcMain.handle(IPC.DIALOG_OPEN_FILE, async (_event, defaultPath?: string, type?:
     { name: 'Java Executable', extensions: process.platform === 'win32' ? ['exe'] : ['*'] },
     { name: 'All Files', extensions: ['*'] },
   ];
+  const modpackFilters = [
+    { name: 'StarMade Modpack', extensions: ['json'] },
+    { name: 'JSON', extensions: ['json'] },
+    { name: 'All Files', extensions: ['*'] },
+  ];
 
   const result = await dialog.showOpenDialog({
     properties: ['openFile'],
     defaultPath: defaultPath || app.getPath('home'),
-    filters: type === 'image' ? imageFilters : exeFilters,
+    filters: type === 'image' ? imageFilters : type === 'modpack' ? modpackFilters : exeFilters,
   });
 
   if (result.canceled || result.filePaths.length === 0) {
@@ -1031,6 +1316,108 @@ function readServerPanelSchema(): unknown {
 ipcMain.handle(IPC.APP_GET_USER_DATA, () => app.getPath('userData'));
 ipcMain.handle(IPC.APP_GET_SYSTEM_MEMORY, () => Math.floor(os.totalmem() / (1024 * 1024)));
 ipcMain.handle(IPC.APP_GET_SERVER_PANEL_SCHEMA, () => readServerPanelSchema());
+
+const LICENSES_DIR_NAMES = ['licenses'];
+
+function resolveBundledLicensesDir(): string | null {
+  for (const dirName of LICENSES_DIR_NAMES) {
+    const candidate = path.join(__dirname, '..', 'presets', dirName);
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function listBundledLicenseFiles(): Array<{ fileName: string; sizeBytes: number; modifiedMs: number }> {
+  const sourceDir = resolveBundledLicensesDir();
+  if (!sourceDir) return [];
+
+  return fs.readdirSync(sourceDir)
+    .map((fileName) => {
+      const absolutePath = path.join(sourceDir, fileName);
+      if (!fs.existsSync(absolutePath)) return null;
+      const stat = fs.statSync(absolutePath);
+      if (!stat.isFile()) return null;
+      return {
+        fileName,
+        sizeBytes: stat.size,
+        modifiedMs: stat.mtimeMs,
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .sort((a, b) => a.fileName.localeCompare(b.fileName));
+}
+
+function resolveBundledLicensePath(fileName: string): string {
+  if (typeof fileName !== 'string' || fileName.trim().length === 0) {
+    throw new Error('File name is required.');
+  }
+  if (fileName.includes('/') || fileName.includes('\\')) {
+    throw new Error('Invalid file name.');
+  }
+
+  const sourceDir = resolveBundledLicensesDir();
+  if (!sourceDir) {
+    throw new Error('Bundled licenses directory was not found.');
+  }
+
+  const absolutePath = path.resolve(path.join(sourceDir, fileName));
+  if (!absolutePath.startsWith(path.resolve(sourceDir) + path.sep)) {
+    throw new Error('Invalid file path.');
+  }
+
+  if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) {
+    throw new Error('License file does not exist.');
+  }
+
+  return absolutePath;
+}
+
+ipcMain.handle(IPC.LICENSES_LIST, () => {
+  try {
+    return listBundledLicenseFiles();
+  } catch (error) {
+    console.warn('[licenses] Failed to list bundled licenses:', error);
+    return [];
+  }
+});
+
+ipcMain.handle(IPC.LICENSES_READ, (_event, fileName: string) => {
+  try {
+    const licensePath = resolveBundledLicensePath(fileName);
+    const content = fs.readFileSync(licensePath, 'utf8');
+    return { content, error: undefined as string | undefined };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { content: '', error: message };
+  }
+});
+
+ipcMain.handle(IPC.LICENSES_COPY_TO_USER_DATA, () => {
+  try {
+    const sourceDir = resolveBundledLicensesDir();
+    if (!sourceDir) {
+      return { success: false, copiedCount: 0, error: 'Bundled licenses directory was not found.' };
+    }
+
+    const destinationDir = path.join(app.getPath('userData'), 'licenses');
+    fs.mkdirSync(destinationDir, { recursive: true });
+
+    const files = listBundledLicenseFiles();
+    let copiedCount = 0;
+    for (const file of files) {
+      const sourcePath = path.join(sourceDir, file.fileName);
+      const destinationPath = path.join(destinationDir, file.fileName);
+      fs.copyFileSync(sourcePath, destinationPath);
+      copiedCount += 1;
+    }
+
+    return { success: true, copiedCount, destinationDir };
+  } catch (error) {
+    return { success: false, copiedCount: 0, error: String(error) };
+  }
+});
 
 // ─── Installation file management handlers ───────────────────────────────────
 
@@ -1164,12 +1551,12 @@ ipcMain.handle(IPC.INSTALLATION_DELETE_FILES, async (_event, targetPath: string)
     return { success: true };
   }
 
-  if (!isStarMadeInstallDir(resolvedTargetPath)) {
+  /*if (!isStarMadeInstallDir(resolvedTargetPath)) {
     return {
       success: false,
       error: `The directory does not appear to be a StarMade installation: ${resolvedTargetPath}`,
     };
-  }
+  }*/
 
   try {
     await fs.promises.rm(resolvedTargetPath, { recursive: true, force: true });
@@ -1414,15 +1801,57 @@ ipcMain.handle(IPC.SHELL_OPEN_EXTERNAL, async (_event, url: string) => {
 // ─── Backgrounds handler ─────────────────────────────────────────────────────
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
+const SCREENSHOT_EXTS = new Set(['.png']);
+const LAUNCHER_BACKGROUND_KEY = 'launcherBackgroundUrl';
+const MODS_METADATA_KEY = 'modsMetadataV1';
+
+const modMetadataStore = {
+  get: () => storeGet(MODS_METADATA_KEY),
+  set: (value: unknown) => storeSet(MODS_METADATA_KEY, value),
+};
 
 function listImagesInDir(dir: string): string[] {
   try {
     if (!fs.existsSync(dir)) return [];
+
+    const toFileHref = (absolutePath: string): string => pathToFileURL(absolutePath).href;
+
     return fs.readdirSync(dir)
       .filter(f => IMAGE_EXTS.has(path.extname(f).toLowerCase()))
-      .map(f => `file://${path.join(dir, f)}`);
+      .map(f => toFileHref(path.join(dir, f)));
   } catch {
     return [];
+  }
+}
+
+function normalizeStoredFileUrl(maybeUrl: string): string | null {
+  if (typeof maybeUrl !== 'string' || maybeUrl.trim().length === 0) return null;
+
+  // For plain paths accidentally persisted as a URL, normalize to file:// URL.
+  if (!maybeUrl.startsWith('file://')) {
+    return fs.existsSync(maybeUrl) ? pathToFileURL(maybeUrl).href : null;
+  }
+
+  // Legacy values may look like file://C:\path\to\image.png
+  if (maybeUrl.includes('\\')) {
+    const withoutScheme = maybeUrl.replace(/^file:\/\//i, '').replace(/\\/g, '/');
+    const normalizedPath = /^[a-zA-Z]:\//.test(withoutScheme)
+      ? withoutScheme
+      : withoutScheme.replace(/^\/+/, '/');
+    try {
+      const decodedPath = decodeURIComponent(normalizedPath);
+      return pathToFileURL(decodedPath).href;
+    } catch {
+      return null;
+    }
+  }
+
+  try {
+    const parsed = new URL(maybeUrl);
+    if (parsed.protocol !== 'file:') return null;
+    return parsed.href;
+  } catch {
+    return null;
   }
 }
 
@@ -1455,10 +1884,110 @@ function importImageToDir(sourcePath: string, targetDir: string): { success: boo
     }
 
     fs.copyFileSync(sourcePath, destPath);
-    return { success: true, path: `file://${destPath}` };
+    return { success: true, path: pathToFileURL(destPath).href };
   } catch (error) {
     return { success: false, error: String(error) };
   }
+}
+
+function copyImageToDir(sourcePath: string, targetDir: string, fallbackBaseName: string): { success: boolean; path?: string; error?: string } {
+  try {
+    if (typeof sourcePath !== 'string' || sourcePath.trim().length === 0) {
+      return { success: false, error: 'Invalid source path.' };
+    }
+    if (!fs.existsSync(sourcePath)) {
+      return { success: false, error: 'Selected file does not exist.' };
+    }
+
+    const ext = path.extname(sourcePath).toLowerCase();
+    if (!IMAGE_EXTS.has(ext)) {
+      return { success: false, error: 'Unsupported image format.' };
+    }
+
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    const baseNameRaw = path.basename(sourcePath, ext);
+    const baseName = baseNameRaw.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || fallbackBaseName;
+
+    let counter = 0;
+    let destFileName = `${baseName}${ext}`;
+    let destPath = path.join(targetDir, destFileName);
+    while (fs.existsSync(destPath)) {
+      counter += 1;
+      destFileName = `${baseName}-${counter}${ext}`;
+      destPath = path.join(targetDir, destFileName);
+    }
+
+    fs.copyFileSync(sourcePath, destPath);
+    return { success: true, path: destPath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+function resolveInstallationRoot(installationPath: string): string | null {
+  if (typeof installationPath !== 'string' || installationPath.trim().length === 0) return null;
+  const candidates = getManagedPathCandidates(installationPath, getLauncherDir());
+  return candidates.find(candidate => fs.existsSync(candidate)) ?? null;
+}
+
+function resolveScreenshotFilePath(installationPath: string, screenshotPath: string): string {
+  const installationRoot = resolveInstallationRoot(installationPath);
+  if (!installationRoot) {
+    throw new Error('Installation path does not exist.');
+  }
+
+  const screenshotsDir = path.resolve(path.join(installationRoot, 'screenshots'));
+  const normalizedScreenshotPath = path.resolve(screenshotPath);
+  if (!normalizedScreenshotPath.startsWith(`${screenshotsDir}${path.sep}`)) {
+    throw new Error('Screenshot path is outside the installation screenshots directory.');
+  }
+
+  if (!fs.existsSync(normalizedScreenshotPath) || !fs.statSync(normalizedScreenshotPath).isFile()) {
+    throw new Error('Screenshot file does not exist.');
+  }
+
+  if (!SCREENSHOT_EXTS.has(path.extname(normalizedScreenshotPath).toLowerCase())) {
+    throw new Error('Only PNG screenshots are supported.');
+  }
+
+  return normalizedScreenshotPath;
+}
+
+function listPngScreenshots(installationPath: string): {
+  screenshotsDir: string;
+  screenshots: Array<{ name: string; path: string; fileUrl: string; sizeBytes: number; modifiedMs: number; width: number; height: number }>;
+} {
+  const installationRoot = resolveInstallationRoot(installationPath);
+  const screenshotsDir = installationRoot
+    ? path.join(installationRoot, 'screenshots')
+    : path.join(path.resolve(installationPath || '.'), 'screenshots');
+
+  if (!installationRoot || !fs.existsSync(screenshotsDir)) {
+    return { screenshotsDir, screenshots: [] };
+  }
+
+  const screenshots = fs.readdirSync(screenshotsDir)
+    .filter(fileName => SCREENSHOT_EXTS.has(path.extname(fileName).toLowerCase()))
+    .map(fileName => {
+      const absolutePath = path.join(screenshotsDir, fileName);
+      const stats = fs.statSync(absolutePath);
+      const img = nativeImage.createFromPath(absolutePath);
+      const { width, height } = img.getSize();
+
+      return {
+        name: fileName,
+        path: absolutePath,
+        fileUrl: pathToFileURL(absolutePath).href,
+        sizeBytes: stats.size,
+        modifiedMs: stats.mtimeMs,
+        width,
+        height,
+      };
+    })
+    .sort((a, b) => b.modifiedMs - a.modifiedMs);
+
+  return { screenshotsDir, screenshots };
 }
 
 ipcMain.handle(IPC.BACKGROUNDS_LIST, async () => {
@@ -1468,6 +1997,21 @@ ipcMain.handle(IPC.BACKGROUNDS_LIST, async () => {
   try { fs.mkdirSync(userDir, { recursive: true }); } catch { /* ignore */ }
 
   return [...listImagesInDir(bundledDir), ...listImagesInDir(userDir)];
+});
+
+ipcMain.handle(IPC.BACKGROUNDS_GET_PREFERRED, async () => {
+  const raw = storeGet(LAUNCHER_BACKGROUND_KEY);
+  if (typeof raw !== 'string' || raw.trim().length === 0) return null;
+
+  const normalized = normalizeStoredFileUrl(raw);
+  if (!normalized) return null;
+
+  // Auto-heal old malformed values so future launches are stable.
+  if (normalized !== raw) {
+    storeSet(LAUNCHER_BACKGROUND_KEY, normalized);
+  }
+
+  return normalized;
 });
 
 ipcMain.handle(IPC.ICONS_LIST, async () => {
@@ -1483,6 +2027,223 @@ ipcMain.handle(IPC.ICONS_LIST, async () => {
 ipcMain.handle(IPC.ICONS_IMPORT, async (_event, sourcePath: string) => {
   const userDir = path.join(app.getPath('userData'), 'icons');
   return importImageToDir(sourcePath, userDir);
+});
+
+ipcMain.handle(IPC.SCREENSHOTS_LIST, async (_event, installationPath: string) => {
+  try {
+    return listPngScreenshots(installationPath);
+  } catch (error) {
+    console.warn('[screenshots] Failed to list screenshots:', { installationPath, error });
+    return { screenshotsDir: path.join(installationPath || '', 'screenshots'), screenshots: [] };
+  }
+});
+
+ipcMain.handle(IPC.SCREENSHOTS_COPY_TO_CLIPBOARD, async (_event, installationPath: string, screenshotPath: string) => {
+  try {
+    const resolvedScreenshotPath = resolveScreenshotFilePath(installationPath, screenshotPath);
+    const image = nativeImage.createFromPath(resolvedScreenshotPath);
+    if (image.isEmpty()) {
+      return { success: false, error: 'Could not decode screenshot image.' };
+    }
+    clipboard.writeImage(image);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SCREENSHOTS_OPEN_CONTAINING_FOLDER, async (_event, installationPath: string, screenshotPath: string) => {
+  try {
+    const resolvedScreenshotPath = resolveScreenshotFilePath(installationPath, screenshotPath);
+    shell.showItemInFolder(resolvedScreenshotPath);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SCREENSHOTS_DELETE, async (_event, installationPath: string, screenshotPath: string) => {
+  try {
+    const resolvedScreenshotPath = resolveScreenshotFilePath(installationPath, screenshotPath);
+    fs.unlinkSync(resolvedScreenshotPath);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SCREENSHOTS_SET_AS_LAUNCHER_BACKGROUND, async (_event, installationPath: string, screenshotPath: string) => {
+  try {
+    const resolvedScreenshotPath = resolveScreenshotFilePath(installationPath, screenshotPath);
+    const userBackgroundDir = path.join(app.getPath('userData'), 'backgrounds');
+    const imported = copyImageToDir(resolvedScreenshotPath, userBackgroundDir, 'screenshot-background');
+    if (!imported.success || !imported.path) {
+      return { success: false, error: imported.error ?? 'Failed to copy screenshot to launcher backgrounds.' };
+    }
+
+    const url = pathToFileURL(imported.path).href;
+    storeSet(LAUNCHER_BACKGROUND_KEY, url);
+    return { success: true, url };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(
+  IPC.SCREENSHOTS_SET_AS_LOADING_SCREEN,
+  async (_event, sourceInstallationPath: string, screenshotPath: string, targetInstallationPath?: string) => {
+  try {
+    const resolvedScreenshotPath = resolveScreenshotFilePath(sourceInstallationPath, screenshotPath);
+    const destinationInstallationPath = targetInstallationPath ?? sourceInstallationPath;
+    const installationRoot = resolveInstallationRoot(destinationInstallationPath);
+    if (!installationRoot) {
+      return { success: false, error: 'Installation path does not exist.' };
+    }
+
+    const loadingScreensDir = path.join(installationRoot, 'data', 'image-resource', 'loading-screens');
+    const copied = copyImageToDir(resolvedScreenshotPath, loadingScreensDir, 'loading-screen');
+    if (!copied.success || !copied.path) {
+      return { success: false, error: copied.error ?? 'Failed to copy screenshot to loading-screens folder.' };
+    }
+
+    return { success: true, destinationPath: copied.path };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// ─── Mods handlers ───────────────────────────────────────────────────────────
+
+ipcMain.handle(IPC.MODS_LIST, async (_event, installationPath: string) => {
+  try {
+    return listModsForInstallation(installationPath, getLauncherDir(), modMetadataStore);
+  } catch (error) {
+    return {
+      modsDir: path.join(installationPath || '', 'mods'),
+      mods: [],
+      error: String(error),
+    };
+  }
+});
+
+ipcMain.handle(IPC.MODS_SMD_LIST, async (_event, searchQuery?: string) => {
+  try {
+    const mods = await listSmdMods(searchQuery);
+    return { success: true, mods };
+  } catch (error) {
+    return { success: false, mods: [], error: String(error) };
+  }
+});
+
+ipcMain.handle(
+  IPC.MODS_SMD_INSTALL_OR_UPDATE,
+  async (_event, installationPath: string, resourceId: number, enabled = true) => {
+    try {
+      const mod = await installOrUpdateSmdModForInstallation({
+        installationPath,
+        launcherDir: getLauncherDir(),
+        resourceId,
+        enabled,
+        metadataStore: modMetadataStore,
+      });
+      return { success: true, mod };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  },
+);
+
+ipcMain.handle(
+  IPC.MODS_SMD_CHECK_UPDATES,
+  async (_event, installed: Array<{ resourceId: number; smdVersion: string }>) => {
+    try {
+      const updates = await checkSmdUpdatesForInstalled(Array.isArray(installed) ? installed : []);
+      return { success: true, updates };
+    } catch (error) {
+      return { success: false, updates: [], error: String(error) };
+    }
+  },
+);
+
+ipcMain.handle(IPC.MODS_REMOVE, async (_event, installationPath: string, relativePath: string) => {
+  try {
+    removeModForInstallation({
+      installationPath,
+      launcherDir: getLauncherDir(),
+      relativePath,
+      metadataStore: modMetadataStore,
+    });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.MODS_SET_ENABLED, async (_event, installationPath: string, relativePath: string, enabled: boolean) => {
+  try {
+    const result = setModEnabledForInstallation({
+      installationPath,
+      launcherDir: getLauncherDir(),
+      relativePath,
+      enabled,
+    });
+    return { success: true, relativePath: result.relativePath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(
+  IPC.MODS_EXPORT_MODPACK,
+  async (
+    _event,
+    installationPath: string,
+    outputPath: string,
+    options?: {
+      name?: string;
+      sourceInstallation?: { id?: string; name?: string; version?: string };
+    },
+  ) => {
+    try {
+      const name = typeof options?.name === 'string' ? options.name : 'StarMade Modpack';
+      const result = createModpackManifest({
+        installationPath,
+        launcherDir: getLauncherDir(),
+        manifestName: name,
+        sourceInstallation: options?.sourceInstallation,
+        metadataStore: modMetadataStore,
+      });
+      writeModpackManifest(outputPath, result.manifest);
+      return {
+        success: true,
+        outputPath,
+        exportedCount: result.exportedCount,
+        skippedCount: result.skippedCount,
+      };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  },
+);
+
+ipcMain.handle(IPC.MODS_IMPORT_MODPACK, async (_event, installationPath: string, manifestPath: string) => {
+  try {
+    const result = await importModpackFromFile({
+      installationPath,
+      launcherDir: getLauncherDir(),
+      manifestPath,
+      metadataStore: modMetadataStore,
+    });
+    return {
+      success: true,
+      downloadedCount: result.downloadedCount,
+      skippedCount: result.skippedCount,
+      failedCount: result.failedCount,
+      failures: result.failures,
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
 });
 
 // ─── Preset assets initialisation ───────────────────────────────────────────
@@ -1787,6 +2548,12 @@ async function runStartupLegacyScan(): Promise<void> {
     storeSet('legacyAutoScanDone', true);
 
     if (results.length > 0) {
+      storeSet('legacyImportPromptState', {
+        status: 'pending',
+        paths: results,
+        updatedAt: new Date().toISOString(),
+      });
+
       // Delay so the window is fully loaded before the event is delivered.
       // mainWindow may be null if the user closed the window very quickly;
       // the optional-chain handles that case gracefully (identical pattern to

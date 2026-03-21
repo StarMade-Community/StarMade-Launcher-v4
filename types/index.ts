@@ -37,6 +37,12 @@ export interface PlaySession {
   timestamp: string;
 }
 
+/** Aggregate play-time totals stored by installation id in milliseconds. */
+export interface PlayTimeTotals {
+  byInstallationId: Record<string, number>;
+  totalMs: number;
+}
+
 export interface ManagedItem {
   id: string;
   name: string;
@@ -134,6 +140,66 @@ export interface DownloadStatus {
   error?: string;
 }
 
+// ─── Mod management types ───────────────────────────────────────────────────
+
+export interface ModRecord {
+  fileName: string;
+  absolutePath: string;
+  relativePath: string;
+  sizeBytes: number;
+  modifiedMs: number;
+  enabled: boolean;
+  /** Original URL used by launcher-managed downloads/imports, when known. */
+  downloadUrl?: string;
+  /** SMD resource id when this jar was installed via launcher-managed SMD flow. */
+  resourceId?: number;
+  /** SMD version string recorded at install/update time. */
+  smdVersion?: string;
+}
+
+export interface SmdModResource {
+  resourceId: number;
+  name: string;
+  author: string;
+  tagLine?: string;
+  gameVersion?: string;
+  downloadCount: number;
+  ratingAverage: number;
+  latestVersion?: string;
+}
+
+export interface SmdInstalledUpdateStatus {
+  resourceId: number;
+  currentVersion: string;
+  latestVersion?: string;
+  hasUpdate: boolean;
+  error?: string;
+}
+
+export interface ModpackEntry {
+  /** Display name of the mod entry. */
+  name: string;
+  /** Preferred file name to save as (optional; launcher will sanitize). */
+  fileName?: string;
+  /** Direct download link for the mod JAR. */
+  downloadUrl: string;
+  /** Whether this mod should be enabled after import. Defaults to true. */
+  enabled?: boolean;
+}
+
+export interface ModpackManifest {
+  format: 'starmade-modpack';
+  version: 1;
+  name: string;
+  createdAt: string;
+  sourceInstallation?: {
+    id?: string;
+    name?: string;
+    version?: string;
+  };
+  entries: ModpackEntry[];
+}
+
 export type ServerLifecycleState = 'starting' | 'running' | 'stopping' | 'stopped' | 'error';
 export type ServerLogLevel = 'INFO' | 'WARNING' | 'ERROR' | 'FATAL' | 'DEBUG' | 'stdout' | 'stderr';
 
@@ -147,7 +213,7 @@ export interface LauncherSettingsData {
   closeBehavior: LauncherCloseBehavior;
 }
 
-export type Page = 'Play' | 'Installations' | 'News' | 'Settings' | 'ServerPanel';
+export type Page = 'Play' | 'Installations' | 'News' | 'Screenshots' | 'Mods' | 'Settings' | 'ServerPanel';
 export type SettingsSection = 'launcher' | 'accounts' | 'about' | 'defaults';
 export type InstallationsTab = 'installations' | 'servers';
 
@@ -194,6 +260,8 @@ export interface AppContextType {
 
 export interface DataContextType {
     // State
+    /** True once persisted launcher data has been hydrated from the store. */
+    isLoaded: boolean;
     accounts: Account[];
     activeAccount: Account | null;
     installations: ManagedItem[];
@@ -241,10 +309,16 @@ export interface DataContextType {
     lastPlayedSession: PlaySession | null;
     /** Up to 4 sessions pinned by the user for quick access. */
     pinnedSessions: PlaySession[];
+    /** Total tracked play time in milliseconds, keyed by installation id. */
+    playTimeByInstallationMs: Record<string, number>;
+    /** Total tracked play time across all installations in milliseconds. */
+    totalInstallPlayTimeMs: number;
     /** Pin a session for quick access (max 4; oldest pin is dropped when full). */
     pinSession: (session: PlaySession) => void;
     /** Unpin a previously pinned session. */
     unpinSession: (sessionId: string) => void;
     /** Record a completed play session as the new last-played entry. */
     recordSession: (session: PlaySession) => void;
+    /** Refresh play-time totals from the main process. */
+    refreshPlayTime: () => Promise<void>;
 }

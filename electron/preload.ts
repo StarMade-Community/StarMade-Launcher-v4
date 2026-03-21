@@ -20,6 +20,18 @@ const launcherApi = {
       ipcRenderer.invoke(IPC.APP_GET_SERVER_PANEL_SCHEMA),
   },
 
+  licenses: {
+    /** List bundled third-party license files. */
+    list: (): Promise<Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>> =>
+      ipcRenderer.invoke(IPC.LICENSES_LIST),
+    /** Read one bundled third-party license file by file name. */
+    read: (fileName: string): Promise<{ content: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.LICENSES_READ, fileName),
+    /** Copy bundled third-party license files to userData. */
+    copyToUserData: (): Promise<{ success: boolean; copiedCount: number; destinationDir?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.LICENSES_COPY_TO_USER_DATA),
+  },
+
   window: {
     minimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
     hide: () => ipcRenderer.send(IPC.WINDOW_HIDE),
@@ -149,6 +161,10 @@ const launcherApi = {
     listRunning: (): Promise<Array<{ installationId: string; pid?: number; isServer: boolean; uptime: number }>> =>
       ipcRenderer.invoke(IPC.GAME_LIST_RUNNING),
 
+    /** Get tracked play-time totals (ms) keyed by installation id. */
+    getPlayTimeTotals: (installationIds?: string[]): Promise<{ byInstallationId: Record<string, number>; totalMs: number }> =>
+      ipcRenderer.invoke(IPC.GAME_GET_PLAY_TIME_TOTALS, installationIds),
+
     /** Get log file path for a running game. */
     getLogPath: (installationId: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.GAME_GET_LOG_PATH, installationId),
@@ -228,6 +244,37 @@ const launcherApi = {
     writeInstallationFile: (installationPath: string, relativePath: string, content: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC.GAME_FILE_WRITE, installationPath, relativePath, content),
 
+    /** Rename a file/directory in an installation directory. */
+    renameInstallationPath: (
+      installationPath: string,
+      relativePath: string,
+      nextName: string,
+    ): Promise<{ success: boolean; oldRelativePath?: string; newRelativePath?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_FILE_RENAME, installationPath, relativePath, nextName),
+
+    /** Copy a file/directory into a destination directory in an installation. */
+    copyInstallationPath: (
+      installationPath: string,
+      sourceRelativePath: string,
+      destinationDir: string,
+    ): Promise<{ success: boolean; sourceRelativePath?: string; destinationRelativePath?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_FILE_COPY, installationPath, sourceRelativePath, destinationDir),
+
+    /** Move a file/directory into a destination directory in an installation. */
+    moveInstallationPath: (
+      installationPath: string,
+      sourceRelativePath: string,
+      destinationDir: string,
+    ): Promise<{ success: boolean; sourceRelativePath?: string; destinationRelativePath?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_FILE_MOVE, installationPath, sourceRelativePath, destinationDir),
+
+    /** Delete a file/directory from an installation. */
+    deleteInstallationPath: (
+      installationPath: string,
+      relativePath: string,
+    ): Promise<{ success: boolean; deletedRelativePath?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.GAME_FILE_DELETE, installationPath, relativePath),
+
     /**
      * Read the `launcher-session.json` file written by the game into the
      * installation directory.  Returns the parsed object or `null` when the
@@ -300,7 +347,7 @@ const launcherApi = {
     openFolder: (defaultPath?: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC.DIALOG_OPEN_FOLDER, defaultPath),
     /** Open file picker dialog. Returns selected path or null if canceled. */
-    openFile: (defaultPath?: string, type?: 'image'): Promise<string | null> =>
+    openFile: (defaultPath?: string, type?: 'image' | 'java' | 'modpack'): Promise<string | null> =>
       ipcRenderer.invoke(IPC.DIALOG_OPEN_FILE, defaultPath, type),
   },
 
@@ -360,6 +407,9 @@ const launcherApi = {
     /** List available background image paths (file:// URLs). */
     list: (): Promise<string[]> =>
       ipcRenderer.invoke(IPC.BACKGROUNDS_LIST),
+    /** Returns a pinned launcher background URL, if configured. */
+    getPreferred: (): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.BACKGROUNDS_GET_PREFERRED),
   },
 
   /** Icon image APIs */
@@ -370,6 +420,154 @@ const launcherApi = {
     /** Import a custom icon into the user icons folder. */
     import: (sourcePath: string): Promise<{ success: boolean; path?: string; error?: string }> =>
       ipcRenderer.invoke(IPC.ICONS_IMPORT, sourcePath),
+  },
+
+  /** Screenshot management APIs */
+  screenshots: {
+    /** List PNG screenshots from an installation's screenshots folder. */
+    list: (installationPath: string): Promise<{
+      screenshotsDir: string;
+      screenshots: Array<{
+        name: string;
+        path: string;
+        fileUrl: string;
+        sizeBytes: number;
+        modifiedMs: number;
+        width: number;
+        height: number;
+      }>;
+    }> => ipcRenderer.invoke(IPC.SCREENSHOTS_LIST, installationPath),
+
+    /** Copy a screenshot image into the system clipboard. */
+    copyToClipboard: (installationPath: string, screenshotPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.SCREENSHOTS_COPY_TO_CLIPBOARD, installationPath, screenshotPath),
+
+    /** Open the screenshot's containing folder in the native file manager. */
+    openContainingFolder: (installationPath: string, screenshotPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.SCREENSHOTS_OPEN_CONTAINING_FOLDER, installationPath, screenshotPath),
+
+    /** Delete a screenshot file from the installation screenshots folder. */
+    delete: (installationPath: string, screenshotPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.SCREENSHOTS_DELETE, installationPath, screenshotPath),
+
+    /** Set a screenshot as the launcher's preferred background image. */
+    setAsLauncherBackground: (installationPath: string, screenshotPath: string): Promise<{ success: boolean; url?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.SCREENSHOTS_SET_AS_LAUNCHER_BACKGROUND, installationPath, screenshotPath),
+
+    /** Copy a screenshot to an installation loading-screens folder. */
+    setAsLoadingScreen: (
+      sourceInstallationPath: string,
+      screenshotPath: string,
+      targetInstallationPath?: string,
+    ): Promise<{ success: boolean; destinationPath?: string; error?: string }> =>
+      ipcRenderer.invoke(
+        IPC.SCREENSHOTS_SET_AS_LOADING_SCREEN,
+        sourceInstallationPath,
+        screenshotPath,
+        targetInstallationPath,
+      ),
+  },
+
+  /** Mods management APIs */
+  mods: {
+    /** List mod jars from the installation's mods directory. */
+    list: (installationPath: string): Promise<{
+      modsDir: string;
+      mods: Array<{
+        fileName: string;
+        absolutePath: string;
+        relativePath: string;
+        sizeBytes: number;
+        modifiedMs: number;
+        enabled: boolean;
+        downloadUrl?: string;
+        resourceId?: number;
+        smdVersion?: string;
+      }>;
+    }> => ipcRenderer.invoke(IPC.MODS_LIST, installationPath),
+
+    /** Browse StarMade Dock StarLoader mods. */
+    listSmdMods: (searchQuery?: string): Promise<{
+      success: boolean;
+      mods: Array<{
+        resourceId: number;
+        name: string;
+        author: string;
+        tagLine?: string;
+        gameVersion?: string;
+        downloadCount: number;
+        ratingAverage: number;
+        latestVersion?: string;
+      }>;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.MODS_SMD_LIST, searchQuery),
+
+    /** Install or update an SMD mod by resource id. */
+    installOrUpdateFromSmd: (
+      installationPath: string,
+      resourceId: number,
+      enabled = true,
+    ): Promise<{
+      success: boolean;
+      mod?: {
+        fileName: string;
+        absolutePath: string;
+        relativePath: string;
+        sizeBytes: number;
+        modifiedMs: number;
+        enabled: boolean;
+        downloadUrl?: string;
+        resourceId?: number;
+        smdVersion?: string;
+      };
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.MODS_SMD_INSTALL_OR_UPDATE, installationPath, resourceId, enabled),
+
+    /** Check installed SMD mods for newer versions. */
+    checkSmdUpdates: (installed: Array<{ resourceId: number; smdVersion: string }>): Promise<{
+      success: boolean;
+      updates: Array<{
+        resourceId: number;
+        currentVersion: string;
+        latestVersion?: string;
+        hasUpdate: boolean;
+        error?: string;
+      }>;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.MODS_SMD_CHECK_UPDATES, installed),
+
+    /** Remove a mod jar from an installation. */
+    remove: (installationPath: string, relativePath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.MODS_REMOVE, installationPath, relativePath),
+
+    /** Deprecated: StarMade manages mod enable/disable state in-game. */
+    setEnabled: (
+      installationPath: string,
+      relativePath: string,
+      enabled: boolean,
+    ): Promise<{ success: boolean; relativePath?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.MODS_SET_ENABLED, installationPath, relativePath, enabled),
+
+    /** Export a link-only modpack manifest JSON. */
+    exportModpack: (
+      installationPath: string,
+      outputPath: string,
+      options?: { name?: string; sourceInstallation?: { id?: string; name?: string; version?: string } },
+    ): Promise<{ success: boolean; outputPath?: string; exportedCount?: number; skippedCount?: number; error?: string }> =>
+      ipcRenderer.invoke(IPC.MODS_EXPORT_MODPACK, installationPath, outputPath, options),
+
+    /** Import a modpack manifest and download all listed mods. */
+    importModpack: (
+      installationPath: string,
+      manifestPath: string,
+    ): Promise<{
+      success: boolean;
+      downloadedCount?: number;
+      skippedCount?: number;
+      failedCount?: number;
+      failures?: string[];
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.MODS_IMPORT_MODPACK, installationPath, manifestPath),
   },
 
   /** Legacy installation detection APIs */

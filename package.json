@@ -1,9 +1,9 @@
 {
   "name": "starmade-launcher",
   "private": true,
-  "version": "4.0.17",
+  "version": "4.1.1",
   "description": "StarMade Launcher",
-  "author": "StarMade Community",
+  "author": "Schine GmbH & StarMade Contributors",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -13,15 +13,16 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "electron:dev": "concurrently -k \"npm run dev\" \"wait-on http://localhost:3000 && tsc -p tsconfig.electron.json && electron .\"",
-    "electron:build": "npm run build && tsc -p tsconfig.electron.json && electron-builder",
-    "electron:preview": "npm run build && tsc -p tsconfig.electron.json && electron .",
+    "electron:dev": "concurrently -k \"npm run dev\" \"wait-on http://localhost:3000 && node build-electron.mjs && electron .\"",
+    "electron:build": "npm run build && node build-electron.mjs && electron-builder",
+    "electron:preview": "npm run build && node build-electron.mjs && electron .",
     "version:patch": "npm version patch --no-git-tag-version",
     "version:minor": "npm version minor --no-git-tag-version",
     "version:major": "npm version major --no-git-tag-version"
   },
   "dependencies": {
     "adm-zip": "^0.5.16",
+    "dotenv": "^17.3.1",
     "lucide-react": "^0.577.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
@@ -37,21 +38,22 @@
     "@types/node": "^22.14.0",
     "@types/tar-stream": "^3.1.4",
     "@vitejs/plugin-react": "^5.0.0",
-    "@vitest/coverage-v8": "^4.1.0",
     "concurrently": "^9.2.1",
     "electron": "^41.0.0",
     "electron-builder": "^26.8.1",
+    "esbuild": "^0.25.0",
     "jsdom": "^28.1.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0",
     "vitest": "^4.1.0",
-    "wait-on": "^9.0.4"
+    "wait-on": "^9.0.4",
+    "@vitest/coverage-v8": "^4.1.0"
   },
   "build": {
     "appId": "org.starmade.launcher",
     "afterPack": "./afterPack.cjs",
     "productName": "StarMade Launcher",
-    "copyright": "Copyright © 2026 Schine, GmbH",
+    "copyright": "Copyright © 2026 Schine GmbH",
     "artifactName": "StarMade-Launcher.${ext}",
     "files": [
       "dist/**/*",
@@ -99,7 +101,10 @@
       "icon": "build/icon.png"
     },
     "extraResources": [
-      { "from": "build/icon.png", "to": "icon.png" }
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
     ],
     "portable": {
       "requestExecutionLevel": "user"
