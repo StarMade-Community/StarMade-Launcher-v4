@@ -566,6 +566,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }, []);
 
     const value: DataContextType = {
+        isLoaded,
         accounts,
         activeAccount,
         installations,

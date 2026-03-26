@@ -1,9 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import CustomDropdown from '../../common/CustomDropdown';
 import { FolderIcon } from '../../common/icons';
-import { useData } from '@/contexts/DataContext';
+import useLegacyInstallImporter from '../../hooks/useLegacyInstallImporter';
 import type { LauncherCloseBehavior, LauncherSettingsData } from '@/types';
 import UpdateAvailableModal from '../../common/UpdateAvailableModal';
+import {
+    LEGACY_IMPORT_PROMPT_STORE_KEY,
+    dedupeLegacyInstallPaths,
+    parseLegacyImportPromptState,
+} from '@/utils/legacyImport';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -58,7 +63,7 @@ const ToggleSwitch: React.FC<{ checked: boolean; onChange: (checked: boolean) =>
 // ─── Main component ──────────────────────────────────────────────────────────
 
 const LauncherSettings: React.FC = () => {
-    const { installations, addInstallation, versions } = useData();
+    const { isKnownPath, importInstallation } = useLegacyInstallImporter();
     const [isLoaded, setIsLoaded] = useState(false);
     const [settings, setSettings] = useState<LauncherSettingsData>(DEFAULT_SETTINGS);
     const [userDataPath, setUserDataPath] = useState<string>('');
@@ -70,7 +75,6 @@ const LauncherSettings: React.FC = () => {
     const [javaDownloadProgress, setJavaDownloadProgress] = useState<Record<string, string>>({});
     const [legacyFound, setLegacyFound] = useState<string[]>([]);
     const [isScanning, setIsScanning] = useState(false);
-    const [importedPaths, setImportedPaths] = useState<Set<string>>(new Set());
     const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
     const [updateCheckResult, setUpdateCheckResult] = useState<string | null>(null);
     const [updateModalInfo, setUpdateModalInfo] = useState<UpdateInfo | null>(null);
@@ -107,6 +111,16 @@ const LauncherSettings: React.FC = () => {
             setIsLoaded(true);
             return;
         }
+
+        window.launcher.store.get(LEGACY_IMPORT_PROMPT_STORE_KEY)
+            .then((stored) => {
+                const promptState = parseLegacyImportPromptState(stored);
+                if (promptState?.status === 'pending' && promptState.paths.length > 0) {
+                    setLegacyFound(prev => dedupeLegacyInstallPaths([...prev, ...promptState.paths]));
+                }
+            })
+            .catch(() => {});
+
         window.launcher.store.get(STORE_KEY).then((stored) => {
             if (stored && typeof stored === 'object') {
                 setSettings({ ...DEFAULT_SETTINGS, ...(stored as Partial<LauncherSettingsData>) });
@@ -132,7 +146,7 @@ const LauncherSettings: React.FC = () => {
     useEffect(() => {
         if (typeof window === 'undefined' || !window.launcher?.legacy?.onScanResult) return;
         const cleanup = window.launcher.legacy.onScanResult((paths) => {
-            setLegacyFound(prev => Array.from(new Set([...prev, ...paths])));
+            setLegacyFound(prev => dedupeLegacyInstallPaths([...prev, ...paths]));
         });
         return cleanup;
     }, []);
@@ -202,15 +216,12 @@ const LauncherSettings: React.FC = () => {
 
     // ── Legacy installation detection ────────────────────────────────────────
 
-    /** Paths already present in the installations list */
-    const existingPaths = new Set(installations.map(i => i.path));
-
     const handleAutoDetect = async () => {
         if (typeof window === 'undefined' || !window.launcher?.legacy) return;
         setIsScanning(true);
         try {
             const found = await window.launcher.legacy.scan();
-            setLegacyFound(found);
+            setLegacyFound(dedupeLegacyInstallPaths(found));
         } catch (error) {
             console.error('Failed to scan for legacy installs:', error);
         } finally {
@@ -225,8 +236,7 @@ const LauncherSettings: React.FC = () => {
         setIsScanning(true);
         try {
             const found = await window.launcher.legacy.scanFolder(folder);
-            // Merge with existing results, avoiding duplicates
-            setLegacyFound(prev => Array.from(new Set([...prev, ...found])));
+            setLegacyFound(prev => dedupeLegacyInstallPaths([...prev, ...found]));
         } catch (error) {
             console.error('Failed to scan folder for legacy installs:', error);
         } finally {
@@ -235,65 +245,7 @@ const LauncherSettings: React.FC = () => {
     };
 
     const handleImport = async (installPath: string) => {
-        // Guard against duplicate imports (e.g. rapid double-click before re-render)
-        if (existingPaths.has(installPath) || importedPaths.has(installPath)) return;
-
-        // Read user-configured default memory settings so they are applied to the imported item
-        let maxMemory: number | undefined;
-        let extraJvmArgs: string | undefined;
-
-        if (typeof window !== 'undefined' && window.launcher?.store) {
-            try {
-                const stored = await window.launcher.store.get('defaultInstallationSettings');
-                if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
-                    const raw = stored as Record<string, unknown>;
-                    if (typeof raw.javaMemory === 'number' && raw.javaMemory > 0) {
-                        maxMemory = raw.javaMemory;
-                    }
-                    if (typeof raw.jvmArgs === 'string' && raw.jvmArgs) {
-                        // Strip -Xms/-Xmx: those are applied via minMemory/maxMemory
-                        const extra = raw.jvmArgs.split(/\s+/).filter(a => !/^-Xm[sx]\d+[kKmMgGtT]?$/i.test(a)).join(' ').trim();
-                        if (extra) extraJvmArgs = extra;
-                    }
-                }
-            } catch (error) {
-                console.error('Failed to load defaults for legacy import:', error);
-            }
-        }
-        // Try to read the version from version.txt inside the install directory
-        let version = 'unknown';
-        if (window.launcher?.legacy?.readVersion) {
-            const parsed = await window.launcher.legacy.readVersion(installPath);
-            if (parsed) version = parsed;
-        }
-
-        // Extract the last path segment as a display name (works on both / and \ separators)
-        const folderName = installPath.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? 'legacy-install';
-        // Determine the correct branch type by looking up the version in the live manifest.
-        // Fall back to 'archive' only when the version can't be matched (e.g. very old build).
-        const matchedVersion = versions.find(v => v.id === version);
-        const detectedType = matchedVersion?.type ?? 'archive';
-
-        const newItem = {
-            id: Date.now().toString(),
-            name: folderName,
-            version,
-            type: detectedType,
-            icon: detectedType === 'release' ? 'release'
-                : detectedType === 'dev'     ? 'dev'
-                : detectedType === 'pre'     ? 'pre'
-                : 'archive',
-            path: installPath,
-            lastPlayed: 'Never',
-            installed: true,
-            ...(maxMemory !== undefined && { minMemory: maxMemory, maxMemory }),
-            ...(extraJvmArgs && { jvmArgs: extraJvmArgs }),
-        };
-        setImportedPaths(prev => {
-            if (prev.has(installPath)) return prev;
-            addInstallation(newItem);
-            return new Set([...prev, installPath]);
-        });
+        await importInstallation(installPath);
     };
 
     const handleCheckForUpdates = async () => {
@@ -747,7 +699,7 @@ const LauncherSettings: React.FC = () => {
                     ) : (
                         <div className="space-y-2">
                             {legacyFound.map((installPath) => {
-                                const alreadyAdded = existingPaths.has(installPath) || importedPaths.has(installPath);
+                                const alreadyAdded = isKnownPath(installPath);
                                 return (
                                     <div key={installPath} className="flex items-center justify-between gap-3 p-3 bg-black/20 rounded-md border border-white/10">
                                         <span className="text-xs text-gray-300 font-mono truncate flex-1 min-w-0" title={installPath}>

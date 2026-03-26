@@ -2584,6 +2584,12 @@ async function runStartupLegacyScan(): Promise<void> {
     storeSet('legacyAutoScanDone', true);
 
     if (results.length > 0) {
+      storeSet('legacyImportPromptState', {
+        status: 'pending',
+        paths: results,
+        updatedAt: new Date().toISOString(),
+      });
+
       // Delay so the window is fully loaded before the event is delivered.
       // mainWindow may be null if the user closed the window very quickly;
       // the optional-chain handles that case gracefully (identical pattern to
