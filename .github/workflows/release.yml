@@ -38,14 +38,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SMD_API_KEY: ${{ secrets.SMD_API_KEY }}
 
-      - name: Package Windows artifact
-        run: Compress-Archive -Path "release\StarMade Launcher.exe" -DestinationPath "release\StarMade-Launcher-Windows.zip"
-
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-builds
-          path: release/StarMade-Launcher-Windows.zip
+          path: release/StarMade-Launcher.exe
           retention-days: 7
 
   # ─── Build for macOS (Apple Silicon) ──────────────────────────────────────
@@ -82,7 +79,8 @@ jobs:
         with:
           name: macos-arm-builds
           path: |
-            release/*arm64*
+            release/StarMade-Launcher-macOS-arm64.dmg
+            release/StarMade-Launcher-macOS-arm64.zip
           retention-days: 7
 
   # ─── Build for macOS (Intel) ───────────────────────────────────────────────
@@ -119,7 +117,8 @@ jobs:
         with:
           name: macos-intel-builds
           path: |
-            release/*x64*
+            release/StarMade-Launcher-macOS-x64.dmg
+            release/StarMade-Launcher-macOS-x64.zip
           retention-days: 7
 
   # ─── Build for Linux ──────────────────────────────────────────────────────
@@ -146,14 +145,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SMD_API_KEY: ${{ secrets.SMD_API_KEY }}
 
-      - name: Package Linux artifact
-        run: cd release && zip "StarMade-Launcher-Linux.zip" "StarMade Launcher.AppImage"
-
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
           name: linux-builds
-          path: release/StarMade-Launcher-Linux.zip
+          path: release/StarMade-Launcher.AppImage
           retention-days: 7
 
   # ─── Create Draft Release ─────────────────────────────────────────────────
@@ -228,12 +224,12 @@ jobs:
           ## StarMade Launcher v${{ steps.version.outputs.VERSION }}
 
           ### Downloads
-          - **Windows:** \`StarMade-Launcher-Windows.zip\`
+          - **Windows:** \`StarMade-Launcher.exe\`
           - **macOS (Apple Silicon, installer):** \`StarMade-Launcher-macOS-arm64.dmg\`
           - **macOS (Intel, installer):** \`StarMade-Launcher-macOS-x64.dmg\`
           - **macOS (Apple Silicon, Steam/standalone):** \`StarMade-Launcher-macOS-arm64.zip\`
           - **macOS (Intel, Steam/standalone):** \`StarMade-Launcher-macOS-x64.zip\`
-          - **Linux:** \`StarMade-Launcher-Linux.zip\`
+          - **Linux:** \`StarMade-Launcher.AppImage\`
 
           ### Installation
           1. Download the appropriate file for your platform

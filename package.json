@@ -64,7 +64,7 @@
       "output": "release"
     },
     "win": {
-      "artifactName": "StarMade Launcher.${ext}",
+      "artifactName": "StarMade-Launcher.${ext}",
       "target": [
         {
           "target": "portable",
@@ -107,7 +107,7 @@
       "icon": "build/icon.icns"
     },
     "linux": {
-      "artifactName": "StarMade Launcher.${ext}",
+      "artifactName": "StarMade-Launcher.${ext}",
       "target": [
         {
           "target": "AppImage",
