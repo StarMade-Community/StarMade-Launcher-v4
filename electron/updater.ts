@@ -4,9 +4,10 @@
  * Flow:
  *  1. Query GitHub Releases API for the latest version tag.
  *  2. Compare against the running app version.
- *  3. If newer: find the platform-appropriate asset (portable .exe on Windows,
- *     AppImage on Linux), download it to a temp file with live progress
- *     callbacks, then execute/replace the launcher.
+ *  3. If newer: find the platform-appropriate asset (zip containing the .exe
+ *     on Windows, zip containing the AppImage on Linux), download it to a temp
+ *     file with live progress callbacks, extract the executable, then
+ *     execute/replace the launcher.
  *  4. If anything fails, open the releases page in the browser as a fallback.
  *
  * macOS is intentionally excluded from silent install because code-signing and
@@ -22,6 +23,7 @@ import fs    from 'fs';
 import path  from 'path';
 import os    from 'os';
 import { spawn, type SpawnOptions } from 'child_process';
+import AdmZip from 'adm-zip';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -90,8 +92,8 @@ function compareSemver(a: string, b: string): -1 | 0 | 1 {
  * Pick the best installer asset for the current platform from a list of
  * GitHub release assets.
  *
- * Windows → .exe (portable executable)
- * Linux   → .AppImage
+ * Windows → StarMade-Launcher-Windows.zip (contains StarMade Launcher.exe)
+ * Linux   → StarMade-Launcher-Linux.zip   (contains StarMade Launcher.AppImage)
  * macOS   → not supported for silent install; returns undefined
  */
 function pickAsset(
@@ -100,12 +102,11 @@ function pickAsset(
   const plat = process.platform;
 
   if (plat === 'win32') {
-    // Prefer NSIS .exe; fall back to any .exe
-    return assets.find(a => /\.exe$/i.test(a.name)) ?? undefined;
+    return assets.find(a => a.name === 'StarMade-Launcher-Windows.zip') ?? undefined;
   }
 
   if (plat === 'linux') {
-    return assets.find(a => /\.AppImage$/i.test(a.name)) ?? undefined;
+    return assets.find(a => a.name === 'StarMade-Launcher-Linux.zip') ?? undefined;
   }
 
   // macOS – no silent install
@@ -315,11 +316,12 @@ export async function downloadUpdate(
 /**
  * Install (execute) a downloaded update file.
  *
- * • Windows portable .exe → wait for the current process to exit via a
- *                           PowerShell helper script, copy the new exe over
- *                           the current one, then relaunch.
- * • Linux AppImage     → make executable, replace the running binary with
- *                         the new one (via a shell wrapper), then relaunch.
+ * • Windows zip → extract StarMade Launcher.exe from the zip, wait for the
+ *                  current process to exit via a PowerShell helper script,
+ *                  copy the new exe over the current one, then relaunch.
+ * • Linux zip   → extract StarMade Launcher.AppImage from the zip, make it
+ *                  executable, replace the running binary via a shell wrapper,
+ *                  then relaunch.
  * • macOS              → opens the GitHub releases page in the browser so
  *                         the user can download the DMG manually (code-signing
  *                         is required for silent DMG install and is not yet
@@ -344,10 +346,14 @@ export async function installUpdate(installerPath: string): Promise<void> {
         throw new Error(`Downloaded update file is missing: ${installerPath}`);
       }
 
-      // The Windows build is a portable executable — there is no installer to
-      // run silently.  Instead, write a PowerShell helper script that waits
-      // for the current process to exit, copies the new exe over the current
-      // one, then relaunches it.
+      // Extract the exe from the downloaded zip.
+      const exeName = 'StarMade Launcher.exe';
+      const extractedExePath = path.join(os.tmpdir(), exeName);
+      try { fs.unlinkSync(extractedExePath); } catch { /* ignore */ }
+      new AdmZip(installerPath).extractEntryTo(exeName, os.tmpdir(), false, true);
+
+      // Write a PowerShell helper script that waits for the current process to
+      // exit, copies the new exe over the current one, then relaunches it.
       //
       // Paths are passed via environment variables to avoid any shell-injection
       // risk from special characters in file paths.  A random suffix on the
@@ -435,7 +441,7 @@ export async function installUpdate(installerPath: string): Promise<void> {
         stdio: 'ignore',
         env: {
           ...process.env,
-          UPDATE_SRC: installerPath,
+          UPDATE_SRC: extractedExePath,
           UPDATE_DST: currentExe,
           UPDATE_PID: String(process.pid),
           UPDATE_SCRIPT: scriptPath,
@@ -447,8 +453,13 @@ export async function installUpdate(installerPath: string): Promise<void> {
     }
 
     if (plat === 'linux') {
-      // Make the AppImage executable
-      fs.chmodSync(installerPath, 0o755);
+      // Extract the AppImage from the downloaded zip.
+      const appImageName = 'StarMade Launcher.AppImage';
+      const extractedAppImagePath = path.join(os.tmpdir(), appImageName);
+      try { fs.unlinkSync(extractedAppImagePath); } catch { /* ignore */ }
+      new AdmZip(installerPath).extractEntryTo(appImageName, os.tmpdir(), false, true);
+
+      fs.chmodSync(extractedAppImagePath, 0o755);
 
       // When running as an AppImage, app.getPath('exe') returns the Electron
       // binary path *inside* the read-only squashfs mount (e.g.
@@ -470,7 +481,7 @@ export async function installUpdate(installerPath: string): Promise<void> {
         '#!/bin/sh',
         `# Wait until the old launcher process has exited`,
         `while kill -0 ${process.pid} 2>/dev/null; do sleep 0.5; done`,
-        `cp -f "${installerPath}" "${currentExe}"`,
+        `cp -f "${extractedAppImagePath}" "${currentExe}"`,
         `chmod +x "${currentExe}"`,
         `"${currentExe}" &`,
       ].join('\n');
