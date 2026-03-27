@@ -89,7 +89,7 @@ jobs:
   build-macos-intel:
     name: Build macOS (Intel)
     needs: test
-    runs-on: macos-13
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
