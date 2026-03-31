@@ -61,6 +61,10 @@ describe('sanitizeModFileName', () => {
   it('falls back when input is empty', () => {
     expect(sanitizeModFileName('   ')).toBe('mod-download.jar');
   });
+
+  it('collapses consecutive hyphens from version strings with separators', () => {
+    expect(sanitizeModFileName('Resources-ReSourced-v0.9.7 -- Bussard.jar')).toBe('Resources-ReSourced-v0.9.7-Bussard.jar');
+  });
 });
 
 describe('parseModpackManifest', () => {
