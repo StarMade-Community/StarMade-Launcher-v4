@@ -341,6 +341,7 @@ describe('StarMote IPC handlers', () => {
     expect(result.success).toBe(true);
     expect(result.status).toEqual({
       serverId: 'srv-3',
+      backend: 'starmote',
       connected: false,
       isReady: false,
       state: 'idle',
@@ -385,7 +386,7 @@ describe('StarMote IPC handlers', () => {
     }) as { success: boolean; error?: string };
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe('Unsupported StarMote command payload version.');
+    expect(result.error).toBe('Unsupported command payload version.');
   });
 
   it('rejects multiline StarMote admin commands', async () => {

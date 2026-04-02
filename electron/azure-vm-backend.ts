@@ -1,0 +1,314 @@
+// ─── Azure VM remote backend (SSH) ────────────────────────────────────────────
+//
+// Implements IRemoteBackend using the system ssh binary (no native Node
+// modules required).  Supports both SSH key and password authentication.
+//
+// Connection model:
+//   connect()          – validate SSH reachability with a test command, then
+//                        start a live log-streaming subprocess.
+//   sendAdminCommand() – spawn a fresh SSH process per command (simple, robust).
+//   disconnect()       – kill the log stream and clear session state.
+//
+// Auth methods (mutually exclusive, key takes priority):
+//   SSH key  – pass sshKeyPath; key must not require a passphrase.
+//   Password – pass sshPassword; requires sshpass(1) to be on PATH.
+
+import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import type {
+  IRemoteBackend,
+  RemoteConnectOptions,
+  RemoteConnectResult,
+  RemoteCommandResult,
+  RemoteConnectionStatus,
+  RemoteRuntimeEvent,
+} from './remote-backend-types.js';
+
+interface AzureVmSession {
+  serverId: string;
+  host: string;
+  /** Game port (informational – not used for SSH). */
+  gamePort: number;
+  sshPort: number;
+  username: string;
+  sshKeyPath?: string;
+  /** Password kept only in memory; never persisted or logged. */
+  sshPassword?: string;
+  state: 'connecting' | 'ready' | 'error';
+  connectedAt: string;
+  error?: string;
+  logStreamProc?: ChildProcess;
+}
+
+// ─── SSH argument builder ─────────────────────────────────────────────────────
+
+function buildSshArgs(
+  session: Pick<AzureVmSession, 'host' | 'sshPort' | 'username' | 'sshKeyPath'>,
+): string[] {
+  const args: string[] = [
+    '-o', 'BatchMode=yes',
+    '-o', 'StrictHostKeyChecking=accept-new',
+    '-o', 'ConnectTimeout=10',
+    '-o', 'ServerAliveInterval=30',
+    '-p', String(session.sshPort),
+  ];
+  if (session.sshKeyPath?.trim()) {
+    args.push('-i', session.sshKeyPath.trim());
+  }
+  args.push(`${session.username}@${session.host}`);
+  return args;
+}
+
+/**
+ * Build the spawn command and arguments, using sshpass when a password is
+ * provided and BatchMode must be disabled so ssh can accept the password.
+ */
+function buildSpawnConfig(
+  session: AzureVmSession,
+  command: string,
+): { cmd: string; args: string[]; opts: SpawnOptions } {
+  const opts: SpawnOptions = { stdio: ['ignore', 'pipe', 'pipe'] };
+
+  if (session.sshPassword) {
+    // sshpass feeds the password to ssh's stdin-equivalent prompt.
+    // BatchMode=yes would reject password auth, so omit it for password sessions.
+    const sshArgs: string[] = [
+      '-o', 'StrictHostKeyChecking=accept-new',
+      '-o', 'ConnectTimeout=10',
+      '-o', 'ServerAliveInterval=30',
+      '-o', 'PasswordAuthentication=yes',
+      '-o', 'PubkeyAuthentication=no',
+      '-p', String(session.sshPort),
+      `${session.username}@${session.host}`,
+      command,
+    ];
+    return {
+      cmd: 'sshpass',
+      args: ['-p', session.sshPassword, 'ssh', ...sshArgs],
+      opts,
+    };
+  }
+
+  return {
+    cmd: 'ssh',
+    args: [...buildSshArgs(session), command],
+    opts,
+  };
+}
+
+// ─── Backend implementation ───────────────────────────────────────────────────
+
+export class AzureVmBackend implements IRemoteBackend {
+  private readonly sessions = new Map<string, AzureVmSession>();
+  private readonly onStatusChanged: (status: RemoteConnectionStatus) => void;
+  private readonly onRuntimeEvent: (event: RemoteRuntimeEvent) => void;
+
+  constructor(options: {
+    onStatusChanged: (status: RemoteConnectionStatus) => void;
+    onRuntimeEvent: (event: RemoteRuntimeEvent) => void;
+  }) {
+    this.onStatusChanged = options.onStatusChanged;
+    this.onRuntimeEvent = options.onRuntimeEvent;
+  }
+
+  async connect(options: RemoteConnectOptions): Promise<RemoteConnectResult> {
+    const {
+      serverId,
+      host,
+      port = 4242,
+      username = 'azureuser',
+      sshPort = 22,
+      sshKeyPath,
+      sshPassword,
+    } = options;
+
+    // Replace any existing session cleanly
+    this.disconnect(serverId);
+
+    const session: AzureVmSession = {
+      serverId,
+      host,
+      gamePort: port,
+      sshPort,
+      username,
+      sshKeyPath: sshKeyPath?.trim() || undefined,
+      sshPassword: sshPassword || undefined,
+      state: 'connecting',
+      connectedAt: new Date().toISOString(),
+    };
+    this.sessions.set(serverId, session);
+    this.onStatusChanged(this.buildStatus(session));
+
+    // Verify SSH connectivity with a quick no-op
+    const testResult = await this.runOneShotSsh(session, 'echo SM_SSH_OK', 15_000);
+    if (!testResult.ok) {
+      session.state = 'error';
+      session.error = testResult.error ?? 'SSH connectivity test failed.';
+      this.onStatusChanged(this.buildStatus(session));
+      return { success: false, error: session.error, status: this.buildStatus(session) };
+    }
+
+    session.state = 'ready';
+    this.onStatusChanged(this.buildStatus(session));
+
+    // Begin streaming server logs in the background
+    this.startLogStream(session);
+
+    return { success: true, status: this.buildStatus(session) };
+  }
+
+  disconnect(serverId: string): RemoteConnectResult {
+    const session = this.sessions.get(serverId);
+    if (!session) return { success: true };
+
+    try { session.logStreamProc?.kill('SIGTERM'); } catch { /* ignore */ }
+    this.sessions.delete(serverId);
+
+    const status: RemoteConnectionStatus = {
+      serverId,
+      backend: 'azure-vm',
+      connected: false,
+      state: 'idle',
+      isReady: false,
+    };
+    this.onStatusChanged(status);
+    return { success: true, status };
+  }
+
+  async sendAdminCommand(payload: { serverId: string; command: string }): Promise<RemoteCommandResult> {
+    const session = this.sessions.get(payload.serverId);
+    if (!session || session.state !== 'ready') {
+      return { success: false, error: 'Azure VM SSH session is not ready.', reasonCode: 'not_ready' };
+    }
+
+    const result = await this.runOneShotSsh(session, payload.command, 30_000);
+    if (!result.ok) {
+      return {
+        success: false,
+        error: result.error,
+        reasonCode: 'ssh_command_failed',
+        status: this.buildStatus(session),
+      };
+    }
+    return { success: true, status: this.buildStatus(session) };
+  }
+
+  getStatusFor(serverId: string): RemoteConnectionStatus {
+    const session = this.sessions.get(serverId);
+    if (!session) return { serverId, backend: 'azure-vm', connected: false, state: 'idle' };
+    return this.buildStatus(session);
+  }
+
+  getStatuses(): RemoteConnectionStatus[] {
+    return Array.from(this.sessions.values()).map((s) => this.buildStatus(s));
+  }
+
+  // ─── Private helpers ─────────────────────────────────────────────────────────
+
+  private buildStatus(session: AzureVmSession): RemoteConnectionStatus {
+    const isReady = session.state === 'ready';
+    return {
+      serverId: session.serverId,
+      backend: 'azure-vm',
+      connected: session.state !== 'error',
+      state: session.state === 'connecting' ? 'connecting' : isReady ? 'ready' : 'error',
+      isReady,
+      host: session.host,
+      port: session.sshPort,
+      username: session.username,
+      connectedAt: session.connectedAt,
+      error: session.error,
+      reasonCode: isReady ? 'ready' : session.state === 'error' ? 'ssh_connect_failed' : undefined,
+    };
+  }
+
+  /**
+   * Run a single command on the remote host and resolve once it exits.
+   * stdout + stderr are emitted as runtime events on success.
+   */
+  private runOneShotSsh(
+    session: AzureVmSession,
+    command: string,
+    timeoutMs: number,
+  ): Promise<{ ok: boolean; error?: string }> {
+    return new Promise((resolve) => {
+      const { cmd, args, opts } = buildSpawnConfig(session, command);
+      const proc = spawn(cmd, args, opts);
+
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+
+      const finish = (ok: boolean, error?: string): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (ok) {
+          for (const line of (stdout + stderr).split('\n')) {
+            if (line.trim()) {
+              this.onRuntimeEvent({
+                version: 1,
+                serverId: session.serverId,
+                line: line.trimEnd(),
+                source: 'ssh-stdout',
+              });
+            }
+          }
+        }
+        resolve({ ok, error });
+      };
+
+      const timer = setTimeout(() => finish(false, 'SSH command timed out.'), timeoutMs);
+
+      proc.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
+      proc.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+      proc.on('error', (err) => {
+        const msg = cmd === 'sshpass' && err.message.includes('ENOENT')
+          ? 'sshpass is not installed. Install it (e.g. brew install hudochenkov/sshpass/sshpass) or use an SSH key instead.'
+          : `SSH process error: ${err.message}`;
+        finish(false, msg);
+      });
+      proc.on('close', (code) => {
+        if (code === 0) {
+          finish(true);
+        } else {
+          finish(false, stderr.trim() || `SSH exited with code ${code ?? 'null'}.`);
+        }
+      });
+    });
+  }
+
+  /**
+   * Start a persistent SSH process streaming server logs as runtime events.
+   * Tries systemd journal first, then falls back to tailing the StarMade log.
+   * Session is not marked as error if the stream ends — admins can still run
+   * commands; an informational event is emitted instead.
+   */
+  private startLogStream(session: AzureVmSession): void {
+    const { serverId } = session;
+
+    const logCommand =
+      'sudo journalctl -fu starmade --no-pager 2>/dev/null '
+      + '|| tail -F ~/server/logs/serverlog.0.log 2>/dev/null '
+      + '|| echo "[StarMade Launcher] No log stream configured — set up systemd or adjust the log path."';
+
+    const { cmd, args, opts } = buildSpawnConfig(session, logCommand);
+    const proc = spawn(cmd, args, opts);
+    session.logStreamProc = proc;
+
+    const emitLine = (line: string, source: 'ssh-stdout' | 'ssh-stderr'): void => {
+      if (line.trim()) {
+        this.onRuntimeEvent({ version: 1, serverId, line: line.trimEnd(), source });
+      }
+    };
+
+    proc.stdout?.on('data', (chunk: Buffer) => {
+      for (const line of chunk.toString('utf8').split('\n')) emitLine(line, 'ssh-stdout');
+    });
+    proc.stderr?.on('data', (chunk: Buffer) => {
+      for (const line of chunk.toString('utf8').split('\n')) emitLine(line, 'ssh-stderr');
+    });
+    proc.on('close', () => {
+      emitLine('[StarMade Launcher] SSH log stream ended.', 'ssh-stderr');
+    });
+  }
+}

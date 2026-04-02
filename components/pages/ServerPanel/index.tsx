@@ -15,8 +15,12 @@ import {
   resolveDefaultRemoteConnectHost,
   resolveDefaultRemoteFileAccessHost,
   shouldAutoLoadDatabaseEntities,
+  getRemoteBackendLabel,
+  getDefaultRemoteConnectPort,
+  isAzureVmBackend,
   type DatabaseSectorLoadFilter,
   type RemoteFileAccessProtocol,
+  type RemoteBackendType,
 } from '../../../utils/serverPanel';
 
 interface ServerPanelProps {
@@ -94,6 +98,7 @@ interface ChatChannelInfo {
 
 interface RemoteConnectionStatus {
   serverId: string;
+  backend?: 'starmote' | 'azure-vm';
   connected: boolean;
   state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
   isReady?: boolean;
@@ -102,7 +107,7 @@ interface RemoteConnectionStatus {
   username?: string;
   connectedAt?: string;
   error?: string;
-  reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
+  reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed';
 }
 
 const GENERAL_CHANNEL_ID = 'all';
@@ -2006,6 +2011,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [remoteConnectHostInput, setRemoteConnectHostInput] = useState('');
   const [remoteConnectPortInput, setRemoteConnectPortInput] = useState('4242');
   const [remoteConnectUsernameInput, setRemoteConnectUsernameInput] = useState('');
+  const [remoteBackendInput, setRemoteBackendInput] = useState<RemoteBackendType>('starmote');
+  const [azureVmSshPortInput, setAzureVmSshPortInput] = useState('22');
+  const [azureVmSshKeyPathInput, setAzureVmSshKeyPathInput] = useState('');
+  const [azureVmSshPasswordInput, setAzureVmSshPasswordInput] = useState('');
   const [remoteFileAccessProtocolInput, setRemoteFileAccessProtocolInput] = useState<RemoteFileAccessProtocol>('none');
   const [remoteFileAccessHostInput, setRemoteFileAccessHostInput] = useState('');
   const [remoteFileAccessPortInput, setRemoteFileAccessPortInput] = useState('');
@@ -2170,7 +2179,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       case 'timeout':
         return { label: 'Timed Out', className: 'text-red-300' };
       case 'connect_failed':
+      case 'ssh_connect_failed':
         return { label: 'Connect Failed', className: 'text-red-300' };
+      case 'ssh_command_failed':
+        return { label: 'Command Failed', className: 'text-red-300' };
       case 'auth_failed':
         return { label: 'Authentication Failed', className: 'text-red-300' };
       case 'socket_error':
@@ -2185,10 +2197,16 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [remoteConnectionStatus]);
 
   const remoteDiagnosticsHint = useMemo(() => {
+    const isAzureVm = remoteConnectionStatus?.backend === 'azure-vm';
     switch (remoteConnectionStatus?.reasonCode) {
       case 'timeout':
       case 'connect_failed':
-        return 'Verify host/port, firewall rules, and that the game server is listening for StarMote.';
+      case 'ssh_connect_failed':
+        return isAzureVm
+          ? 'SSH connection failed. Verify host/IP, SSH port, and that your key or credentials are correct. Ensure port 22 is open in the Azure Network Security Group.'
+          : 'Verify host/port, firewall rules, and that the game server is listening for StarMote.';
+      case 'ssh_command_failed':
+        return 'SSH command failed on the remote VM. Check that you have sudo privileges and the command is valid.';
       case 'auth_failed':
         if (remoteConnectionStatus?.error?.toLowerCase().includes('whitelist')) {
           return 'Authentication failed: this account is not on the server whitelist.';
@@ -2210,7 +2228,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       default:
         return null;
     }
-  }, [remoteConnectionStatus?.error, remoteConnectionStatus?.reasonCode]);
+  }, [remoteConnectionStatus?.backend, remoteConnectionStatus?.error, remoteConnectionStatus?.reasonCode]);
 
   const isRemoteServerProfile = isRemoteConnectSupported(effectiveServer);
   const remoteConnectEligibleServers = useMemo(
@@ -2237,12 +2255,28 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const populateRemoteConnectForm = useCallback((server: ManagedItem | null, fallbackServerId: string) => {
     const defaultHost = resolveDefaultRemoteConnectHost(server, serverConfigValues.SERVER_LISTEN_IP);
     const nextFileProtocol = server?.remoteFileAccessProtocol ?? 'none';
+    const nextBackend: RemoteBackendType = server?.remoteBackend ?? 'starmote';
 
     setRemoteConnectTargetServerId(server?.id ?? fallbackServerId);
     setRemoteConnectNameInput(server?.name ?? '');
     setRemoteConnectHostInput(defaultHost);
-    setRemoteConnectPortInput(server?.port?.trim() || serverPortInput || '4242');
-    setRemoteConnectUsernameInput(activeAccount?.name?.trim() || '');
+    setRemoteBackendInput(nextBackend);
+
+    if (nextBackend === 'azure-vm') {
+      // For Azure VM the form port is the SSH port, not the game port
+      setRemoteConnectPortInput(server?.azureVmSshPort?.trim() || '22');
+      setRemoteConnectUsernameInput(server?.azureVmSshUsername?.trim() || 'azureuser');
+      setAzureVmSshPortInput(server?.azureVmSshPort?.trim() || '22');
+      setAzureVmSshKeyPathInput(server?.azureVmSshKeyPath?.trim() || '');
+      setAzureVmSshPasswordInput('');
+    } else {
+      setRemoteConnectPortInput(server?.port?.trim() || serverPortInput || '4242');
+      setRemoteConnectUsernameInput(activeAccount?.name?.trim() || '');
+      setAzureVmSshPortInput('22');
+      setAzureVmSshKeyPathInput('');
+      setAzureVmSshPasswordInput('');
+    }
+
     setRemoteFileAccessProtocolInput(nextFileProtocol);
     setRemoteFileAccessHostInput(resolveDefaultRemoteFileAccessHost(server, defaultHost));
     setRemoteFileAccessPortInput(server?.remoteFileAccessPort?.trim() || getDefaultRemoteFileAccessPort(nextFileProtocol));
@@ -2282,7 +2316,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
 
     if (!hasStarmoteApi || !starmoteApi) {
-      setRemoteConnectError('StarMote API is unavailable in this build.');
+      setRemoteConnectError('Remote connection API is unavailable in this build.');
       return;
     }
 
@@ -2304,15 +2338,19 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       return;
     }
 
-    const parsedPort = Number.parseInt(remoteConnectPortInput.trim() || '4242', 10);
+    const backend = remoteBackendInput;
+    const isAzureVm = backend === 'azure-vm';
+
+    // For Azure VM the port field holds the SSH port; for StarMote it's the game port.
+    const portDefault = isAzureVm ? '22' : '4242';
+    const parsedPort = Number.parseInt(remoteConnectPortInput.trim() || portDefault, 10);
     if (!Number.isFinite(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
       setRemoteConnectError('Port must be between 1 and 65535.');
       return;
     }
 
-    const sanitizedPort = String(parsedPort);
     const nextName = remoteConnectNameInput.trim() || targetServer.name;
-    const username = remoteConnectUsernameInput.trim() || activeAccount?.name?.trim() || undefined;
+    const username = remoteConnectUsernameInput.trim() || undefined;
     const nextRemoteFileProtocol = remoteFileAccessProtocolInput;
     const nextRemoteFileHost = remoteFileAccessHostInput.trim() || undefined;
     const nextRemoteFilePort = remoteFileAccessPortInput.trim() || undefined;
@@ -2320,7 +2358,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     const nextRemoteFileRootPath = remoteFileAccessRootPathInput.trim() || undefined;
     const activeAccountId = activeAccount?.id;
 
-    if (!activeAccountId) {
+    // StarMote requires a signed-in StarMade account; Azure VM uses SSH key or password auth.
+    if (!isAzureVm && !activeAccountId) {
       setRemoteConnectError('Sign in with a StarMade account to use StarMote remote control.');
       return;
     }
@@ -2329,16 +2368,32 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setRemoteConnectError(null);
 
     try {
-      const connectResult = await starmoteApi.connect({
-        serverId: targetServer.id,
-        host,
-        port: parsedPort,
-        username,
-        clientVersion: targetServer.version?.trim() || undefined,
-        activeAccountId,
-      });
+      const connectPayload = isAzureVm
+        ? {
+            serverId: targetServer.id,
+            host,
+            port: parsedPort,
+            backend: 'azure-vm' as const,
+            username: username || 'azureuser',
+            sshPort: parsedPort,
+            sshKeyPath: azureVmSshKeyPathInput.trim() || undefined,
+            sshPassword: azureVmSshPasswordInput || undefined,
+          }
+        : {
+            serverId: targetServer.id,
+            host,
+            port: parsedPort,
+            backend: 'starmote' as const,
+            username: username || activeAccount?.name?.trim() || undefined,
+            clientVersion: targetServer.version?.trim() || undefined,
+            activeAccountId: activeAccountId!,
+          };
+
+      const connectResult = await starmoteApi.connect(connectPayload);
       if (!connectResult.success) {
-        setRemoteConnectError(connectResult.error ?? 'Failed to establish StarMote connection.');
+        setRemoteConnectError(
+          connectResult.error ?? `Failed to establish ${getRemoteBackendLabel(backend)} connection.`,
+        );
         if (connectResult.status) {
           setRemoteConnectionStatus(connectResult.status);
         }
@@ -2348,21 +2403,34 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         setRemoteConnectionStatus(connectResult.status);
       }
 
-      updateServerItem({
+      // Persist updated profile fields
+      const updatedItem: ManagedItem = {
         ...targetServer,
         name: nextName,
         serverIp: host,
-        port: sanitizedPort,
+        remoteBackend: backend,
         remoteFileAccessProtocol: nextRemoteFileProtocol,
         remoteFileAccessHost: nextRemoteFileHost,
         remoteFileAccessPort: nextRemoteFilePort,
         remoteFileAccessUsername: nextRemoteFileUsername,
         remoteFileAccessRootPath: nextRemoteFileRootPath,
-      });
+      };
+
+      if (isAzureVm) {
+        updatedItem.azureVmSshPort = String(parsedPort);
+        updatedItem.azureVmSshKeyPath = azureVmSshKeyPathInput.trim() || undefined;
+        updatedItem.azureVmSshUsername = username || 'azureuser';
+      } else {
+        updatedItem.port = String(parsedPort);
+      }
+
+      updateServerItem(updatedItem);
 
       setViewingServerId(targetServer.id);
       setServerNameInput(nextName);
-      setServerPortInput(sanitizedPort);
+      if (!isAzureVm) {
+        setServerPortInput(String(parsedPort));
+      }
 
       setIsRemoteConnectModalOpen(false);
       setActionError(null);
@@ -2373,6 +2441,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
   }, [
     activeAccount?.id,
+    activeAccount?.name,
     canShowRemoteConnectControls,
     hasStarmoteApi,
     remoteConnectEligibleServers,
@@ -2381,6 +2450,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     remoteConnectHostInput,
     remoteConnectNameInput,
     remoteConnectPortInput,
+    remoteBackendInput,
+    azureVmSshKeyPathInput,
     remoteFileAccessHostInput,
     remoteFileAccessPortInput,
     remoteFileAccessProtocolInput,
@@ -3601,6 +3672,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     await pasteIntoDestinationDir(fileContextMenu.destinationDir);
   }, [fileContextMenu, pasteIntoDestinationDir]);
 
+  const handleFileContextOpenNative = useCallback(async () => {
+    if (!effectiveServer) return;
+    const relativePath = fileContextMenu?.targetPath ?? null;
+    // Build the full absolute path. Use the root when no entry is targeted.
+    const fullPath = relativePath
+      ? `${effectiveServer.path}/${relativePath}`
+      : effectiveServer.path;
+    setFileContextMenu(null);
+    await window.launcher?.shell?.openPath(fullPath);
+  }, [effectiveServer, fileContextMenu?.targetPath]);
+
   useEffect(() => {
     if (activeTab !== 'files' || !effectiveServer || !hasGameApi) return;
 
@@ -3921,12 +4003,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       throw new Error('Server context unavailable.');
     }
     if (isRemoteServerProfile && !canExecuteRemoteCommandActions) {
-      throw new Error('Remote StarMote session is not ready to execute commands yet.');
+      throw new Error('Remote session is not ready to execute commands yet.');
     }
 
     if (isRemoteServerProfile) {
       if (!hasStarmoteApi || !starmoteApi) {
-        throw new Error('StarMote API unavailable in this build.');
+        throw new Error('Remote connection API unavailable in this build.');
       }
       const remoteResult = await starmoteApi.sendAdminCommand({
         version: 1,
@@ -5748,14 +5830,15 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           }
         }}
       >
-        <div className="w-full max-w-xl rounded-lg border border-white/15 bg-[#101422] p-5 shadow-xl">
-          <div className="mb-4">
+        <div className="flex w-full max-w-xl flex-col rounded-lg border border-white/15 bg-[#101422] shadow-xl" style={{ maxHeight: '90vh' }}>
+          <div className="flex-shrink-0 border-b border-white/10 px-5 pt-5 pb-4">
             <h3 className="text-lg font-semibold text-white">Remote Connection</h3>
             <p className="mt-1 text-sm text-gray-400">
               Enter remote server details and load them into the panel.
             </p>
           </div>
 
+          <div className="flex-1 overflow-y-auto px-5 py-4">
           <div className="space-y-3">
             <label className="block text-sm">
               <span className="mb-1 block text-gray-300">Server Profile</span>
@@ -5778,6 +5861,28 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             </label>
 
             <label className="block text-sm">
+              <span className="mb-1 block text-gray-300">Connection Backend</span>
+              <select
+                value={remoteBackendInput}
+                onChange={(event) => {
+                  const next = event.target.value as RemoteBackendType;
+                  setRemoteBackendInput(next);
+                  setRemoteConnectPortInput(getDefaultRemoteConnectPort(next));
+                  if (next === 'azure-vm') {
+                    setRemoteConnectUsernameInput('azureuser');
+                  } else {
+                    setRemoteConnectUsernameInput(activeAccount?.name?.trim() || '');
+                  }
+                }}
+                disabled={isRemoteConnectPending}
+                className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+              >
+                <option value="starmote">StarMote (game protocol)</option>
+                <option value="azure-vm">Azure VM (SSH)</option>
+              </select>
+            </label>
+
+            <label className="block text-sm">
               <span className="mb-1 block text-gray-300">Display Name</span>
               <input
                 value={remoteConnectNameInput}
@@ -5788,16 +5893,18 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               />
             </label>
 
-            <label className="block text-sm">
-              <span className="mb-1 block text-gray-300">Login Name</span>
-              <input
-                value={remoteConnectUsernameInput}
-                onChange={(event) => setRemoteConnectUsernameInput(event.target.value)}
-                disabled={isRemoteConnectPending}
-                placeholder="Admin username"
-                className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
-              />
-            </label>
+            {remoteBackendInput === 'starmote' && (
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-300">StarMade Login Name</span>
+                <input
+                  value={remoteConnectUsernameInput}
+                  onChange={(event) => setRemoteConnectUsernameInput(event.target.value)}
+                  disabled={isRemoteConnectPending}
+                  placeholder={activeAccount?.name || 'Admin username'}
+                  className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                />
+              </label>
+            )}
 
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block text-sm">
@@ -5812,17 +5919,63 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               </label>
 
               <label className="block text-sm">
-                <span className="mb-1 block text-gray-300">Port</span>
+                <span className="mb-1 block text-gray-300">
+                  {remoteBackendInput === 'azure-vm' ? 'SSH Port' : 'Game Port'}
+                </span>
                 <input
                   value={remoteConnectPortInput}
                   onChange={(event) => setRemoteConnectPortInput(event.target.value)}
                   disabled={isRemoteConnectPending}
                   inputMode="numeric"
-                  placeholder="4242"
+                  placeholder={remoteBackendInput === 'azure-vm' ? '22' : '4242'}
                   className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
                 />
               </label>
             </div>
+
+            {remoteBackendInput === 'azure-vm' && (
+              <div className="space-y-3">
+                <div className="rounded-md border border-sky-500/20 bg-sky-500/5 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-sky-200">Azure VM (SSH)</p>
+                  <p className="mt-1 text-xs text-gray-400">
+                    Connects via SSH using a key file or password. Provide a key path <em>or</em> a password — key takes priority if both are set.
+                  </p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-gray-300">SSH Username</span>
+                    <input
+                      value={remoteConnectUsernameInput}
+                      onChange={(event) => setRemoteConnectUsernameInput(event.target.value)}
+                      disabled={isRemoteConnectPending}
+                      placeholder="azureuser"
+                      className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                    />
+                  </label>
+                  <label className="block text-sm sm:col-span-2">
+                    <span className="mb-1 block text-gray-300">SSH Key Path</span>
+                    <input
+                      value={azureVmSshKeyPathInput}
+                      onChange={(event) => setAzureVmSshKeyPathInput(event.target.value)}
+                      disabled={isRemoteConnectPending}
+                      placeholder="~/.ssh/id_rsa  (leave blank for SSH agent)"
+                      className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200 font-mono text-xs"
+                    />
+                  </label>
+                  <label className="block text-sm sm:col-span-2">
+                    <span className="mb-1 block text-gray-300">SSH Password <span className="text-gray-500">(if not using a key)</span></span>
+                    <input
+                      type="password"
+                      value={azureVmSshPasswordInput}
+                      onChange={(event) => setAzureVmSshPasswordInput(event.target.value)}
+                      disabled={isRemoteConnectPending}
+                      placeholder="Leave blank to use key auth or SSH agent"
+                      className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
 
             <div className="rounded-md border border-cyan-500/20 bg-cyan-500/5 p-3">
               <p className="text-xs font-semibold uppercase tracking-wider text-cyan-200">Remote File Access</p>
@@ -5901,8 +6054,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               </p>
             )}
           </div>
+          </div>{/* end scroll wrapper */}
 
-          <div className="mt-5 flex items-center justify-end gap-2">
+          <div className="flex-shrink-0 border-t border-white/10 px-5 py-4 flex items-center justify-end gap-2">
             <button
               onClick={closeRemoteConnectModal}
               disabled={isRemoteConnectPending}
@@ -7353,6 +7507,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             onClick={(event) => event.stopPropagation()}
             onContextMenu={(event) => event.preventDefault()}
           >
+            <button
+              onClick={() => { void handleFileContextOpenNative(); }}
+              className="block w-full rounded px-2 py-1.5 text-left text-xs text-gray-200 hover:bg-white/10"
+            >
+              {fileContextMenu.targetIsDirectory || !fileContextMenu.targetPath
+                ? 'Open Folder in Explorer'
+                : 'Open with Native App'}
+            </button>
+            {fileContextMenu.targetPath && (
+              <div className="my-1 border-t border-white/10" />
+            )}
             {fileContextMenu.targetPath && (
               <>
                 <button
@@ -7383,12 +7548,15 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               {fileClipboard ? `Paste ${fileClipboard.sourceName}` : 'Paste'}
             </button>
             {fileContextMenu.targetPath && (
-              <button
-                onClick={() => { void handleFileContextDelete(); }}
-                className="block w-full rounded px-2 py-1.5 text-left text-xs text-red-300 hover:bg-red-500/20"
-              >
-                Delete
-              </button>
+              <>
+                <div className="my-1 border-t border-white/10" />
+                <button
+                  onClick={() => { void handleFileContextDelete(); }}
+                  className="block w-full rounded px-2 py-1.5 text-left text-xs text-red-300 hover:bg-red-500/20"
+                >
+                  Delete
+                </button>
+              </>
             )}
           </div>
         )}

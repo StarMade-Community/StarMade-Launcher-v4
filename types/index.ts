@@ -58,6 +58,15 @@ export interface ManagedItem {
   maxPlayers?: number;
   /** True when this server entry is a remote profile (no local install/download path). */
   isRemote?: boolean;
+  /** Which remote connection backend to use. Defaults to 'starmote' when omitted. */
+  remoteBackend?: 'starmote' | 'azure-vm';
+  // ── Azure VM / SSH backend fields ──────────────────────────────────────────
+  /** SSH port on the Azure VM (default 22). */
+  azureVmSshPort?: string;
+  /** Path to the SSH private key file used to authenticate with the Azure VM. */
+  azureVmSshKeyPath?: string;
+  /** Linux username on the Azure VM (e.g. 'azureuser'). */
+  azureVmSshUsername?: string;
   /** Optional remote file-access protocol used later for file/config access on remote servers. */
   remoteFileAccessProtocol?: 'none' | 'ftp' | 'sftp';
   /** Optional host for remote file access. Defaults to the remote server host when omitted. */

@@ -39,7 +39,7 @@ import { isRunningAsAppImage } from './appimage-detect.js';
 import { registerAppImageDesktopIntegration } from './desktop-integration.js';
 import { parseVersionTxt } from './legacy.js';
 import { getManagedPathCandidates } from './install-paths.js';
-import { registerStarmoteIpcHandlers } from './starmote-ipc.js';
+import { registerRemoteIpcHandlers } from './starmote-ipc.js';
 import { isStarmoteRolloutEnabled } from './starmote-feature-flag.js';
 import {
   listModsForInstallation,
@@ -111,6 +111,16 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
   // it up — don't call dialog.showErrorBox here to avoid double-dialogs).
   throw err;
 });
+
+// ─── macOS ANGLE/EGL noise suppression ───────────────────────────────────────
+// On macOS, Chromium's ANGLE layer probes EGL device attributes that the Metal
+// back-end doesn't support, producing a flood of harmless but noisy log lines:
+//   [ERROR:egl_util.cc] EGL Driver message: eglQueryDeviceAttribEXT: Bad attribute
+// Forcing ANGLE to use the Metal back-end directly avoids the probe and silences
+// these messages without affecting rendering quality.
+if (process.platform === 'darwin') {
+  app.commandLine.appendSwitch('use-angle', 'metal');
+}
 
 // ─── Linux sandbox fix ───────────────────────────────────────────────────────
 // Chromium's SUID sandbox check runs at the C++ browser-process level, before
@@ -374,7 +384,7 @@ const starmoteAdminCommandPassword = process.env.STARMOTE_SUPER_ADMIN_PASSWORD
   ?? '';
 
 if (isStarmoteRolloutEnabled()) {
-  registerStarmoteIpcHandlers({
+  registerRemoteIpcHandlers({
     ipcMain,
     getAllWindows: () => BrowserWindow.getAllWindows(),
     createSocket: () => new net.Socket(),

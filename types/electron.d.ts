@@ -1,5 +1,29 @@
 import type { Version, DownloadProgress, ModRecord, ModpackManifest, SmdModResource, SmdInstalledUpdateStatus } from './index';
 
+// ─── Remote connection shared shapes ─────────────────────────────────────────
+
+type RemoteReasonCodeShape =
+  | 'connected' | 'authenticating' | 'ready'
+  | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error'
+  | 'protocol_timeout' | 'registry_unavailable'
+  | 'not_ready' | 'invalid_command' | 'send_failed'
+  | 'closed' | 'disconnected' | 'replaced'
+  | 'ssh_connect_failed' | 'ssh_command_failed';
+
+interface RemoteConnectionStatusShape {
+  serverId: string;
+  backend?: 'starmote' | 'azure-vm';
+  connected: boolean;
+  state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
+  isReady?: boolean;
+  host?: string;
+  port?: number;
+  username?: string;
+  connectedAt?: string;
+  error?: string;
+  reasonCode?: RemoteReasonCodeShape;
+}
+
 declare global {
   interface Window {
     /** IPC bridge exposed by the Electron preload script. Undefined in plain browser environments. */
@@ -252,110 +276,63 @@ declare global {
         } | null>;
       };
 
-      /** StarMote remote connection APIs (present when StarMote rollout is enabled). */
+      /**
+       * Remote connection APIs – supports multiple backends (StarMote, Azure VM, …).
+       * Present when StarMote rollout is enabled; the same API surface is used for all backends.
+       */
       starmote?: {
-        /** Open a remote StarMote TCP session for a server profile. */
+        /** Open a remote session for a server profile. Pass `backend` to select the transport. */
         connect: (payload: {
           serverId: string;
           host: string;
           port: number;
+          backend?: 'starmote' | 'azure-vm';
           username?: string;
           clientVersion?: string;
           activeAccountId?: string;
+          // Azure VM / SSH
+          sshPort?: number;
+          sshKeyPath?: string;
+          sshPassword?: string;
         }) => Promise<{
           success: boolean;
-          status?: {
-            serverId: string;
-            connected: boolean;
-            state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
-            isReady?: boolean;
-            host?: string;
-            port?: number;
-            username?: string;
-            connectedAt?: string;
-            error?: string;
-            reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
-          };
+          status?: RemoteConnectionStatusShape;
           error?: string;
         }>;
 
-        /** Close an active StarMote session for a server profile. */
+        /** Close an active remote session for a server profile. */
         disconnect: (serverId: string) => Promise<{
           success: boolean;
-          status?: {
-            serverId: string;
-            connected: boolean;
-            state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
-            isReady?: boolean;
-            host?: string;
-            port?: number;
-            username?: string;
-            connectedAt?: string;
-            error?: string;
-            reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
-          };
+          status?: RemoteConnectionStatusShape;
           error?: string;
         }>;
 
-        /** Send a versioned admin command through a protocol-ready StarMote session. */
+        /** Send a versioned admin command through a ready remote session. */
         sendAdminCommand: (payload: {
           version: 1;
           serverId: string;
           command: string;
         }) => Promise<{
           success: boolean;
-          status?: {
-            serverId: string;
-            connected: boolean;
-            state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
-            isReady?: boolean;
-            host?: string;
-            port?: number;
-            username?: string;
-            connectedAt?: string;
-            error?: string;
-            reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
-          };
+          status?: RemoteConnectionStatusShape;
           error?: string;
-          reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
+          reasonCode?: RemoteReasonCodeShape;
         }>;
 
-        /** Fetch StarMote connection status for one profile or all profiles. */
+        /** Fetch remote connection status for one profile or all profiles. */
         getStatus: (serverId?: string) => Promise<{
-          statuses: Array<{
-            serverId: string;
-            connected: boolean;
-            state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
-            isReady?: boolean;
-            host?: string;
-            port?: number;
-            username?: string;
-            connectedAt?: string;
-            error?: string;
-            reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
-          }>;
+          statuses: RemoteConnectionStatusShape[];
         }>;
 
-        /** Subscribe to status changes for StarMote sessions. */
-        onStatusChanged: (cb: (status: {
-          serverId: string;
-          connected: boolean;
-          state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
-          isReady?: boolean;
-          host?: string;
-          port?: number;
-          username?: string;
-          connectedAt?: string;
-          error?: string;
-          reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
-        }) => void) => () => void;
+        /** Subscribe to remote connection status changes. Returns a cleanup function. */
+        onStatusChanged: (cb: (status: RemoteConnectionStatusShape) => void) => () => void;
 
-        /** Subscribe to normalized runtime line events from StarMote sessions. */
+        /** Subscribe to runtime output lines from remote sessions. Returns a cleanup function. */
         onRuntimeEvent: (cb: (event: {
           version: 1;
           serverId: string;
           line: string;
-          source: 'framed-packet' | 'text-fallback';
+          source: 'framed-packet' | 'text-fallback' | 'ssh-stdout' | 'ssh-stderr';
           commandId?: number;
         }) => void) => () => void;
       };
