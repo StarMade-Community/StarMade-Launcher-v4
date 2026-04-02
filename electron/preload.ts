@@ -449,7 +449,7 @@ const launcherApi = {
       username?: string;
       connectedAt?: string;
       error?: string;
-      reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed' | 'discord_auth_required' | 'discord_auth_failed' | 'discord_2fa_required';
+      reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed';
     }) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, status: {
         serverId: string;
