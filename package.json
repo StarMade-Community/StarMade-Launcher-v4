@@ -1,7 +1,7 @@
 {
   "name": "starmade-launcher",
   "private": true,
-  "version": "4.1.2",
+  "version": "4.1.5",
   "description": "StarMade Launcher",
   "author": "Schine GmbH & StarMade Contributors",
   "type": "module",
@@ -54,7 +54,6 @@
     "afterPack": "./afterPack.cjs",
     "productName": "StarMade Launcher",
     "copyright": "Copyright © 2026 Schine GmbH",
-    "artifactName": "StarMade-Launcher.${ext}",
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
@@ -65,6 +64,7 @@
       "output": "release"
     },
     "win": {
+      "artifactName": "StarMade-Launcher.${ext}",
       "target": [
         {
           "target": "portable",
@@ -76,12 +76,30 @@
       "icon": "build/icon.ico"
     },
     "mac": {
+      "artifactName": "StarMade-Launcher-macOS-${arch}.${ext}",
       "target": [
         {
           "target": "dmg",
           "arch": [
-            "x64",
             "arm64"
+          ]
+        },
+        {
+          "target": "dmg",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
           ]
         }
       ],
@@ -89,6 +107,7 @@
       "icon": "build/icon.icns"
     },
     "linux": {
+      "artifactName": "StarMade-Launcher.${ext}",
       "target": [
         {
           "target": "AppImage",

@@ -169,7 +169,7 @@ function assertWithin(parentDir: string, childPath: string): void {
 export function sanitizeModFileName(fileNameRaw: string, fallbackBaseName = 'mod-download'): string {
   const withoutPath = fileNameRaw.replace(/[\\/]/g, ' ').trim();
   const base = withoutPath.length > 0 ? withoutPath : fallbackBaseName;
-  const sanitized = base.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  const sanitized = base.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '');
   return sanitized.toLowerCase().endsWith('.jar') ? sanitized : `${sanitized || fallbackBaseName}.jar`;
 }
 

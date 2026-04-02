@@ -29,9 +29,6 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Upgrade npm
-        run: npm install -g npm@11
-
       - name: Install dependencies
         run: npm ci
 
@@ -45,14 +42,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-builds
-          path: |
-            release/*.exe
-            release/*.zip
+          path: release/StarMade-Launcher.exe
           retention-days: 7
 
-  # ─── Build for macOS ──────────────────────────────────────────────────────
-  build-macos:
-    name: Build macOS
+  # ─── Build for macOS (Apple Silicon) ──────────────────────────────────────
+  build-macos-arm:
+    name: Build macOS (Apple Silicon)
     needs: test
     runs-on: macos-latest
     steps:
@@ -65,14 +60,11 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Upgrade npm
-        run: npm install -g npm@11
-
       - name: Install dependencies
         run: npm ci
 
       - name: Build Electron app
-        run: npm run electron:build
+        run: npm run build && node build-electron.mjs && npx electron-builder --mac --arm64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SMD_API_KEY: ${{ secrets.SMD_API_KEY }}
@@ -82,13 +74,51 @@ jobs:
           # APPLE_ID: ${{ secrets.APPLE_ID }}
           # APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
 
-      - name: Upload macOS artifacts
+      - name: Upload macOS ARM artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macos-builds
+          name: macos-arm-builds
           path: |
-            release/*.dmg
-            release/*.zip
+            release/StarMade-Launcher-macOS-arm64.dmg
+            release/StarMade-Launcher-macOS-arm64.zip
+          retention-days: 7
+
+  # ─── Build for macOS (Intel) ───────────────────────────────────────────────
+  build-macos-intel:
+    name: Build macOS (Intel)
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Electron app
+        run: npm run build && node build-electron.mjs && npx electron-builder --mac --x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SMD_API_KEY: ${{ secrets.SMD_API_KEY }}
+          # Uncomment if you have Apple Developer credentials for code signing:
+          # CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
+          # CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+
+      - name: Upload macOS Intel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-intel-builds
+          path: |
+            release/StarMade-Launcher-macOS-x64.dmg
+            release/StarMade-Launcher-macOS-x64.zip
           retention-days: 7
 
   # ─── Build for Linux ──────────────────────────────────────────────────────
@@ -106,9 +136,6 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Upgrade npm
-        run: npm install -g npm@11
-
       - name: Install dependencies
         run: npm ci
 
@@ -122,16 +149,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-builds
-          path: |
-            release/*.AppImage
-            release/*.deb
-            release/*.rpm
+          path: release/StarMade-Launcher.AppImage
           retention-days: 7
 
   # ─── Create Draft Release ─────────────────────────────────────────────────
   create-release:
     name: Create Draft Release
-    needs: [build-windows, build-macos, build-linux]
+    needs: [build-windows, build-macos-arm, build-macos-intel, build-linux]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -143,10 +167,16 @@ jobs:
           name: windows-builds
           path: artifacts/windows
 
-      - name: Download macOS artifacts
+      - name: Download macOS ARM artifacts
         uses: actions/download-artifact@v4
         with:
-          name: macos-builds
+          name: macos-arm-builds
+          path: artifacts/macos
+
+      - name: Download macOS Intel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-intel-builds
           path: artifacts/macos
 
       - name: Download Linux artifacts
@@ -194,9 +224,12 @@ jobs:
           ## StarMade Launcher v${{ steps.version.outputs.VERSION }}
 
           ### Downloads
-          - **Windows:** \`StarMade Launcher.exe\`
-          - **macOS:** \`StarMade Launcher.dmg\`
-          - **Linux:** \`StarMade Launcher.AppImage\`
+          - **Windows:** \`StarMade-Launcher.exe\`
+          - **macOS (Apple Silicon, installer):** \`StarMade-Launcher-macOS-arm64.dmg\`
+          - **macOS (Intel, installer):** \`StarMade-Launcher-macOS-x64.dmg\`
+          - **macOS (Apple Silicon, Steam/standalone):** \`StarMade-Launcher-macOS-arm64.zip\`
+          - **macOS (Intel, Steam/standalone):** \`StarMade-Launcher-macOS-x64.zip\`
+          - **Linux:** \`StarMade-Launcher.AppImage\`
 
           ### Installation
           1. Download the appropriate file for your platform
@@ -248,7 +281,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Artifacts Built" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Windows (x64)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ macOS (x64 + ARM64)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ macOS (Apple Silicon / arm64)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ macOS (Intel / x64)" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Linux (x64)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
@@ -256,4 +290,3 @@ jobs:
           echo "2. Test the builds on each platform" >> $GITHUB_STEP_SUMMARY
           echo "3. Update release notes if needed" >> $GITHUB_STEP_SUMMARY
           echo "4. Publish the release when ready" >> $GITHUB_STEP_SUMMARY
-

@@ -226,7 +226,7 @@ const GameLogViewer: React.FC<GameLogViewerProps> = ({
     }
     
     try {
-      await window.launcher.game.openLogLocation?.(installationId);
+      await window.launcher.game.openLogLocation?.(installationPath);
     } catch (error) {
       console.error('Failed to open log location:', error);
     }

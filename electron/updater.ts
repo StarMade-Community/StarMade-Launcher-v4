@@ -53,7 +53,7 @@ export interface UpdateInfo {
   downloadUrl: string;
   /** Direct download URL for the platform-appropriate installer asset, if found. */
   assetUrl?: string;
-  /** Display name of the asset (e.g. "StarMade Launcher.exe"). */
+  /** Display name of the asset (e.g. "StarMade-Launcher.exe"). */
   assetName?: string;
   /** Whether this release is a GitHub pre-release. */
   isPreRelease?: boolean;
@@ -100,7 +100,6 @@ function pickAsset(
   const plat = process.platform;
 
   if (plat === 'win32') {
-    // Prefer NSIS .exe; fall back to any .exe
     return assets.find(a => /\.exe$/i.test(a.name)) ?? undefined;
   }
 
@@ -318,8 +317,8 @@ export async function downloadUpdate(
  * • Windows portable .exe → wait for the current process to exit via a
  *                           PowerShell helper script, copy the new exe over
  *                           the current one, then relaunch.
- * • Linux AppImage     → make executable, replace the running binary with
- *                         the new one (via a shell wrapper), then relaunch.
+ * • Linux AppImage        → make executable, replace the running binary with
+ *                           the new one (via a shell wrapper), then relaunch.
  * • macOS              → opens the GitHub releases page in the browser so
  *                         the user can download the DMG manually (code-signing
  *                         is required for silent DMG install and is not yet
@@ -344,10 +343,8 @@ export async function installUpdate(installerPath: string): Promise<void> {
         throw new Error(`Downloaded update file is missing: ${installerPath}`);
       }
 
-      // The Windows build is a portable executable — there is no installer to
-      // run silently.  Instead, write a PowerShell helper script that waits
-      // for the current process to exit, copies the new exe over the current
-      // one, then relaunches it.
+      // Write a PowerShell helper script that waits for the current process to
+      // exit, copies the new exe over the current one, then relaunches it.
       //
       // Paths are passed via environment variables to avoid any shell-injection
       // risk from special characters in file paths.  A random suffix on the
