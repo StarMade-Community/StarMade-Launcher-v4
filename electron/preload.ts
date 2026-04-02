@@ -359,6 +359,8 @@ const launcherApi = {
       sshPort?: number;
       sshKeyPath?: string;
       sshPassword?: string;
+      screenSessionName?: string;
+      serverRootPath?: string;
     }): Promise<{
       success: boolean;
       status?: {
@@ -488,6 +490,87 @@ const launcherApi = {
     },
   },
   } : {}),
+
+  remoteFiles: {
+    setSession: (payload: {
+      serverId: string;
+      protocol: 'ftp' | 'sftp';
+      host: string;
+      port: number;
+      username: string;
+      password?: string;
+      sshKeyPath?: string;
+      rootPath: string;
+    }): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.REMOTE_FILES_SET_SESSION, payload),
+
+    clearSession: (serverId: string): Promise<void> =>
+      ipcRenderer.invoke(IPC.REMOTE_FILES_CLEAR_SESSION, serverId),
+
+    listFiles: (serverId: string, relPath: string): Promise<Array<{
+      name: string;
+      relativePath: string;
+      isDirectory: boolean;
+      sizeBytes: number;
+      isEditableText: boolean;
+      nonEditableReason?: string;
+    }>> => ipcRenderer.invoke(IPC.REMOTE_FILES_LIST, serverId, relPath),
+
+    readFile: (serverId: string, relPath: string, maxBytes?: number): Promise<{
+      content: string;
+      truncated: boolean;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.REMOTE_FILES_READ, serverId, relPath, maxBytes),
+
+    writeFile: (serverId: string, relPath: string, content: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.REMOTE_FILES_WRITE, serverId, relPath, content),
+
+    renameFile: (serverId: string, oldRelPath: string, newRelPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.REMOTE_FILES_RENAME, serverId, oldRelPath, newRelPath),
+
+    copyFile: (serverId: string, srcRelPath: string, dstRelPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.REMOTE_FILES_COPY, serverId, srcRelPath, dstRelPath),
+
+    moveFile: (serverId: string, srcRelPath: string, dstRelPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.REMOTE_FILES_MOVE, serverId, srcRelPath, dstRelPath),
+
+    deleteFile: (serverId: string, relPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.REMOTE_FILES_DELETE, serverId, relPath),
+
+    listServerConfigValues: (serverId: string): Promise<Array<{ key: string; value: string; comment: string | null }>> =>
+      ipcRenderer.invoke(IPC.REMOTE_FILES_SERVER_CFG_LIST, serverId),
+
+    writeServerConfigValue: (serverId: string, key: string, value: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.REMOTE_FILES_SERVER_CFG_SET, serverId, key, value),
+
+    readConfigXml: (serverId: string): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.REMOTE_FILES_CONFIG_XML_GET, serverId),
+
+    writeConfigXml: (serverId: string, xmlContent: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.REMOTE_FILES_CONFIG_XML_SET, serverId, xmlContent),
+
+    listLogFiles: (serverId: string): Promise<{
+      categories: Array<{
+        id: string;
+        label: string;
+        files: Array<{
+          fileName: string;
+          relativePath: string;
+          sizeBytes: number;
+          modifiedMs: number;
+          categoryId: string;
+          categoryLabel: string;
+        }>;
+      }>;
+      defaultRelativePath: string | null;
+    }> => ipcRenderer.invoke(IPC.REMOTE_FILES_LOG_LIST, serverId),
+
+    readLogFile: (serverId: string, relPath: string, maxBytes?: number): Promise<{
+      content: string;
+      truncated: boolean;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.REMOTE_FILES_LOG_READ, serverId, relPath, maxBytes),
+  },
 
   /** Dialog APIs (folder picker, etc.) */
   dialog: {

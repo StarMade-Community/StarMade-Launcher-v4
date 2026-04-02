@@ -41,6 +41,8 @@ import { parseVersionTxt } from './legacy.js';
 import { getManagedPathCandidates } from './install-paths.js';
 import { registerRemoteIpcHandlers } from './starmote-ipc.js';
 import { isStarmoteRolloutEnabled } from './starmote-feature-flag.js';
+import { RemoteFileBackend } from './remote-file-backend.js';
+import type { RemoteFileSession } from './remote-file-backend.js';
 import {
   listModsForInstallation,
   listSmdMods,
@@ -395,6 +397,192 @@ if (isStarmoteRolloutEnabled()) {
   });
 } else {
   console.info('[starmote] rollout disabled via STARMOTE_ENABLED=0');
+}
+
+// ─── Remote file access IPC handlers ─────────────────────────────────────────
+
+const remoteFileBackend = new RemoteFileBackend();
+
+ipcMain.handle(IPC.REMOTE_FILES_SET_SESSION, (_event, payload: RemoteFileSession) => {
+  try {
+    remoteFileBackend.setSession(payload);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.REMOTE_FILES_CLEAR_SESSION, (_event, serverId: string) => {
+  remoteFileBackend.clearSession(serverId);
+});
+
+ipcMain.handle(IPC.REMOTE_FILES_LIST, async (_event, serverId: string, remotePath: string) => {
+  return remoteFileBackend.listDirectory(serverId, remotePath);
+});
+
+ipcMain.handle(IPC.REMOTE_FILES_READ, async (_event, serverId: string, remotePath: string, maxBytes?: number) => {
+  return remoteFileBackend.readFile(serverId, remotePath, maxBytes);
+});
+
+ipcMain.handle(IPC.REMOTE_FILES_WRITE, async (_event, serverId: string, remotePath: string, content: string) => {
+  return remoteFileBackend.writeFile(serverId, remotePath, content);
+});
+
+ipcMain.handle(IPC.REMOTE_FILES_RENAME, async (_event, serverId: string, oldPath: string, newPath: string) => {
+  return remoteFileBackend.renameFile(serverId, oldPath, newPath);
+});
+
+ipcMain.handle(IPC.REMOTE_FILES_COPY, async (_event, serverId: string, srcPath: string, dstPath: string) => {
+  return remoteFileBackend.copyFile(serverId, srcPath, dstPath);
+});
+
+ipcMain.handle(IPC.REMOTE_FILES_MOVE, async (_event, serverId: string, srcPath: string, dstPath: string) => {
+  return remoteFileBackend.moveFile(serverId, srcPath, dstPath);
+});
+
+ipcMain.handle(IPC.REMOTE_FILES_DELETE, async (_event, serverId: string, remotePath: string) => {
+  return remoteFileBackend.deleteFile(serverId, remotePath);
+});
+
+ipcMain.handle(IPC.REMOTE_FILES_SERVER_CFG_LIST, async (_event, serverId: string) => {
+  const result = await remoteFileBackend.readFile(serverId, 'server.cfg');
+  if (result.error || !result.content) return [];
+  const lines = result.content.split(/\r?\n/);
+  const entries: Array<{ key: string; value: string; comment: string | null }> = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*(?:\/\/\s*(.*))?$/);
+    if (!match) continue;
+    const key = match[1].trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    entries.push({ key, value: (match[2] ?? '').trim(), comment: match[3]?.trim() || null });
+  }
+  return entries;
+});
+
+ipcMain.handle(IPC.REMOTE_FILES_SERVER_CFG_SET, async (_event, serverId: string, key: string, value: string) => {
+  const readResult = await remoteFileBackend.readFile(serverId, 'server.cfg');
+  if (readResult.error) return { success: false, error: readResult.error };
+
+  const lines = readResult.content.split(/\r?\n/);
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const lineRegex = new RegExp(`^(\\s*${escapedKey}\\s*=\\s*)(.*?)(\\s*(?:\\/\\/.*)?)$`);
+  let updated = false;
+  const nextLines = lines.map((line) => {
+    if (updated) return line;
+    const match = line.match(lineRegex);
+    if (!match) return line;
+    updated = true;
+    const prefix = match[1] ?? `${key} = `;
+    const suffix = match[3] ?? '';
+    return `${prefix}${value}${suffix}`;
+  });
+  if (!updated) nextLines.push(`${key} = ${value}`);
+
+  return remoteFileBackend.writeFile(serverId, 'server.cfg', nextLines.join('\n'));
+});
+
+ipcMain.handle(IPC.REMOTE_FILES_CONFIG_XML_GET, async (_event, serverId: string) => {
+  const candidates = ['GameConfig.xml', 'StarMade/GameConfig.xml'];
+  for (const candidate of candidates) {
+    const result = await remoteFileBackend.readFile(serverId, candidate);
+    if (!result.error && result.content) return result.content;
+  }
+  return null;
+});
+
+ipcMain.handle(IPC.REMOTE_FILES_CONFIG_XML_SET, async (_event, serverId: string, xmlContent: string) => {
+  const candidates = ['GameConfig.xml', 'StarMade/GameConfig.xml'];
+  for (const candidate of candidates) {
+    const check = await remoteFileBackend.readFile(serverId, candidate);
+    if (!check.error && check.content) {
+      return remoteFileBackend.writeFile(serverId, candidate, xmlContent);
+    }
+  }
+  return remoteFileBackend.writeFile(serverId, 'GameConfig.xml', xmlContent);
+});
+
+ipcMain.handle(IPC.REMOTE_FILES_LOG_LIST, async (_event, serverId: string) => {
+  let entries: Awaited<ReturnType<typeof remoteFileBackend.listDirectory>>;
+  try {
+    entries = await remoteFileBackend.listDirectory(serverId, 'logs');
+  } catch {
+    return { categories: [], defaultRelativePath: null };
+  }
+
+  const files = entries
+    .filter((entry) => !entry.isDirectory)
+    .filter((entry) => {
+      const lower = entry.name.toLowerCase();
+      return lower !== 'graphicsinfo.txt' && !lower.endsWith('.lck');
+    })
+    .map((entry) => {
+      const cat = remoteGetLogCategory(entry.name);
+      return {
+        fileName: entry.name,
+        relativePath: entry.name,
+        sizeBytes: entry.sizeBytes,
+        modifiedMs: 0,
+        categoryId: cat.id,
+        categoryLabel: cat.label,
+      };
+    });
+
+  const categoryMap = new Map<string, { id: string; label: string; files: typeof files }>();
+  for (const file of files) {
+    const existing = categoryMap.get(file.categoryId);
+    if (existing) {
+      existing.files.push(file);
+    } else {
+      categoryMap.set(file.categoryId, { id: file.categoryId, label: file.categoryLabel, files: [file] });
+    }
+  }
+
+  const categoryPriority: Record<string, number> = {
+    'starmade-rotated': 0,
+    'server-rotated': 1,
+    'launcher-session': 2,
+    'jvm-crash': 3,
+    other: 999,
+  };
+
+  const categories = Array.from(categoryMap.values()).sort((a, b) => {
+    const aPriority = a.id in categoryPriority ? categoryPriority[a.id] : 100;
+    const bPriority = b.id in categoryPriority ? categoryPriority[b.id] : 100;
+    if (aPriority !== bPriority) return aPriority - bPriority;
+    return a.label.localeCompare(b.label);
+  });
+
+  const newestStarMade = files
+    .filter((file) => /^logstarmade\.\d+\.log$/i.test(file.fileName))
+    .sort((a, b) => {
+      const aMatch = a.fileName.match(/^logstarmade\.(\d+)\.log$/i);
+      const bMatch = b.fileName.match(/^logstarmade\.(\d+)\.log$/i);
+      return (aMatch ? Number.parseInt(aMatch[1], 10) : Number.MAX_SAFE_INTEGER)
+        - (bMatch ? Number.parseInt(bMatch[1], 10) : Number.MAX_SAFE_INTEGER);
+    });
+
+  const defaultRelativePath = newestStarMade[0]?.relativePath ?? categories[0]?.files[0]?.relativePath ?? null;
+  return { categories, defaultRelativePath };
+});
+
+ipcMain.handle(IPC.REMOTE_FILES_LOG_READ, async (_event, serverId: string, relPath: string, maxBytes?: number) => {
+  const logRelPath = `logs/${relPath}`;
+  return remoteFileBackend.readFile(serverId, logRelPath, maxBytes);
+});
+
+function remoteGetLogCategory(fileName: string): { id: string; label: string } {
+  const lower = fileName.toLowerCase();
+  if (/^logstarmade\.\d+\.log$/i.test(fileName)) return { id: 'starmade-rotated', label: 'StarMade Rotated Logs (logstarmade.n.log)' };
+  if (/^starmade-.*\.log$/i.test(fileName)) return { id: 'launcher-session', label: 'Launcher Session Logs (starmade-*.log)' };
+  if (/^serverlog\.\d+\.log$/i.test(fileName)) return { id: 'server-rotated', label: 'Server Rotated Logs (serverlog.n.log)' };
+  if (/^hs_err_pid\d+\.log$/i.test(fileName)) return { id: 'jvm-crash', label: 'JVM Crash Dumps (hs_err_pid*.log)' };
+  if (lower.endsWith('.log')) {
+    const normalizedPattern = lower.replace(/\d+/g, 'n');
+    return { id: `pattern:${normalizedPattern}`, label: `${normalizedPattern}` };
+  }
+  return { id: 'other', label: 'Other Log Files' };
 }
 
 // ─── Store IPC handlers ───────────────────────────────────────────────────────

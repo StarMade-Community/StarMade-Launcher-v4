@@ -78,6 +78,10 @@ export interface RemoteConnectOptions {
   sshKeyPath?: string;
   /** SSH password. Used when no key is provided. Stored only in memory. */
   sshPassword?: string;
+  /** screen/tmux session name to target when injecting admin commands. */
+  screenSessionName?: string;
+  /** Absolute path to the StarMade server root on the remote host (e.g. /home/user/Servers/SOE). Used to locate the log file. */
+  serverRootPath?: string;
 }
 
 export interface RemoteConnectResult {

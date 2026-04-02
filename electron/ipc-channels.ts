@@ -359,6 +359,23 @@ export const IPC = {
    */
   AUTH_GET_STATUS: 'auth:get-status',
 
+  // ─── Remote file access ────────────────────────────────────────────────────
+  REMOTE_FILES_SET_SESSION: 'remote-files:set-session',
+  REMOTE_FILES_CLEAR_SESSION: 'remote-files:clear-session',
+  REMOTE_FILES_LIST: 'remote-files:list',
+  REMOTE_FILES_READ: 'remote-files:read',
+  REMOTE_FILES_WRITE: 'remote-files:write',
+  REMOTE_FILES_RENAME: 'remote-files:rename',
+  REMOTE_FILES_COPY: 'remote-files:copy',
+  REMOTE_FILES_MOVE: 'remote-files:move',
+  REMOTE_FILES_DELETE: 'remote-files:delete',
+  REMOTE_FILES_SERVER_CFG_LIST: 'remote-files:server-cfg-list',
+  REMOTE_FILES_SERVER_CFG_SET: 'remote-files:server-cfg-set',
+  REMOTE_FILES_CONFIG_XML_GET: 'remote-files:config-xml-get',
+  REMOTE_FILES_CONFIG_XML_SET: 'remote-files:config-xml-set',
+  REMOTE_FILES_LOG_LIST: 'remote-files:log-list',
+  REMOTE_FILES_LOG_READ: 'remote-files:log-read',
+
   // ─── StarMote remote control ───────────────────────────────────────────────
 
   /**

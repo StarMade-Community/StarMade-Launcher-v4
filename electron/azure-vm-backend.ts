@@ -33,6 +33,10 @@ interface AzureVmSession {
   sshKeyPath?: string;
   /** Password kept only in memory; never persisted or logged. */
   sshPassword?: string;
+  /** screen/tmux session name to target when injecting admin commands. */
+  screenSessionName?: string;
+  /** Absolute path to the StarMade server root on the remote host (used to locate the log file). */
+  serverRootPath?: string;
   state: 'connecting' | 'ready' | 'error';
   connectedAt: string;
   error?: string;
@@ -119,6 +123,8 @@ export class AzureVmBackend implements IRemoteBackend {
       sshPort = 22,
       sshKeyPath,
       sshPassword,
+      screenSessionName,
+      serverRootPath,
     } = options;
 
     // Replace any existing session cleanly
@@ -132,6 +138,8 @@ export class AzureVmBackend implements IRemoteBackend {
       username,
       sshKeyPath: sshKeyPath?.trim() || undefined,
       sshPassword: sshPassword || undefined,
+      screenSessionName: screenSessionName?.trim() || undefined,
+      serverRootPath: serverRootPath?.trim() || undefined,
       state: 'connecting',
       connectedAt: new Date().toISOString(),
     };
@@ -180,7 +188,35 @@ export class AzureVmBackend implements IRemoteBackend {
       return { success: false, error: 'Azure VM SSH session is not ready.', reasonCode: 'not_ready' };
     }
 
-    const result = await this.runOneShotSsh(session, payload.command, 30_000);
+    // StarMade server console commands (e.g. /server_message_broadcast) cannot be
+    // executed directly as shell commands over SSH — they must be injected into the
+    // running server process via screen or tmux.  Base64-encode the command so it
+    // survives quoting inside the remote shell.
+    const b64 = Buffer.from(payload.command, 'utf8').toString('base64');
+
+    // Build the list of session names to try: configured name first, then common defaults.
+    const configuredName = session.screenSessionName;
+    const sessionNamesToTry = configuredName
+      ? [configuredName]
+      : ['StarMade', 'starmade', 'sm'];
+
+    const screenAttempts = sessionNamesToTry.map(
+      (n) => `screen -S ${n} -X stuff "$CMD"$'\\n' 2>/dev/null && exit 0`,
+    );
+    const tmuxAttempts = sessionNamesToTry.map(
+      (n) => `tmux send-keys -t ${n} "$CMD" Enter 2>/dev/null && exit 0`,
+    );
+    const nameList = sessionNamesToTry.join(', ');
+
+    const deliveryScript = [
+      `CMD=$(printf '%s' '${b64}' | base64 -d)`,
+      ...screenAttempts,
+      ...tmuxAttempts,
+      `printf '%s\\n' "Cannot deliver command: no screen/tmux session named ${nameList} found. Set the Screen/tmux Session Name in the connect settings." >&2`,
+      `exit 1`,
+    ].join('; ');
+
+    const result = await this.runOneShotSsh(session, deliveryScript, 30_000);
     if (!result.ok) {
       return {
         success: false,
@@ -286,10 +322,21 @@ export class AzureVmBackend implements IRemoteBackend {
   private startLogStream(session: AzureVmSession): void {
     const { serverId } = session;
 
-    const logCommand =
-      'sudo journalctl -fu starmade --no-pager 2>/dev/null '
-      + '|| tail -F ~/server/logs/serverlog.0.log 2>/dev/null '
-      + '|| echo "[StarMade Launcher] No log stream configured — set up systemd or adjust the log path."';
+    // Build a list of candidate log file paths to tail, most specific first.
+    const logCandidates: string[] = [];
+    if (session.serverRootPath) {
+      // Single-quote the path to handle spaces; escape any embedded single quotes.
+      const safePath = `'${session.serverRootPath.replace(/'/g, "'\\''")}/logs/serverlog.0.log'`;
+      logCandidates.push(`tail -F ${safePath} 2>/dev/null`);
+    }
+    // Common fallback locations
+    logCandidates.push('tail -F ~/server/logs/serverlog.0.log 2>/dev/null');
+    logCandidates.push('tail -F ~/StarMade/logs/serverlog.0.log 2>/dev/null');
+    // systemd journal as last resort (captures Java output only when the service runs Java directly)
+    logCandidates.push('sudo journalctl -fu starmade --no-pager 2>/dev/null');
+    logCandidates.push('echo "[StarMade Launcher] No log stream configured — provide the server root path in the connect settings."');
+
+    const logCommand = logCandidates.join(' || ');
 
     const { cmd, args, opts } = buildSpawnConfig(session, logCommand);
     const proc = spawn(cmd, args, opts);

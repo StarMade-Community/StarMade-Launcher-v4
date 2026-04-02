@@ -132,3 +132,12 @@ export function isServerUpdateSupported(server: ManagedItem | null | undefined):
   return !!server && !server.isRemote;
 }
 
+export function hasRemoteSshAccess(server: ManagedItem | null | undefined): boolean {
+  return server?.isRemote === true && server?.remoteBackend === 'azure-vm';
+}
+
+export function hasRemoteFileAccessConfigured(server: ManagedItem | null | undefined): boolean {
+  return server?.isRemote === true &&
+    (server?.remoteFileAccessProtocol === 'ftp' || server?.remoteFileAccessProtocol === 'sftp');
+}
+

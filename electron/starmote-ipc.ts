@@ -156,6 +156,9 @@ export function registerRemoteIpcHandlers(options: RegisterRemoteIpcOptions): vo
         const sshPassword = payload?.sshPassword || undefined;
         const username = payload?.username?.trim() || 'azureuser';
 
+        const screenSessionName = (payload as { screenSessionName?: string })?.screenSessionName?.trim() || undefined;
+        const serverRootPath = (payload as { serverRootPath?: string })?.serverRootPath?.trim() || undefined;
+
         const connectResult = await azureVmBackend.connect({
           serverId,
           backend: 'azure-vm',
@@ -165,6 +168,8 @@ export function registerRemoteIpcHandlers(options: RegisterRemoteIpcOptions): vo
           sshPort,
           sshKeyPath,
           sshPassword,
+          screenSessionName,
+          serverRootPath,
         });
 
         if (connectResult.success) {

@@ -627,8 +627,12 @@ const parseChatLogLine = (rawLine: string, channelId: string): ChatMessage | nul
   const trimmed = rawLine.trim();
   if (!trimmed) return null;
 
+  // Strip optional syslog/journalctl prefix (e.g. "Apr 02 22:19:53 hostname java[pid]: ")
+  // so the StarMade log format (MM/DD/YYYY - HH:MM:SS [...]: ...) can be matched regardless of source.
+  const line = trimmed.replace(/^\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+\S+:\s*/, '');
+
   // Direct message: [sender -> receiver]
-  const dmMatch = trimmed.match(/^([\d/]+ - [\d:]+)\s+\[([^\]]+)\s+->\s+([^\]]+)\]:\s*(.*)$/);
+  const dmMatch = line.match(/^([\d/]+ - [\d:]+)\s+\[([^\]]+)\s+->\s+([^\]]+)\]:\s*(.*)$/);
   if (dmMatch) {
     return {
       timestamp: dmMatch[1],
@@ -640,7 +644,7 @@ const parseChatLogLine = (rawLine: string, channelId: string): ChatMessage | nul
   }
 
   // Channel message: [sender]: text
-  const channelMatch = trimmed.match(/^([\d/]+ - [\d:]+)\s+\[([^\]]+)\]:\s*(.*)$/);
+  const channelMatch = line.match(/^([\d/]+ - [\d:]+)\s+\[([^\]]+)\]:\s*(.*)$/);
   if (channelMatch) {
     return {
       timestamp: channelMatch[1],
@@ -1977,6 +1981,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [chatAutoScroll, setChatAutoScroll] = useState(true);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
+  const skipFileSessionResetRef = useRef(false);
   const playerMessageInputRef = useRef<HTMLInputElement>(null);
   const chatChannelsRef = useRef<ChatChannelInfo[]>([]);
   const playersListCollectionRef = useRef<PlayersListCollection | null>(null);
@@ -2015,6 +2020,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [azureVmSshPortInput, setAzureVmSshPortInput] = useState('22');
   const [azureVmSshKeyPathInput, setAzureVmSshKeyPathInput] = useState('');
   const [azureVmSshPasswordInput, setAzureVmSshPasswordInput] = useState('');
+  const [azureVmScreenSessionInput, setAzureVmScreenSessionInput] = useState('');
+  const [remoteFileAccessPasswordInput, setRemoteFileAccessPasswordInput] = useState('');
+  const [isRemoteFileSessionActive, setIsRemoteFileSessionActive] = useState(false);
   const [remoteFileAccessProtocolInput, setRemoteFileAccessProtocolInput] = useState<RemoteFileAccessProtocol>('none');
   const [remoteFileAccessHostInput, setRemoteFileAccessHostInput] = useState('');
   const [remoteFileAccessPortInput, setRemoteFileAccessPortInput] = useState('');
@@ -2100,6 +2108,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const hasGameApi = typeof window !== 'undefined' && !!window.launcher?.game;
   const starmoteApi = typeof window !== 'undefined' ? window.launcher?.starmote : undefined;
   const hasStarmoteApi = !!starmoteApi;
+  const remoteFilesApi = typeof window !== 'undefined' ? window.launcher?.remoteFiles : undefined;
+  const hasRemoteFilesApi = !!remoteFilesApi;
   const hasDownloadApi = typeof window !== 'undefined' && !!window.launcher?.download;
   const hasStoreApi = typeof window !== 'undefined' && !!window.launcher?.store;
   const isPoppedOutPanel = typeof window !== 'undefined'
@@ -2244,6 +2254,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     isRemoteReady: remoteConnectionStatus?.isReady,
   });
   const isRemoteCommandRuntimeReady = isRemoteServerProfile && canExecuteRemoteCommandActions;
+  const isRemoteFileSessionEnabled = isRemoteServerProfile && hasRemoteFilesApi && isRemoteFileSessionActive;
+  const isRemoteLogsEnabled = isRemoteServerProfile && isAzureVmBackend(effectiveServer);
   const isCommandRuntimeReady = isRemoteServerProfile
     ? isRemoteCommandRuntimeReady
     : lifecycleState === 'running';
@@ -2269,12 +2281,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setAzureVmSshPortInput(server?.azureVmSshPort?.trim() || '22');
       setAzureVmSshKeyPathInput(server?.azureVmSshKeyPath?.trim() || '');
       setAzureVmSshPasswordInput('');
+      setAzureVmScreenSessionInput(server?.azureVmScreenSession?.trim() || '');
     } else {
       setRemoteConnectPortInput(server?.port?.trim() || serverPortInput || '4242');
       setRemoteConnectUsernameInput(activeAccount?.name?.trim() || '');
       setAzureVmSshPortInput('22');
       setAzureVmSshKeyPathInput('');
       setAzureVmSshPasswordInput('');
+      setAzureVmScreenSessionInput('');
     }
 
     setRemoteFileAccessProtocolInput(nextFileProtocol);
@@ -2282,6 +2296,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setRemoteFileAccessPortInput(server?.remoteFileAccessPort?.trim() || getDefaultRemoteFileAccessPort(nextFileProtocol));
     setRemoteFileAccessUsernameInput(server?.remoteFileAccessUsername?.trim() || '');
     setRemoteFileAccessRootPathInput(server?.remoteFileAccessRootPath?.trim() || '/');
+    setRemoteFileAccessPasswordInput('');
     setRemoteConnectError(null);
   }, [activeAccount?.name, serverConfigValues.SERVER_LISTEN_IP, serverPortInput]);
 
@@ -2378,6 +2393,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             sshPort: parsedPort,
             sshKeyPath: azureVmSshKeyPathInput.trim() || undefined,
             sshPassword: azureVmSshPasswordInput || undefined,
+            screenSessionName: azureVmScreenSessionInput.trim() || undefined,
+            serverRootPath: nextRemoteFileRootPath.trim() || undefined,
           }
         : {
             serverId: targetServer.id,
@@ -2403,6 +2420,29 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         setRemoteConnectionStatus(connectResult.status);
       }
 
+      if (nextRemoteFileProtocol !== 'none' && remoteFilesApi) {
+        const fileHost = nextRemoteFileHost || host;
+        const filePort = Number.parseInt(
+          nextRemoteFilePort || (nextRemoteFileProtocol === 'sftp' ? '22' : '21'), 10,
+        );
+        const fileResult = await remoteFilesApi.setSession({
+          serverId: targetServer.id,
+          protocol: nextRemoteFileProtocol as 'ftp' | 'sftp',
+          host: fileHost,
+          port: filePort,
+          username: nextRemoteFileUsername || username || 'anonymous',
+          password: nextRemoteFileProtocol === 'sftp'
+            ? (azureVmSshPasswordInput || undefined)
+            : (remoteFileAccessPasswordInput || undefined),
+          sshKeyPath: nextRemoteFileProtocol === 'sftp' ? (azureVmSshKeyPathInput.trim() || undefined) : undefined,
+          rootPath: nextRemoteFileRootPath || '/',
+        });
+        if (fileResult?.success === true) {
+          skipFileSessionResetRef.current = true;
+        }
+        setIsRemoteFileSessionActive(fileResult?.success === true);
+      }
+
       // Persist updated profile fields
       const updatedItem: ManagedItem = {
         ...targetServer,
@@ -2420,6 +2460,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         updatedItem.azureVmSshPort = String(parsedPort);
         updatedItem.azureVmSshKeyPath = azureVmSshKeyPathInput.trim() || undefined;
         updatedItem.azureVmSshUsername = username || 'azureuser';
+        updatedItem.azureVmScreenSession = azureVmScreenSessionInput.trim() || undefined;
       } else {
         updatedItem.port = String(parsedPort);
       }
@@ -2452,7 +2493,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     remoteConnectPortInput,
     remoteBackendInput,
     azureVmSshKeyPathInput,
+    azureVmScreenSessionInput,
     remoteFileAccessHostInput,
+    remoteFileAccessPasswordInput,
     remoteFileAccessPortInput,
     remoteFileAccessProtocolInput,
     remoteFileAccessRootPathInput,
@@ -2462,6 +2505,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     updateServerItem,
     viewingServerId,
     starmoteApi,
+    remoteFilesApi,
   ]);
 
   const handleRemoteDisconnect = useCallback(async () => {
@@ -2469,6 +2513,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setIsRemoteDisconnectPending(true);
     setRemoteConnectError(null);
     try {
+      if (remoteFilesApi && effectiveServer) {
+        await remoteFilesApi.clearSession(effectiveServer.id);
+      }
+      setIsRemoteFileSessionActive(false);
       const result = await starmoteApi.disconnect(effectiveServer.id);
       if (!result.success) {
         setRemoteConnectError(result.error ?? 'Failed to disconnect remote session.');
@@ -2479,7 +2527,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setIsRemoteDisconnectPending(false);
     }
-  }, [canShowRemoteConnectControls, effectiveServer, hasStarmoteApi, isRemoteDisconnectPending, refreshRemoteConnectionStatus, starmoteApi]);
+  }, [canShowRemoteConnectControls, effectiveServer, hasStarmoteApi, isRemoteDisconnectPending, refreshRemoteConnectionStatus, remoteFilesApi, starmoteApi]);
 
   useEffect(() => {
     void refreshRemoteConnectionStatus();
@@ -2502,6 +2550,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     if (!isRemoteServerProfile) return;
     setLifecycleState(isRemoteCommandRuntimeReady ? 'running' : 'stopped');
   }, [isRemoteCommandRuntimeReady, isRemoteServerProfile]);
+
+  useEffect(() => {
+    if (skipFileSessionResetRef.current) {
+      skipFileSessionResetRef.current = false;
+      return;
+    }
+    setIsRemoteFileSessionActive(false);
+  }, [effectiveServer?.id]);
 
   const allLogFiles = useMemo(() => {
     return logCategories
@@ -2635,7 +2691,45 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, []);
 
   const reloadLogCatalog = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi) {
+    if (!effectiveServer) {
+      setLogCategories([]);
+      setSelectedLogRelativePath(null);
+      setLogPath(null);
+      return;
+    }
+
+    if (isRemoteLogsEnabled && isRemoteFileSessionEnabled && remoteFilesApi) {
+      setIsLogListLoading(true);
+      setLogLoadError(null);
+      try {
+        const catalog = await remoteFilesApi.listLogFiles(effectiveServer.id);
+        setLogCategories(catalog.categories);
+        const knownPaths = new Set(catalog.categories.flatMap((category) => category.files.map((file) => file.relativePath)));
+        knownPaths.add(LIVE_PROCESS_LOG_PATH);
+        const fallback = catalog.defaultRelativePath ?? LIVE_PROCESS_LOG_PATH;
+        const currentSelection = selectedLogRelativePathRef.current;
+        const nextSelected = currentSelection && knownPaths.has(currentSelection) ? currentSelection : fallback;
+        setSelectedLogRelativePath(nextSelected ?? null);
+        setLogPath(nextSelected ? (nextSelected === LIVE_PROCESS_LOG_PATH ? 'process output (live)' : `logs/${nextSelected}`) : null);
+      } catch (error) {
+        setLogCategories([]);
+        setSelectedLogRelativePath(LIVE_PROCESS_LOG_PATH);
+        setLogPath('process output (live)');
+        setLogLoadError(`Failed to list remote log files: ${String(error)}`);
+      } finally {
+        setIsLogListLoading(false);
+      }
+      return;
+    }
+
+    if (isRemoteLogsEnabled && !isRemoteFileSessionEnabled) {
+      setLogCategories([]);
+      setSelectedLogRelativePath(LIVE_PROCESS_LOG_PATH);
+      setLogPath('process output (live)');
+      return;
+    }
+
+    if (!hasGameApi) {
       setLogCategories([]);
       setSelectedLogRelativePath(null);
       setLogPath(null);
@@ -2667,7 +2761,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setIsLogListLoading(false);
     }
-  }, [effectiveServer, hasGameApi]);
+  }, [effectiveServer, hasGameApi, isRemoteLogsEnabled, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   // ─── Chat callbacks ──────────────────────────────────────────────────────────
 
@@ -2771,6 +2865,18 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     setChatInput('');
     setChatError(null);
+
+    // If the input starts with /, treat it as a raw server command.
+    if (text.startsWith('/')) {
+      setChatInput('');
+      setChatError(null);
+      try {
+        await sendServerCommandOrThrow(text);
+      } catch (error) {
+        setChatError(String(error));
+      }
+      return;
+    }
 
     const channel = chatChannels.find((c) => c.channelId === selectedChatChannelId);
     let command: string;
@@ -2993,7 +3099,27 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [effectiveServer?.id]);
 
   const readFactionConfigXmlFromInstallation = useCallback(async (): Promise<{ content: string; relativePath: string; error?: string }> => {
-    if (!effectiveServer || !hasGameApi) {
+    if (!effectiveServer) {
+      return { content: '', relativePath: FACTION_CONFIG_PATH_CANDIDATES[0], error: 'Server context unavailable.' };
+    }
+
+    if (isRemoteFileSessionEnabled && remoteFilesApi) {
+      let firstError: string | undefined;
+      for (const relativePath of FACTION_CONFIG_PATH_CANDIDATES) {
+        const payload = await remoteFilesApi.readFile(effectiveServer.id, relativePath);
+        if (!payload.error) {
+          return { content: payload.content ?? '', relativePath };
+        }
+        if (!firstError) firstError = payload.error;
+      }
+      return {
+        content: '',
+        relativePath: FACTION_CONFIG_PATH_CANDIDATES[0],
+        error: firstError ?? `Could not find faction config template (${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}).`,
+      };
+    }
+
+    if (!hasGameApi) {
       return { content: '', relativePath: FACTION_CONFIG_PATH_CANDIDATES[0], error: 'Server context unavailable.' };
     }
 
@@ -3011,10 +3137,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       relativePath: FACTION_CONFIG_PATH_CANDIDATES[0],
       error: firstError ?? `Could not find faction config template (${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}).`,
     };
-  }, [effectiveServer, hasGameApi]);
+  }, [effectiveServer, hasGameApi, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   const writeFactionConfigXmlToInstallation = useCallback(async (content: string): Promise<{ success: boolean; relativePath?: string; error?: string }> => {
-    if (!effectiveServer || !hasGameApi) {
+    if (!effectiveServer) {
       return { success: false, error: 'Server context unavailable.' };
     }
 
@@ -3022,6 +3148,25 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       factionConfigRelativePath,
       ...FACTION_CONFIG_PATH_CANDIDATES.filter((path) => path !== factionConfigRelativePath),
     ];
+
+    if (isRemoteFileSessionEnabled && remoteFilesApi) {
+      let firstError: string | undefined;
+      for (const relativePath of uniqueCandidates) {
+        const result = await remoteFilesApi.writeFile(effectiveServer.id, relativePath, content);
+        if (result.success) {
+          return { success: true, relativePath };
+        }
+        if (!firstError) firstError = result.error;
+      }
+      return {
+        success: false,
+        error: firstError ?? `Could not write faction config template (${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}).`,
+      };
+    }
+
+    if (!hasGameApi) {
+      return { success: false, error: 'Server context unavailable.' };
+    }
 
     let firstError: string | undefined;
     for (const relativePath of uniqueCandidates) {
@@ -3036,14 +3181,52 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       success: false,
       error: firstError ?? `Could not write faction config template (${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}).`,
     };
-  }, [effectiveServer, factionConfigRelativePath, hasGameApi]);
+  }, [effectiveServer, factionConfigRelativePath, hasGameApi, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   useEffect(() => {
     void reloadLogCatalog();
   }, [reloadLogCatalog]);
 
   const reloadServerConfigValues = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi) {
+    if (!effectiveServer) {
+      setConfigFields(serverConfigSchemaFields);
+      setServerConfigValues(serverConfigDefaults);
+      return;
+    }
+
+    if (isRemoteFileSessionEnabled && remoteFilesApi) {
+      setIsConfigLoading(true);
+      try {
+        const cfgEntries: ServerConfigEntry[] = await remoteFilesApi.listServerConfigValues(effectiveServer.id);
+        const discoveredFields: ServerConfigField[] = cfgEntries
+          .filter((entry) => !serverConfigFieldKeys.has(entry.key))
+          .map((entry) => ({
+            key: entry.key,
+            label: humanizeServerConfigKey(entry.key),
+            description: entry.comment || 'Discovered key from server.cfg.',
+            category: 'advanced' as ServerConfigCategory,
+            type: inferServerConfigFieldType(entry.value),
+            defaultValue: entry.value,
+          }))
+          .sort((a, b) => a.key.localeCompare(b.key));
+        const nextFields = [...serverConfigSchemaFields, ...discoveredFields];
+        const valueMap: Record<string, string> = Object.fromEntries(nextFields.map((field) => [field.key, field.defaultValue]));
+        for (const entry of cfgEntries) {
+          valueMap[entry.key] = entry.value;
+        }
+        setConfigFields(nextFields);
+        setServerConfigValues(valueMap);
+      } catch (error) {
+        console.warn('[ServerPanel] Failed to load remote configuration values from server.cfg:', error);
+        setConfigFields(serverConfigSchemaFields);
+        setServerConfigValues(serverConfigDefaults);
+      } finally {
+        setIsConfigLoading(false);
+      }
+      return;
+    }
+
+    if (!hasGameApi) {
       setConfigFields(serverConfigSchemaFields);
       setServerConfigValues(serverConfigDefaults);
       return;
@@ -3083,6 +3266,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [
     effectiveServer,
     hasGameApi,
+    isRemoteFileSessionEnabled,
+    remoteFilesApi,
     serverConfigDefaults,
     serverConfigFieldKeys,
     serverConfigSchemaFields,
@@ -3118,7 +3303,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   useEffect(() => {
     if (activeConfigTab !== 'game-config-xml') return;
-    if (!effectiveServer || !hasGameApi) return;
+    if (!effectiveServer) return;
+    if (!hasGameApi && !isRemoteFileSessionEnabled) return;
     if (gameConfigLoadedServerId === effectiveServer.id) return;
 
     let cancelled = false;
@@ -3127,7 +3313,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     const loadGameConfigXml = async () => {
       try {
-        const content = await window.launcher.game.readGameConfigXml(effectiveServer.path);
+        let content: string | null;
+        if (isRemoteFileSessionEnabled && remoteFilesApi) {
+          content = await remoteFilesApi.readConfigXml(effectiveServer.id);
+        } else {
+          content = await window.launcher.game.readGameConfigXml(effectiveServer.path);
+        }
         if (cancelled) return;
 
         const next = content ?? '';
@@ -3150,7 +3341,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     return () => {
       cancelled = true;
     };
-  }, [activeConfigTab, effectiveServer, gameConfigLoadedServerId, hasGameApi, hydrateGameConfigState]);
+  }, [activeConfigTab, effectiveServer, gameConfigLoadedServerId, hasGameApi, hydrateGameConfigState, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   const hydrateFactionConfigState = useCallback((xmlContent: string, options?: { keepDrafts?: boolean }) => {
     const parsed = extractFactionConfigFields(
@@ -3223,25 +3414,32 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   ]);
 
   const loadFileDirectory = useCallback(async (relativeDir = '') => {
-    if (!effectiveServer || !hasGameApi) return;
+    if (!effectiveServer) return;
 
     setIsFileBrowserLoading(true);
     try {
-      const entries = await window.launcher.game.listInstallationFiles(effectiveServer.path, relativeDir);
-      setFileEntriesByDir((prev) => ({ ...prev, [relativeDir]: entries }));
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        const rawEntries = await remoteFilesApi.listFiles(effectiveServer.id, relativeDir);
+        const entries: InstallationFileEntry[] = rawEntries.map((e) => ({ ...e, modifiedMs: 0 }));
+        setFileEntriesByDir((prev) => ({ ...prev, [relativeDir]: entries }));
+      } else if (hasGameApi) {
+        const entries = await window.launcher.game.listInstallationFiles(effectiveServer.path, relativeDir);
+        setFileEntriesByDir((prev) => ({ ...prev, [relativeDir]: entries }));
+      }
     } catch (error) {
       setFileTabError(`Failed to list files in ${relativeDir || '/'}: ${String(error)}`);
     } finally {
       setIsFileBrowserLoading(false);
     }
-  }, [effectiveServer, hasGameApi]);
+  }, [effectiveServer, hasGameApi, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   useEffect(() => {
     if (activeTab !== 'files') return;
-    if (!effectiveServer || !hasGameApi) return;
+    if (!effectiveServer) return;
+    if (!hasGameApi && !isRemoteFileSessionEnabled) return;
     if (fileEntriesByDir['']) return;
     void loadFileDirectory('');
-  }, [activeTab, effectiveServer, fileEntriesByDir, hasGameApi, loadFileDirectory]);
+  }, [activeTab, effectiveServer, fileEntriesByDir, hasGameApi, isRemoteFileSessionEnabled, loadFileDirectory]);
 
   const toggleFileDirectory = useCallback((relativeDir: string) => {
     setExpandedFileDirs((prev) => {
@@ -3258,7 +3456,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [fileEntriesByDir, loadFileDirectory]);
 
   const openFileInTab = useCallback(async (entry: InstallationFileEntry) => {
-    if (!effectiveServer || !hasGameApi) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled)) return;
 
     if (!entry.isEditableText) {
       const errorPath = entry.relativePath;
@@ -3280,7 +3478,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setFileTabError(null);
     setFileTabErrorPath(null);
     try {
-      const payload = await window.launcher.game.readInstallationFile(effectiveServer.path, relativePath);
+      let payload: { content: string; error?: string };
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        payload = await remoteFilesApi.readFile(effectiveServer.id, relativePath);
+      } else {
+        payload = await window.launcher.game.readInstallationFile(effectiveServer.path, relativePath);
+      }
       if (payload.error) {
         setFileTabError(`Failed to open ${relativePath}: ${payload.error}`);
         setFileTabErrorPath(relativePath);
@@ -3295,7 +3498,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setIsFileEditorLoading(false);
     }
-  }, [effectiveServer, fileContentByPath, hasGameApi]);
+  }, [effectiveServer, fileContentByPath, hasGameApi, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   const closeFileTab = useCallback((relativePath: string) => {
     setOpenFileTabs((prev) => {
@@ -3316,13 +3519,18 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, []);
 
   const reloadActiveFileTab = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || !activeFileTabPath) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled) || !activeFileTabPath) return;
 
     setIsFileEditorLoading(true);
     setFileTabError(null);
     setFileTabErrorPath(null);
     try {
-      const payload = await window.launcher.game.readInstallationFile(effectiveServer.path, activeFileTabPath);
+      let payload: { content: string; error?: string };
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        payload = await remoteFilesApi.readFile(effectiveServer.id, activeFileTabPath);
+      } else {
+        payload = await window.launcher.game.readInstallationFile(effectiveServer.path, activeFileTabPath);
+      }
       if (payload.error) {
         setFileTabError(`Failed to reload ${activeFileTabPath}: ${payload.error}`);
         setFileTabErrorPath(activeFileTabPath);
@@ -3336,17 +3544,22 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setIsFileEditorLoading(false);
     }
-  }, [activeFileTabPath, effectiveServer, hasGameApi]);
+  }, [activeFileTabPath, effectiveServer, hasGameApi, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   const saveActiveFileTab = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || !activeFileTabPath || isFileSaving) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled) || !activeFileTabPath || isFileSaving) return;
 
     setIsFileSaving(true);
     setFileTabError(null);
     setFileTabErrorPath(null);
     try {
       const content = fileContentByPath[activeFileTabPath] ?? '';
-      const result = await window.launcher.game.writeInstallationFile(effectiveServer.path, activeFileTabPath, content);
+      let result: { success: boolean; error?: string };
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        result = await remoteFilesApi.writeFile(effectiveServer.id, activeFileTabPath, content);
+      } else {
+        result = await window.launcher.game.writeInstallationFile(effectiveServer.path, activeFileTabPath, content);
+      }
       if (!result.success) {
         setFileTabError(result.error ?? `Failed to save ${activeFileTabPath}.`);
         setFileTabErrorPath(activeFileTabPath);
@@ -3360,7 +3573,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setIsFileSaving(false);
     }
-  }, [activeFileTabPath, effectiveServer, fileContentByPath, hasGameApi, isFileSaving]);
+  }, [activeFileTabPath, effectiveServer, fileContentByPath, hasGameApi, isFileSaving, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   const closeFileContextMenu = useCallback(() => {
     setFileContextMenu(null);
@@ -3488,7 +3701,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [closeFileContextMenu, effectiveServer]);
 
   const renameFileTarget = useCallback(async (target: FileActionTarget, closeMenu = true) => {
-    if (!effectiveServer || !hasGameApi) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled)) return;
 
     const promptedName = window.prompt(`Rename "${target.name}" to:`, target.name);
     if (promptedName === null) {
@@ -3505,29 +3718,47 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     setFileTabError(null);
     try {
-      const result = await window.launcher.game.renameInstallationPath(
-        effectiveServer.path,
-        target.path,
-        nextName,
-      );
-      if (!result.success || !result.oldRelativePath || !result.newRelativePath) {
-        setFileTabError(result.error ?? `Failed to rename ${target.name}.`);
-        return;
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        const parentDir = getRelativeParentDir(target.path);
+        const newRelPath = parentDir ? `${parentDir}/${nextName}` : nextName;
+        const result = await remoteFilesApi.renameFile(effectiveServer.id, target.path, newRelPath);
+        if (!result.success) {
+          setFileTabError(result.error ?? `Failed to rename ${target.name}.`);
+          return;
+        }
+        remapOpenFilePaths(target.path, newRelPath, target.isDirectory);
+        if (fileClipboard && fileClipboard.sourcePath === target.path) {
+          setFileClipboard((prev) => {
+            if (!prev || prev.sourcePath !== target.path) return prev;
+            return { ...prev, sourcePath: newRelPath, sourceName: nextName };
+          });
+        }
+        await refreshFileBrowserAfterMutation([parentDir, parentDir]);
+      } else {
+        const result = await window.launcher.game.renameInstallationPath(
+          effectiveServer.path,
+          target.path,
+          nextName,
+        );
+        if (!result.success || !result.oldRelativePath || !result.newRelativePath) {
+          setFileTabError(result.error ?? `Failed to rename ${target.name}.`);
+          return;
+        }
+
+        remapOpenFilePaths(result.oldRelativePath, result.newRelativePath, target.isDirectory);
+
+        if (fileClipboard && fileClipboard.sourcePath === result.oldRelativePath) {
+          setFileClipboard((prev) => {
+            if (!prev || prev.sourcePath !== result.oldRelativePath) return prev;
+            return { ...prev, sourcePath: result.newRelativePath, sourceName: nextName };
+          });
+        }
+
+        await refreshFileBrowserAfterMutation([
+          getRelativeParentDir(result.oldRelativePath),
+          getRelativeParentDir(result.newRelativePath),
+        ]);
       }
-
-      remapOpenFilePaths(result.oldRelativePath, result.newRelativePath, target.isDirectory);
-
-      if (fileClipboard && fileClipboard.sourcePath === result.oldRelativePath) {
-        setFileClipboard((prev) => {
-          if (!prev || prev.sourcePath !== result.oldRelativePath) return prev;
-          return { ...prev, sourcePath: result.newRelativePath, sourceName: nextName };
-        });
-      }
-
-      await refreshFileBrowserAfterMutation([
-        getRelativeParentDir(result.oldRelativePath),
-        getRelativeParentDir(result.newRelativePath),
-      ]);
     } catch (error) {
       setFileTabError(`Failed to rename ${target.name}: ${String(error)}`);
     } finally {
@@ -3538,12 +3769,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     effectiveServer,
     fileClipboard,
     hasGameApi,
+    isRemoteFileSessionEnabled,
+    remoteFilesApi,
     refreshFileBrowserAfterMutation,
     remapOpenFilePaths,
   ]);
 
   const deleteFileTarget = useCallback(async (target: FileActionTarget, closeMenu = true) => {
-    if (!effectiveServer || !hasGameApi) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled)) return;
 
     const targetLabel = target.isDirectory ? 'folder' : 'file';
     const shouldDelete = window.confirm(`Delete ${targetLabel} "${target.name}"? This cannot be undone.`);
@@ -3554,21 +3787,34 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     setFileTabError(null);
     try {
-      const result = await window.launcher.game.deleteInstallationPath(effectiveServer.path, target.path);
-      if (!result.success || !result.deletedRelativePath) {
-        setFileTabError(result.error ?? `Failed to delete ${target.name}.`);
-        return;
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        const result = await remoteFilesApi.deleteFile(effectiveServer.id, target.path);
+        if (!result.success) {
+          setFileTabError(result.error ?? `Failed to delete ${target.name}.`);
+          return;
+        }
+        removeFilePathsFromTabs(target.path);
+        if (fileClipboard && isSamePathOrChild(fileClipboard.sourcePath, target.path)) {
+          setFileClipboard(null);
+        }
+        await refreshFileBrowserAfterMutation([getRelativeParentDir(target.path)]);
+      } else {
+        const result = await window.launcher.game.deleteInstallationPath(effectiveServer.path, target.path);
+        if (!result.success || !result.deletedRelativePath) {
+          setFileTabError(result.error ?? `Failed to delete ${target.name}.`);
+          return;
+        }
+
+        removeFilePathsFromTabs(result.deletedRelativePath);
+
+        if (fileClipboard && isSamePathOrChild(fileClipboard.sourcePath, result.deletedRelativePath)) {
+          setFileClipboard(null);
+        }
+
+        await refreshFileBrowserAfterMutation([
+          getRelativeParentDir(result.deletedRelativePath),
+        ]);
       }
-
-      removeFilePathsFromTabs(result.deletedRelativePath);
-
-      if (fileClipboard && isSamePathOrChild(fileClipboard.sourcePath, result.deletedRelativePath)) {
-        setFileClipboard(null);
-      }
-
-      await refreshFileBrowserAfterMutation([
-        getRelativeParentDir(result.deletedRelativePath),
-      ]);
     } catch (error) {
       setFileTabError(`Failed to delete ${target.name}: ${String(error)}`);
     } finally {
@@ -3579,12 +3825,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     effectiveServer,
     fileClipboard,
     hasGameApi,
+    isRemoteFileSessionEnabled,
+    remoteFilesApi,
     refreshFileBrowserAfterMutation,
     removeFilePathsFromTabs,
   ]);
 
   const pasteIntoDestinationDir = useCallback(async (destinationDir: string, closeMenu = true) => {
-    if (!effectiveServer || !hasGameApi || !fileClipboard) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled) || !fileClipboard) return;
 
     if (fileClipboard.sourceServerId !== effectiveServer.id) {
       setFileTabError('Paste is only supported within the same server installation.');
@@ -3594,6 +3842,29 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     setFileTabError(null);
     try {
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        const srcName = fileClipboard.sourcePath.split('/').pop() ?? fileClipboard.sourceName;
+        const dstRelPath = destinationDir ? `${destinationDir}/${srcName}` : srcName;
+        if (fileClipboard.mode === 'copy') {
+          const result = await remoteFilesApi.copyFile(effectiveServer.id, fileClipboard.sourcePath, dstRelPath);
+          if (!result.success) {
+            setFileTabError(result.error ?? `Failed to copy ${fileClipboard.sourceName}.`);
+            return;
+          }
+          await refreshFileBrowserAfterMutation([destinationDir]);
+          return;
+        }
+        const result = await remoteFilesApi.moveFile(effectiveServer.id, fileClipboard.sourcePath, dstRelPath);
+        if (!result.success) {
+          setFileTabError(result.error ?? `Failed to move ${fileClipboard.sourceName}.`);
+          return;
+        }
+        remapOpenFilePaths(fileClipboard.sourcePath, dstRelPath, fileClipboard.isDirectory);
+        setFileClipboard(null);
+        await refreshFileBrowserAfterMutation([getRelativeParentDir(fileClipboard.sourcePath), destinationDir]);
+        return;
+      }
+
       if (fileClipboard.mode === 'copy') {
         const result = await window.launcher.game.copyInstallationPath(
           effectiveServer.path,
@@ -3636,6 +3907,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     effectiveServer,
     fileClipboard,
     hasGameApi,
+    isRemoteFileSessionEnabled,
+    remoteFilesApi,
     refreshFileBrowserAfterMutation,
     remapOpenFilePaths,
   ]);
@@ -3797,7 +4070,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   useEffect(() => {
     let cancelled = false;
 
-    if (!effectiveServer || !hasGameApi || !selectedLogRelativePath) {
+    if (!effectiveServer || !selectedLogRelativePath) {
       setLogs([]);
       setIsLogFileTruncated(false);
       setIsLogFileLoading(false);
@@ -3812,13 +4085,27 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       return;
     }
 
+    if (!isRemoteLogsEnabled && !hasGameApi) {
+      setLogs([]);
+      setIsLogFileTruncated(false);
+      setIsLogFileLoading(false);
+      return;
+    }
+
     setIsLogFileLoading(true);
     setLogLoadError(null);
     setLogPath(`logs/${selectedLogRelativePath}`);
 
     const loadLogFile = async () => {
       try {
-        const payload = await window.launcher.game.readLogFile(effectiveServer.path, selectedLogRelativePath);
+        let payload: { content: string; truncated: boolean; error?: string };
+        if (isRemoteLogsEnabled && isRemoteFileSessionEnabled && remoteFilesApi) {
+          payload = await remoteFilesApi.readLogFile(effectiveServer.id, selectedLogRelativePath);
+        } else if (hasGameApi) {
+          payload = await window.launcher.game.readLogFile(effectiveServer.path, selectedLogRelativePath);
+        } else {
+          return;
+        }
         if (cancelled) return;
 
         if (payload.error) {
@@ -3853,7 +4140,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     return () => {
       cancelled = true;
     };
-  }, [effectiveServer, hasGameApi, selectedLogRelativePath]);
+  }, [effectiveServer, hasGameApi, isRemoteLogsEnabled, isRemoteFileSessionEnabled, remoteFilesApi, selectedLogRelativePath]);
 
   useEffect(() => {
     if (autoScroll && logContainerRef.current) {
@@ -4355,8 +4642,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     dbTimeoutRef.current = window.setTimeout(() => {
       if (!pendingDbRequestRef.current) return;
       clearPendingDatabaseSql();
-      setDatabaseSqlError('Timed out (15 s) waiting for SQL response in server log.');
-    }, 15_000);
+      setDatabaseSqlError('Timed out (30 s) waiting for SQL response in server log.');
+    }, 30000);
   }, [canExecuteRemoteCommandActions, clearPendingDatabaseSql, effectiveServer, hasGameApi, hasStarmoteApi, isCommandRuntimeReady, isRemoteServerProfile, sendServerCommandOrThrow]);
 
   const loadDatabaseEntities = useCallback(async () => {
@@ -4490,7 +4777,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         : next.slice(next.length - LOG_BUFFER_CAP);
     });
 
-    const playerNameMatch = message.match(/\[PL\]\s+Name:\s*(.+)$/i);
+    // Strip optional syslog/journalctl prefix so pattern matching works regardless of log source.
+    const line = message.replace(/^\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+\S+:\s*/, '');
+
+    const playerNameMatch = line.match(/\[PL\]\s+Name:\s*(.+)$/i);
     if (playerNameMatch) {
       const playerName = playerNameMatch[1].trim();
       if (playerName) {
@@ -4516,13 +4806,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     const pending = pendingDbRequestRef.current;
     if (!pending) return;
 
-    if (message.includes('YOU DO NOT HAVE PERMISSIONS TO DO SQL QUERIES')) {
+    if (line.includes('YOU DO NOT HAVE PERMISSIONS TO DO SQL QUERIES')) {
       clearPendingDatabaseSql();
       setDatabaseSqlError('Permission denied. Add your name to SQL_PERMISSION in server.cfg.');
       return;
     }
 
-    const beginMatch = message.match(/SQL QUERY\s+(\d+)\s+BEGIN/i);
+    const beginMatch = line.match(/SQL QUERY\s+(\d+)\s+BEGIN/i);
     if (beginMatch) {
       const rid = Number.parseInt(beginMatch[1], 10);
       dbLinesByRequestRef.current.set(rid, []);
@@ -4534,7 +4824,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       return;
     }
 
-    const rowMatch = message.match(/(?:^|\s)SQL#(\d+):\s*(.*)$/);
+    const rowMatch = line.match(/(?:^|\s)SQL#(\d+):\s*(.*)$/);
     if (rowMatch) {
       const rid = Number.parseInt(rowMatch[1], 10);
       const lines = dbLinesByRequestRef.current.get(rid) ?? [];
@@ -4543,7 +4833,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       return;
     }
 
-    const endMatch = message.match(/SQL QUERY\s+(\d+)\s+END/i);
+    const endMatch = line.match(/SQL QUERY\s+(\d+)\s+END/i);
     if (!endMatch) return;
 
     const rid = Number.parseInt(endMatch[1], 10);
@@ -5322,7 +5612,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   ]);
 
   const saveGameConfigField = useCallback(async (field: GameConfigField, explicitValue?: string) => {
-    if (!effectiveServer || !hasGameApi || savingGameConfigPath || savingGameConfigToggleId) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled) || savingGameConfigPath || savingGameConfigToggleId) return;
 
     const currentRaw = explicitValue ?? gameConfigValues[field.path] ?? field.defaultValue;
     const validation = getGameConfigFieldValidation(field, currentRaw);
@@ -5354,7 +5644,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
       target.textContent = sanitized;
       const serialized = new XMLSerializer().serializeToString(doc);
-      const result = await window.launcher.game.writeGameConfigXml(effectiveServer.path, serialized);
+      let result: { success: boolean; error?: string };
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        result = await remoteFilesApi.writeConfigXml(effectiveServer.id, serialized);
+      } else {
+        result = await window.launcher.game.writeGameConfigXml(effectiveServer.path, serialized);
+      }
       if (!result.success) {
         setGameConfigError(result.error ?? `Failed to save ${field.label} to GameConfig.xml.`);
         return;
@@ -5367,7 +5662,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setSavingGameConfigPath(null);
     }
-  }, [effectiveServer, gameConfigValues, gameConfigXmlText, hasGameApi, hydrateGameConfigState, savingGameConfigPath, savingGameConfigToggleId]);
+  }, [effectiveServer, gameConfigValues, gameConfigXmlText, hasGameApi, hydrateGameConfigState, isRemoteFileSessionEnabled, remoteFilesApi, savingGameConfigPath, savingGameConfigToggleId]);
 
   const saveFactionConfigField = useCallback(async (field: FactionConfigField, explicitValue?: string) => {
     if (!effectiveServer || !hasGameApi || savingFactionConfigPath) return;
@@ -5475,14 +5770,23 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [effectiveServer, isSavingServerPort, serverPortInput, updateServerItem]);
 
   const persistServerCfgValue = useCallback(async (key: string, value: string): Promise<boolean> => {
-    if (!effectiveServer || !hasGameApi) return false;
+    if (!effectiveServer) return false;
+    if (isRemoteFileSessionEnabled && remoteFilesApi) {
+      const result = await remoteFilesApi.writeServerConfigValue(effectiveServer.id, key, value);
+      if (!result.success) {
+        setActionError(result.error ?? `Failed to save ${key} in server.cfg.`);
+        return false;
+      }
+      return true;
+    }
+    if (!hasGameApi) return false;
     const result = await window.launcher.game.writeServerConfigValue(effectiveServer.path, key, value);
     if (!result.success) {
       setActionError(result.error ?? `Failed to save ${key} in server.cfg.`);
       return false;
     }
     return true;
-  }, [effectiveServer, hasGameApi]);
+  }, [effectiveServer, hasGameApi, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   const saveConfigField = useCallback(async (field: ServerConfigField, explicitValue?: string) => {
     if (savingConfigKey) return;
@@ -5974,6 +6278,22 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                     />
                   </label>
                 </div>
+
+                <div>
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-gray-300">Screen/tmux Session Name</span>
+                    <input
+                      value={azureVmScreenSessionInput}
+                      onChange={(event) => setAzureVmScreenSessionInput(event.target.value)}
+                      disabled={isRemoteConnectPending}
+                      placeholder="StarMade  (auto-detected if blank)"
+                      className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                    />
+                  </label>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Name of the screen or tmux session running the StarMade server process. Used when sending admin commands.
+                  </p>
+                </div>
               </div>
             )}
 
@@ -6036,6 +6356,20 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 />
               </label>
             </div>
+
+            {remoteFileAccessProtocolInput === 'ftp' && (
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-300">FTP Password</span>
+                <input
+                  type="password"
+                  value={remoteFileAccessPasswordInput}
+                  onChange={(event) => setRemoteFileAccessPasswordInput(event.target.value)}
+                  disabled={isRemoteConnectPending}
+                  placeholder="Leave blank for anonymous"
+                  className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                />
+              </label>
+            )}
 
             <label className="block text-sm">
               <span className="mb-1 block text-gray-300">Remote Root Path</span>
@@ -7152,12 +7486,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           </button>
           <button
             onClick={() => { void handleClearLogs(); }}
-            disabled={!effectiveServer || !hasGameApi || isClearingLogFiles}
+            disabled={!effectiveServer || !hasGameApi || isClearingLogFiles || isRemoteServerProfile}
             className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isClearingLogFiles ? 'Clearing...' : 'Delete Log Files'}
           </button>
-          <button onClick={() => { void handleOpenLogFolder(); }} className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600">
+          <button onClick={() => { void handleOpenLogFolder(); }} disabled={isRemoteServerProfile} className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60">
             Open Folder
           </button>
           <button onClick={handleExportLogs} className="rounded-md bg-starmade-accent px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-starmade-accent/80">
@@ -7852,7 +8186,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                       ? 'Select a channel first...'
                       : !isCommandRuntimeReady
                         ? (isRemoteServerProfile ? 'Remote session not ready...' : 'Server not running...')
-                        : `Message ${selectedChannel?.channelLabel ?? selectedChatChannelId}...`
+                        : `Message or /command...`
                   }
                   disabled={!selectedChatChannelId || !isCommandRuntimeReady}
                   className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-starmade-accent disabled:cursor-not-allowed disabled:opacity-50"
@@ -7866,9 +8200,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 </button>
               </div>
               <p className="mt-1.5 text-[11px] text-gray-600">
-                Messages are sent as server broadcasts using{' '}
-                <code className="text-gray-500">/server_message_broadcast plain</code>{' '}
-                (or <code className="text-gray-500">/server_message_to</code> for DMs).
+                Messages are broadcast via{' '}
+                <code className="text-gray-500">/server_message_broadcast plain</code>.
+                {' '}Input starting with <code className="text-gray-500">/</code> is sent as a raw server command.
                 {isRemoteServerProfile ? ' Remote profiles currently show command-sent chat history only.' : ''}
               </p>
             </div>
@@ -8165,10 +8499,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   );
 
   const renderActiveTab = () => {
-    if (isRemoteServerProfile && REMOTE_UNSUPPORTED_TABS.includes(activeTab)) {
+    const isTabUnsupported = isRemoteServerProfile && (
+      (activeTab === 'logs' && !isRemoteLogsEnabled) ||
+      (activeTab === 'configuration' && !isRemoteFileSessionEnabled) ||
+      (activeTab === 'files' && !isRemoteFileSessionEnabled)
+    );
+    if (isTabUnsupported) {
       return renderPlaceholderTab(
         `${tabItems.find((tab) => tab.id === activeTab)?.label ?? 'Tab'} unavailable for remote profiles`,
-        'This tab currently depends on local installation files/log streams. Use Dashboard, Actions, Chat, and Database while connected through StarMote.',
+        activeTab === 'logs'
+          ? 'SSH (Azure VM) connection required to view logs.'
+          : 'FTP or SFTP file access must be configured and connected.',
       );
     }
 
@@ -8191,7 +8532,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
             {tabItems.map((tab) => {
-              const isDisabledForRemote = isRemoteServerProfile && REMOTE_UNSUPPORTED_TABS.includes(tab.id);
+              const isDisabledForRemote = isRemoteServerProfile && (
+                (tab.id === 'logs' && !isRemoteLogsEnabled) ||
+                (tab.id === 'configuration' && !isRemoteFileSessionEnabled) ||
+                (tab.id === 'files' && !isRemoteFileSessionEnabled)
+              );
               return (
                 <button
                   key={tab.id}
@@ -8200,7 +8545,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                     setActiveTab(tab.id);
                   }}
                   disabled={isDisabledForRemote}
-                  title={isDisabledForRemote ? 'This tab is not available for remote profiles yet.' : undefined}
+                  title={isDisabledForRemote ? (tab.id === 'logs' ? 'SSH (Azure VM) connection required.' : 'FTP or SFTP file access must be configured and connected.') : undefined}
                   className={`rounded-md border px-3 py-1.5 text-sm font-semibold transition-colors ${
                     activeTab === tab.id
                       ? 'border-starmade-accent bg-starmade-accent/20 text-white'

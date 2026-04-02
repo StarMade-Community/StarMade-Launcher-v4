@@ -67,6 +67,8 @@ export interface ManagedItem {
   azureVmSshKeyPath?: string;
   /** Linux username on the Azure VM (e.g. 'azureuser'). */
   azureVmSshUsername?: string;
+  /** screen/tmux session name to target when sending admin commands (e.g. 'StarMade'). */
+  azureVmScreenSession?: string;
   /** Optional remote file-access protocol used later for file/config access on remote servers. */
   remoteFileAccessProtocol?: 'none' | 'ftp' | 'sftp';
   /** Optional host for remote file access. Defaults to the remote server host when omitted. */
