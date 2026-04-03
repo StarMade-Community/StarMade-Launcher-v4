@@ -6,7 +6,7 @@
  * WHY THIS IS NEEDED
  * ==================
  * Chromium's SUID sandbox check happens at the C++ level, during browser-process
- * initialisation, *before* V8 starts and before any JavaScript runs.  By the time
+ * initialization, *before* V8 starts and before any JavaScript runs.  By the time
  * main.js executes and calls `app.commandLine.appendSwitch('no-sandbox')`, the
  * process has already tried (and fatally failed) to verify that chrome-sandbox
  * has mode 4755 / is owned by root.

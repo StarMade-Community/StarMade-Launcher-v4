@@ -56,6 +56,29 @@ export interface ManagedItem {
   serverIp?: string;
   /** Optional default/max player cap for server installs. */
   maxPlayers?: number;
+  /** True when this server entry is a remote profile (no local install/download path). */
+  isRemote?: boolean;
+  /** Which remote connection backend to use. Defaults to 'starmote' when omitted. */
+  remoteBackend?: 'starmote' | 'azure-vm';
+  // ── Azure VM / SSH backend fields ──────────────────────────────────────────
+  /** SSH port on the Azure VM (default 22). */
+  azureVmSshPort?: string;
+  /** Path to the SSH private key file used to authenticate with the Azure VM. */
+  azureVmSshKeyPath?: string;
+  /** Linux username on the Azure VM (e.g. 'azureuser'). */
+  azureVmSshUsername?: string;
+  /** screen/tmux session name to target when sending admin commands (e.g. 'StarMade'). */
+  azureVmScreenSession?: string;
+  /** Optional remote file-access protocol used later for file/config access on remote servers. */
+  remoteFileAccessProtocol?: 'none' | 'ftp' | 'sftp';
+  /** Optional host for remote file access. Defaults to the remote server host when omitted. */
+  remoteFileAccessHost?: string;
+  /** Optional port for remote file access. */
+  remoteFileAccessPort?: string;
+  /** Optional username for remote file access. */
+  remoteFileAccessUsername?: string;
+  /** Optional remote root path for file/config browsing. */
+  remoteFileAccessRootPath?: string;
   /** CDN build path (e.g. `./build/starmade-build_20231020_123456`). Set when a version is chosen from the live manifest. */
   buildPath?: string;
   /** True once the game files have been downloaded and verified. Undefined for legacy/mock items (treated as installed). */

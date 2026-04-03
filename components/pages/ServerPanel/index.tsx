@@ -4,6 +4,24 @@ import ConfigPanel, { type ConfigPanelModel } from '../../common/ConfigPanel';
 import { useData } from '../../../contexts/DataContext';
 import { useApp } from '../../../contexts/AppContext';
 import type { ManagedItem, ServerLifecycleState, ServerLogLevel } from '../../../types';
+import {
+  buildDatabaseEntityListSql,
+  formatDatabaseEntityType,
+  getDefaultRemoteFileAccessPort,
+  isRemoteCommandActionEnabled,
+  isRemoteConnectSupported,
+  isServerUpdateSupported,
+  matchesDatabaseSectorLoadFilter,
+  resolveDefaultRemoteConnectHost,
+  resolveDefaultRemoteFileAccessHost,
+  shouldAutoLoadDatabaseEntities,
+  getRemoteBackendLabel,
+  getDefaultRemoteConnectPort,
+  isAzureVmBackend,
+  type DatabaseSectorLoadFilter,
+  type RemoteFileAccessProtocol,
+  type RemoteBackendType,
+} from '../../../utils/serverPanel';
 
 interface ServerPanelProps {
   serverId?: string;
@@ -11,6 +29,7 @@ interface ServerPanelProps {
 }
 
 type ServerPanelTab = 'control' | 'actions' | 'logs' | 'chat' | 'configuration' | 'files' | 'database';
+const REMOTE_UNSUPPORTED_TABS: ServerPanelTab[] = ['logs', 'configuration', 'files'];
 const CONFIG_EDITOR_TABS = [
   { id: 'server-cfg', label: 'server.cfg' },
   { id: 'game-config-xml', label: 'GameConfig.xml' },
@@ -75,6 +94,20 @@ interface ChatChannelInfo {
   channelType: 'general' | 'faction' | 'direct' | 'custom';
   sizeBytes: number;
   modifiedMs: number;
+}
+
+interface RemoteConnectionStatus {
+  serverId: string;
+  backend?: 'starmote' | 'azure-vm';
+  connected: boolean;
+  state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
+  isReady?: boolean;
+  host?: string;
+  port?: number;
+  username?: string;
+  connectedAt?: string;
+  error?: string;
+  reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed';
 }
 
 const GENERAL_CHANNEL_ID = 'all';
@@ -204,6 +237,7 @@ interface DatabaseEntityRow {
   x: number;
   y: number;
   z: number;
+  sectorLoaded: boolean;
 }
 
 interface PendingDatabaseSqlRequest {
@@ -236,7 +270,8 @@ interface DraggedQuickAction {
   actionId: ServerActionId;
 }
 
-const LOG_BUFFER_CAP = 30000;
+const LOG_BUFFER_CAP = 5000;
+const LOG_DISPLAY_LIMIT = 500;
 const LIVE_PROCESS_LOG_PATH = '__live_process_output__';
 const DASHBOARD_STORE_KEY = 'serverPanelDashboardLayoutsV2';
 const MIN_GROUP_HEIGHT = 260;
@@ -550,8 +585,9 @@ const parseDatabaseEntities = (table: DatabaseSqlTable): DatabaseEntityRow[] => 
   const xIdx   = getDbColIdx(table.columns, 'X');
   const yIdx   = getDbColIdx(table.columns, 'Y');
   const zIdx   = getDbColIdx(table.columns, 'Z');
+  const sectorLoadedIdx = getDbColIdx(table.columns, 'SECTOR_LOADED');
 
-  if ([idIdx, uidIdx, nmIdx, tyIdx, faIdx, xIdx, yIdx, zIdx].some((i) => i < 0)) return [];
+  if ([idIdx, uidIdx, nmIdx, tyIdx, faIdx, xIdx, yIdx, zIdx, sectorLoadedIdx].some((i) => i < 0)) return [];
 
   const result: DatabaseEntityRow[] = [];
   for (const row of table.rows) {
@@ -559,6 +595,7 @@ const parseDatabaseEntities = (table: DatabaseSqlTable): DatabaseEntityRow[] => 
     const y = Number.parseInt(row[yIdx] ?? '', 10);
     const z = Number.parseInt(row[zIdx] ?? '', 10);
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    const sectorLoadedValue = (row[sectorLoadedIdx] ?? '').trim().toLowerCase();
     result.push({
       id: row[idIdx] ?? '',
       uid: row[uidIdx] ?? '',
@@ -566,18 +603,14 @@ const parseDatabaseEntities = (table: DatabaseSqlTable): DatabaseEntityRow[] => 
       typeValue: row[tyIdx] ?? 'Unknown',
       factionValue: row[faIdx] ?? '0',
       x, y, z,
+      sectorLoaded: sectorLoadedValue === 'true' || sectorLoadedValue === '1',
     });
   }
   return result;
 };
 
-/** The default entity-browser query — joins on SECTORS to only show non-transient (loaded) sectors */
-const DATABASE_ENTITY_LIST_SQL =
-  'SELECT e.ID, e.UID, e.NAME, e.TYPE, e.FACTION, e.X, e.Y, e.Z ' +
-  'FROM ENTITIES e ' +
-  'JOIN SECTORS s ON s.X = e.X AND s.Y = e.Y AND s.Z = e.Z ' +
-  'WHERE s.TRANSIENT = FALSE ' +
-  'ORDER BY e.X, e.Y, e.Z, e.NAME';
+/** The default entity-browser query — includes all sectors and marks each row as loaded/unloaded. */
+const DATABASE_ENTITY_LIST_SQL = buildDatabaseEntityListSql();
 
 const DATABASE_CMD_BY_MODE: Record<DatabaseSqlMode, string> = {
   query:      'sql_query',
@@ -595,8 +628,12 @@ const parseChatLogLine = (rawLine: string, channelId: string): ChatMessage | nul
   const trimmed = rawLine.trim();
   if (!trimmed) return null;
 
+  // Strip optional syslog/journalctl prefix (e.g. "Apr 02 22:19:53 hostname java[pid]: ")
+  // so the StarMade log format (MM/DD/YYYY - HH:MM:SS [...]: ...) can be matched regardless of source.
+  const line = trimmed.replace(/^\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+\S+:\s*/, '');
+
   // Direct message: [sender -> receiver]
-  const dmMatch = trimmed.match(/^([\d/]+ - [\d:]+)\s+\[([^\]]+)\s+->\s+([^\]]+)\]:\s*(.*)$/);
+  const dmMatch = line.match(/^([\d/]+ - [\d:]+)\s+\[([^\]]+)\s+->\s+([^\]]+)\]:\s*(.*)$/);
   if (dmMatch) {
     return {
       timestamp: dmMatch[1],
@@ -608,7 +645,7 @@ const parseChatLogLine = (rawLine: string, channelId: string): ChatMessage | nul
   }
 
   // Channel message: [sender]: text
-  const channelMatch = trimmed.match(/^([\d/]+ - [\d:]+)\s+\[([^\]]+)\]:\s*(.*)$/);
+  const channelMatch = line.match(/^([\d/]+ - [\d:]+)\s+\[([^\]]+)\]:\s*(.*)$/);
   if (channelMatch) {
     return {
       timestamp: channelMatch[1],
@@ -1169,14 +1206,27 @@ const inferFactionConfigCategory = (path: string, rules: FactionConfigCategoryRu
 };
 
 const parseGameConfigXmlDocument = (xmlContent: string): Document => {
+  if (!xmlContent?.trim()) {
+    throw new Error('XML content is empty.');
+  }
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlContent, 'application/xml');
   const parseError = doc.querySelector('parsererror');
   if (parseError) {
-    throw new Error('Invalid XML content.');
+    const detail = parseError.textContent?.trim() ?? 'Unknown parse error';
+    throw new Error(`Invalid XML content: ${detail}`);
   }
   return doc;
 };
+
+/**
+ * Serialize an XML Document to a string, stripping spurious `xmlns=""`
+ * declarations that Chromium's XMLSerializer injects onto elements imported
+ * from another Document via importNode().  StarMade's XML parser rejects
+ * these null-namespace declarations even though they are technically valid XML.
+ */
+const serializeXmlDoc = (node: Node): string =>
+  new XMLSerializer().serializeToString(node).replace(/ xmlns=""/g, '');
 
 const findElementByGameConfigPath = (doc: Document, path: string): Element | null => {
   const root = doc.documentElement;
@@ -1846,6 +1896,14 @@ interface PlayersListCollection {
   timeoutId: number;
 }
 
+interface RemoteCommandHistoryEntry {
+  id: number;
+  timestamp: string;
+  command: string;
+  success: boolean;
+  message: string;
+}
+
 const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [activeTab, setActiveTab] = useState<ServerPanelTab>('control');
   const [activeConfigTab, setActiveConfigTab] = useState<ConfigEditorTab>('server-cfg');
@@ -1937,6 +1995,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [chatAutoScroll, setChatAutoScroll] = useState(true);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
+  const skipFileSessionResetRef = useRef(false);
   const playerMessageInputRef = useRef<HTMLInputElement>(null);
   const chatChannelsRef = useRef<ChatChannelInfo[]>([]);
   const playersListCollectionRef = useRef<PlayersListCollection | null>(null);
@@ -1965,6 +2024,32 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [groupDropTarget, setGroupDropTarget] = useState<number | null>(null);
   const [quickActionDropTarget, setQuickActionDropTarget] = useState<number | null>(null);
   const [groupResizeDraft, setGroupResizeDraft] = useState<{ groupId: string; startY: number; startHeight: number } | null>(null);
+  const [isRemoteConnectModalOpen, setIsRemoteConnectModalOpen] = useState(false);
+  const [remoteConnectTargetServerId, setRemoteConnectTargetServerId] = useState<string>('');
+  const [remoteConnectNameInput, setRemoteConnectNameInput] = useState('');
+  const [remoteConnectHostInput, setRemoteConnectHostInput] = useState('');
+  const [remoteConnectPortInput, setRemoteConnectPortInput] = useState('4242');
+  const [remoteConnectUsernameInput, setRemoteConnectUsernameInput] = useState('');
+  const [remoteBackendInput, setRemoteBackendInput] = useState<RemoteBackendType>('starmote');
+  const [azureVmSshPortInput, setAzureVmSshPortInput] = useState('22');
+  const [azureVmSshKeyPathInput, setAzureVmSshKeyPathInput] = useState('');
+  const [azureVmSshPasswordInput, setAzureVmSshPasswordInput] = useState('');
+  const [azureVmScreenSessionInput, setAzureVmScreenSessionInput] = useState('');
+  const [remoteFileAccessPasswordInput, setRemoteFileAccessPasswordInput] = useState('');
+  const [isRemoteFileSessionActive, setIsRemoteFileSessionActive] = useState(false);
+  const [remoteFileAccessProtocolInput, setRemoteFileAccessProtocolInput] = useState<RemoteFileAccessProtocol>('none');
+  const [remoteFileAccessHostInput, setRemoteFileAccessHostInput] = useState('');
+  const [remoteFileAccessPortInput, setRemoteFileAccessPortInput] = useState('');
+  const [remoteFileAccessUsernameInput, setRemoteFileAccessUsernameInput] = useState('');
+  const [remoteFileAccessRootPathInput, setRemoteFileAccessRootPathInput] = useState('/');
+  const [remoteConnectError, setRemoteConnectError] = useState<string | null>(null);
+  const [isRemoteConnectPending, setIsRemoteConnectPending] = useState(false);
+  const [remoteConnectionStatus, setRemoteConnectionStatus] = useState<RemoteConnectionStatus | null>(null);
+  const [isRemoteDisconnectPending, setIsRemoteDisconnectPending] = useState(false);
+  const [remoteStatusesByServerId, setRemoteStatusesByServerId] = useState<Record<string, RemoteConnectionStatus>>({});
+  const [remoteCommandInput, setRemoteCommandInput] = useState<string>('');
+  const [isRemoteCommandSending, setIsRemoteCommandSending] = useState(false);
+  const [remoteCommandHistory, setRemoteCommandHistory] = useState<RemoteCommandHistoryEntry[]>([]);
 
   // ─── Database tab state ─────────────────────────────────────────────────────
   const [databaseSqlInput, setDatabaseSqlInput] = useState<string>(DATABASE_ENTITY_LIST_SQL);
@@ -1978,15 +2063,20 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [databaseEntities, setDatabaseEntities] = useState<DatabaseEntityRow[]>([]);
   const [databaseEntityTypeFilter, setDatabaseEntityTypeFilter] = useState<string>('all');
   const [databaseFactionFilter, setDatabaseFactionFilter] = useState<string>('all');
+  const [databaseSectorLoadFilter, setDatabaseSectorLoadFilter] = useState<DatabaseSectorLoadFilter>('all');
   const [databaseSortKey, setDatabaseSortKey] = useState<DatabaseSortKey>('name-asc');
+  const [databaseEntitySearchTerm, setDatabaseEntitySearchTerm] = useState<string>('');
+  const [databaseEntityPage, setDatabaseEntityPage] = useState(0);
   const [databaseClipboardMsg, setDatabaseClipboardMsg] = useState<string | null>(null);
+  const [databaseInspectEntity, setDatabaseInspectEntity] = useState<DatabaseEntityRow | null>(null);
 
+  const liveLogFlushRef = useRef<{ pending: LogEntry[]; timer: number | null }>({ pending: [], timer: null });
   const logContainerRef = useRef<HTMLDivElement>(null);
   const groupContainerRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const pendingDbRequestRef = useRef<PendingDatabaseSqlRequest | null>(null);
   const dbLinesByRequestRef = useRef<Map<number, string[]>>(new Map());
   const dbTimeoutRef = useRef<number | null>(null);
-
+  const databaseAutoLoadedServerIdsRef = useRef<Set<string>>(new Set());
   const { navigate } = useApp();
   const {
     servers,
@@ -1999,21 +2089,43 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     downloadStatuses,
   } = useData();
 
+  const [viewingServerId, setViewingServerId] = useState<string | null>(() => (
+    serverId ?? selectedServerId ?? null
+  ));
+
   useEffect(() => {
-    if (serverId && serverId !== selectedServerId) {
-      setSelectedServerId(serverId);
-    }
-  }, [serverId, selectedServerId, setSelectedServerId]);
+    setViewingServerId((previous) => {
+      if (previous && servers.some((server) => server.id === previous)) {
+        return previous;
+      }
+      if (serverId && servers.some((server) => server.id === serverId)) {
+        return serverId;
+      }
+      if (selectedServerId && servers.some((server) => server.id === selectedServerId)) {
+        return selectedServerId;
+      }
+      return servers[0]?.id ?? null;
+    });
+  }, [serverId, selectedServerId, servers]);
+
+  useEffect(() => {
+    if (!viewingServerId || viewingServerId === selectedServerId) return;
+    setSelectedServerId(viewingServerId);
+  }, [viewingServerId, selectedServerId, setSelectedServerId]);
 
   const effectiveServer = useMemo<ManagedItem | null>(() => {
-    if (serverId) {
-      return servers.find((server) => server.id === serverId) ?? selectedServer;
+    if (viewingServerId) {
+      return servers.find((server) => server.id === viewingServerId) ?? null;
     }
     return selectedServer;
-  }, [serverId, servers, selectedServer]);
+  }, [viewingServerId, servers, selectedServer]);
 
-  const effectiveServerName = serverName || effectiveServer?.name || 'Server';
+  const effectiveServerName = effectiveServer?.name || serverName || 'Server';
   const hasGameApi = typeof window !== 'undefined' && !!window.launcher?.game;
+  const starmoteApi = typeof window !== 'undefined' ? window.launcher?.starmote : undefined;
+  const hasStarmoteApi = !!starmoteApi;
+  const remoteFilesApi = typeof window !== 'undefined' ? window.launcher?.remoteFiles : undefined;
+  const hasRemoteFilesApi = !!remoteFilesApi;
   const hasDownloadApi = typeof window !== 'undefined' && !!window.launcher?.download;
   const hasStoreApi = typeof window !== 'undefined' && !!window.launcher?.store;
   const isPoppedOutPanel = typeof window !== 'undefined'
@@ -2031,6 +2143,437 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const serverDownloadStatus = effectiveServer ? downloadStatuses[effectiveServer.id] : undefined;
   const isUpdating = serverDownloadStatus?.state === 'checksums' || serverDownloadStatus?.state === 'downloading';
+
+  const refreshRemoteConnectionStatus = useCallback(async (targetServerId?: string): Promise<void> => {
+    if (!hasStarmoteApi || !starmoteApi) {
+      setRemoteConnectionStatus(null);
+      setRemoteStatusesByServerId({});
+      return;
+    }
+
+    try {
+      if (targetServerId) {
+        const result = await starmoteApi.getStatus(targetServerId);
+        const status = result.statuses.find((entry) => entry.serverId === targetServerId) ?? null;
+        if (status) {
+          setRemoteStatusesByServerId((previous) => ({ ...previous, [status.serverId]: status }));
+        }
+        const currentServerId = effectiveServer?.id;
+        if (!currentServerId) {
+          setRemoteConnectionStatus(status);
+        } else if (status?.serverId === currentServerId) {
+          setRemoteConnectionStatus(status);
+        }
+        return;
+      }
+
+      const result = await starmoteApi.getStatus();
+      const nextByServerId: Record<string, RemoteConnectionStatus> = {};
+      for (const status of result.statuses) {
+        nextByServerId[status.serverId] = status;
+      }
+      setRemoteStatusesByServerId(nextByServerId);
+      const currentServerId = effectiveServer?.id;
+      setRemoteConnectionStatus(currentServerId ? (nextByServerId[currentServerId] ?? null) : null);
+    } catch {
+      setRemoteConnectionStatus(null);
+    }
+  }, [effectiveServer?.id, hasStarmoteApi, starmoteApi]);
+
+  const hasConnectedRemoteByServerId = useMemo<Record<string, boolean>>(() => {
+    const flags: Record<string, boolean> = {};
+    for (const [serverId, status] of Object.entries(remoteStatusesByServerId)) {
+      flags[serverId] = !!status.connected;
+    }
+    return flags;
+  }, [remoteStatusesByServerId]);
+
+  const remoteConnectionDisplay = useMemo(() => {
+    if (remoteConnectionStatus?.state === 'connecting') {
+      return { label: 'Connecting', className: 'text-amber-300' };
+    }
+    if (remoteConnectionStatus?.state === 'authenticating') {
+      return { label: 'Authenticating', className: 'text-amber-300' };
+    }
+    if (remoteConnectionStatus?.state === 'ready' || remoteConnectionStatus?.isReady) {
+      return { label: 'Ready', className: 'text-emerald-300' };
+    }
+    if (remoteConnectionStatus?.connected) {
+      return { label: 'Connected', className: 'text-emerald-300' };
+    }
+    switch (remoteConnectionStatus?.reasonCode) {
+      case 'timeout':
+        return { label: 'Timed Out', className: 'text-red-300' };
+      case 'connect_failed':
+      case 'ssh_connect_failed':
+        return { label: 'Connect Failed', className: 'text-red-300' };
+      case 'ssh_command_failed':
+        return { label: 'Command Failed', className: 'text-red-300' };
+      case 'auth_failed':
+        return { label: 'Authentication Failed', className: 'text-red-300' };
+      case 'socket_error':
+        return { label: 'Connection Error', className: 'text-red-300' };
+      case 'protocol_timeout':
+        return { label: 'Handshake Timeout', className: 'text-red-300' };
+      case 'registry_unavailable':
+        return { label: 'Protocol Error', className: 'text-red-300' };
+      default:
+        return { label: 'Disconnected', className: 'text-gray-300' };
+    }
+  }, [remoteConnectionStatus]);
+
+  const remoteDiagnosticsHint = useMemo(() => {
+    const isAzureVm = remoteConnectionStatus?.backend === 'azure-vm';
+    switch (remoteConnectionStatus?.reasonCode) {
+      case 'timeout':
+      case 'connect_failed':
+      case 'ssh_connect_failed':
+        return isAzureVm
+          ? 'SSH connection failed. Verify host/IP, SSH port, and that your key or credentials are correct. Ensure port 22 is open in the Azure Network Security Group.'
+          : 'Verify host/port, firewall rules, and that the game server is listening for StarMote.';
+      case 'ssh_command_failed':
+        return 'SSH command failed on the remote VM. Check that you have sudo privileges and the command is valid.';
+      case 'auth_failed':
+        if (remoteConnectionStatus?.error?.toLowerCase().includes('whitelist')) {
+          return 'Authentication failed: this account is not on the server whitelist.';
+        }
+        if (remoteConnectionStatus?.error?.toLowerCase().includes('admin permissions')) {
+          return 'Authentication failed: this account does not have required server admin permissions.';
+        }
+        return 'Authentication failed; verify StarMade account login in the launcher and reconnect.';
+      case 'protocol_timeout':
+        return 'Socket connected but protocol setup timed out. Reconnect and check server-side StarMote compatibility.';
+      case 'registry_unavailable':
+        return 'Protocol registry did not initialize. Ensure server build matches expected command registry.';
+      case 'not_ready':
+        return 'Session is connected but not protocol-ready. Wait for Ready state before issuing commands.';
+      case 'send_failed':
+        return 'Command transfer failed mid-session. Reconnect if this continues.';
+      case 'socket_error':
+        return 'Transport dropped after connect. Inspect server logs and network stability.';
+      default:
+        return null;
+    }
+  }, [remoteConnectionStatus?.backend, remoteConnectionStatus?.error, remoteConnectionStatus?.reasonCode]);
+
+  const isRemoteServerProfile = isRemoteConnectSupported(effectiveServer);
+  const remoteConnectEligibleServers = useMemo(
+    () => servers.filter((server) => isRemoteConnectSupported(server)),
+    [servers],
+  );
+  const canShowRemoteConnectControls = isRemoteServerProfile;
+  const canOpenRemoteConnectModal = hasStarmoteApi && canShowRemoteConnectControls;
+  const canDisconnectRemoteSession = canShowRemoteConnectControls && !!remoteConnectionStatus?.connected;
+  const canExecuteRemoteCommandActions = isRemoteCommandActionEnabled({
+    isRemoteServer: isRemoteServerProfile,
+    remoteState: remoteConnectionStatus?.state,
+    isRemoteReady: remoteConnectionStatus?.isReady,
+  });
+  const isRemoteCommandRuntimeReady = isRemoteServerProfile && canExecuteRemoteCommandActions;
+  const isRemoteFileSessionEnabled = isRemoteServerProfile && hasRemoteFilesApi && isRemoteFileSessionActive;
+  const isRemoteLogsEnabled = isRemoteServerProfile && isAzureVmBackend(effectiveServer);
+  const isCommandRuntimeReady = isRemoteServerProfile
+    ? isRemoteCommandRuntimeReady
+    : lifecycleState === 'running';
+
+  const handleSwitchServer = useCallback((nextServerId: string) => {
+    setViewingServerId(nextServerId || null);
+  }, []);
+
+  const populateRemoteConnectForm = useCallback((server: ManagedItem | null, fallbackServerId: string) => {
+    const defaultHost = resolveDefaultRemoteConnectHost(server, serverConfigValues.SERVER_LISTEN_IP);
+    const nextFileProtocol = server?.remoteFileAccessProtocol ?? 'none';
+    const nextBackend: RemoteBackendType = server?.remoteBackend ?? 'starmote';
+
+    setRemoteConnectTargetServerId(server?.id ?? fallbackServerId);
+    setRemoteConnectNameInput(server?.name ?? '');
+    setRemoteConnectHostInput(defaultHost);
+    setRemoteBackendInput(nextBackend);
+
+    if (nextBackend === 'azure-vm') {
+      // For Azure VM the form port is the SSH port, not the game port
+      setRemoteConnectPortInput(server?.azureVmSshPort?.trim() || '22');
+      setRemoteConnectUsernameInput(server?.azureVmSshUsername?.trim() || 'azureuser');
+      setAzureVmSshPortInput(server?.azureVmSshPort?.trim() || '22');
+      setAzureVmSshKeyPathInput(server?.azureVmSshKeyPath?.trim() || '');
+      setAzureVmSshPasswordInput('');
+      setAzureVmScreenSessionInput(server?.azureVmScreenSession?.trim() || '');
+    } else {
+      setRemoteConnectPortInput(server?.port?.trim() || serverPortInput || '4242');
+      setRemoteConnectUsernameInput(activeAccount?.name?.trim() || '');
+      setAzureVmSshPortInput('22');
+      setAzureVmSshKeyPathInput('');
+      setAzureVmSshPasswordInput('');
+      setAzureVmScreenSessionInput('');
+    }
+
+    setRemoteFileAccessProtocolInput(nextFileProtocol);
+    setRemoteFileAccessHostInput(resolveDefaultRemoteFileAccessHost(server, defaultHost));
+    setRemoteFileAccessPortInput(server?.remoteFileAccessPort?.trim() || getDefaultRemoteFileAccessPort(nextFileProtocol));
+    setRemoteFileAccessUsernameInput(server?.remoteFileAccessUsername?.trim() || '');
+    setRemoteFileAccessRootPathInput(server?.remoteFileAccessRootPath?.trim() || '/');
+    setRemoteFileAccessPasswordInput('');
+    setRemoteConnectError(null);
+  }, [activeAccount?.name, serverConfigValues.SERVER_LISTEN_IP, serverPortInput]);
+
+  const openRemoteConnectModal = useCallback(() => {
+    if (!canShowRemoteConnectControls) {
+      setActionError('Remote Connect is only available for remote server profiles.');
+      return;
+    }
+
+    const fallbackServerId = viewingServerId ?? selectedServerId ?? remoteConnectEligibleServers[0]?.id ?? '';
+    const selectedServerForModal = remoteConnectEligibleServers.find((server) => server.id === fallbackServerId) ?? effectiveServer ?? remoteConnectEligibleServers[0] ?? null;
+    populateRemoteConnectForm(selectedServerForModal, fallbackServerId);
+    setIsRemoteConnectModalOpen(true);
+  }, [canShowRemoteConnectControls, effectiveServer, populateRemoteConnectForm, remoteConnectEligibleServers, selectedServerId, viewingServerId]);
+
+  const closeRemoteConnectModal = useCallback(() => {
+    if (isRemoteConnectPending) return;
+    setIsRemoteConnectModalOpen(false);
+    setRemoteConnectError(null);
+  }, [isRemoteConnectPending]);
+
+  const closeDatabaseInspectModal = useCallback(() => {
+    setDatabaseInspectEntity(null);
+  }, []);
+
+  const handleRemoteConnect = useCallback(async () => {
+    if (isRemoteConnectPending) return;
+
+    if (!canShowRemoteConnectControls) {
+      setRemoteConnectError('Remote Connect is only available for remote server profiles.');
+      return;
+    }
+
+    if (!hasStarmoteApi || !starmoteApi) {
+      setRemoteConnectError('Remote connection API is unavailable in this build.');
+      return;
+    }
+
+    const targetServerId = remoteConnectTargetServerId || viewingServerId || selectedServerId || remoteConnectEligibleServers[0]?.id;
+    if (!targetServerId) {
+      setRemoteConnectError('No remote server profile is available to attach this connection.');
+      return;
+    }
+
+    const targetServer = remoteConnectEligibleServers.find((server) => server.id === targetServerId);
+    if (!targetServer) {
+      setRemoteConnectError('Selected profile is not a remote server profile.');
+      return;
+    }
+
+    const host = remoteConnectHostInput.trim();
+    if (!host) {
+      setRemoteConnectError('Remote host is required.');
+      return;
+    }
+
+    const backend = remoteBackendInput;
+    const isAzureVm = backend === 'azure-vm';
+
+    // For Azure VM the port field holds the SSH port; for StarMote it's the game port.
+    const portDefault = isAzureVm ? '22' : '4242';
+    const parsedPort = Number.parseInt(remoteConnectPortInput.trim() || portDefault, 10);
+    if (!Number.isFinite(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+      setRemoteConnectError('Port must be between 1 and 65535.');
+      return;
+    }
+
+    const nextName = remoteConnectNameInput.trim() || targetServer.name;
+    const username = remoteConnectUsernameInput.trim() || undefined;
+    const nextRemoteFileProtocol = remoteFileAccessProtocolInput;
+    const nextRemoteFileHost = remoteFileAccessHostInput.trim() || undefined;
+    const nextRemoteFilePort = remoteFileAccessPortInput.trim() || undefined;
+    const nextRemoteFileUsername = remoteFileAccessUsernameInput.trim() || undefined;
+    const nextRemoteFileRootPath = remoteFileAccessRootPathInput.trim() || undefined;
+    const activeAccountId = activeAccount?.id;
+
+    // StarMote requires a signed-in StarMade account; Azure VM uses SSH key or password auth.
+    if (!isAzureVm && !activeAccountId) {
+      setRemoteConnectError('Sign in with a StarMade account to use StarMote remote control.');
+      return;
+    }
+
+    setIsRemoteConnectPending(true);
+    setRemoteConnectError(null);
+
+    try {
+      const connectPayload = isAzureVm
+        ? {
+            serverId: targetServer.id,
+            host,
+            port: parsedPort,
+            backend: 'azure-vm' as const,
+            username: username || 'azureuser',
+            sshPort: parsedPort,
+            sshKeyPath: azureVmSshKeyPathInput.trim() || undefined,
+            sshPassword: azureVmSshPasswordInput || undefined,
+            screenSessionName: azureVmScreenSessionInput.trim() || undefined,
+            serverRootPath: nextRemoteFileRootPath || undefined,
+          }
+        : {
+            serverId: targetServer.id,
+            host,
+            port: parsedPort,
+            backend: 'starmote' as const,
+            username: username || activeAccount?.name?.trim() || undefined,
+            clientVersion: targetServer.version?.trim() || undefined,
+            activeAccountId: activeAccountId!,
+          };
+
+      const connectResult = await starmoteApi.connect(connectPayload);
+      if (!connectResult.success) {
+        setRemoteConnectError(
+          connectResult.error ?? `Failed to establish ${getRemoteBackendLabel(backend)} connection.`,
+        );
+        if (connectResult.status) {
+          setRemoteConnectionStatus(connectResult.status);
+        }
+        return;
+      }
+      if (connectResult.status) {
+        setRemoteConnectionStatus(connectResult.status);
+      }
+
+      if (nextRemoteFileProtocol !== 'none' && remoteFilesApi) {
+        const fileHost = nextRemoteFileHost || host;
+        const filePort = Number.parseInt(
+          nextRemoteFilePort || (nextRemoteFileProtocol === 'sftp' ? '22' : '21'), 10,
+        );
+        const fileResult = await remoteFilesApi.setSession({
+          serverId: targetServer.id,
+          protocol: nextRemoteFileProtocol as 'ftp' | 'sftp',
+          host: fileHost,
+          port: filePort,
+          username: nextRemoteFileUsername || username || 'anonymous',
+          password: nextRemoteFileProtocol === 'sftp'
+            ? (azureVmSshPasswordInput || undefined)
+            : (remoteFileAccessPasswordInput || undefined),
+          sshKeyPath: nextRemoteFileProtocol === 'sftp' ? (azureVmSshKeyPathInput.trim() || undefined) : undefined,
+          rootPath: nextRemoteFileRootPath || '/',
+        });
+        if (fileResult?.success === true) {
+          skipFileSessionResetRef.current = true;
+        }
+        setIsRemoteFileSessionActive(fileResult?.success === true);
+      }
+
+      // Persist updated profile fields
+      const updatedItem: ManagedItem = {
+        ...targetServer,
+        name: nextName,
+        serverIp: host,
+        remoteBackend: backend,
+        remoteFileAccessProtocol: nextRemoteFileProtocol,
+        remoteFileAccessHost: nextRemoteFileHost,
+        remoteFileAccessPort: nextRemoteFilePort,
+        remoteFileAccessUsername: nextRemoteFileUsername,
+        remoteFileAccessRootPath: nextRemoteFileRootPath,
+      };
+
+      if (isAzureVm) {
+        updatedItem.azureVmSshPort = String(parsedPort);
+        updatedItem.azureVmSshKeyPath = azureVmSshKeyPathInput.trim() || undefined;
+        updatedItem.azureVmSshUsername = username || 'azureuser';
+        updatedItem.azureVmScreenSession = azureVmScreenSessionInput.trim() || undefined;
+      } else {
+        updatedItem.port = String(parsedPort);
+      }
+
+      updateServerItem(updatedItem);
+
+      setViewingServerId(targetServer.id);
+      setServerNameInput(nextName);
+      if (!isAzureVm) {
+        setServerPortInput(String(parsedPort));
+      }
+
+      setIsRemoteConnectModalOpen(false);
+      setActionError(null);
+    } catch (error) {
+      setRemoteConnectError(`Failed to apply remote connection: ${String(error)}`);
+    } finally {
+      setIsRemoteConnectPending(false);
+    }
+  }, [
+    activeAccount?.id,
+    activeAccount?.name,
+    canShowRemoteConnectControls,
+    hasStarmoteApi,
+    remoteConnectEligibleServers,
+    remoteConnectUsernameInput,
+    isRemoteConnectPending,
+    remoteConnectHostInput,
+    remoteConnectNameInput,
+    remoteConnectPortInput,
+    remoteBackendInput,
+    azureVmSshKeyPathInput,
+    azureVmScreenSessionInput,
+    remoteFileAccessHostInput,
+    remoteFileAccessPasswordInput,
+    remoteFileAccessPortInput,
+    remoteFileAccessProtocolInput,
+    remoteFileAccessRootPathInput,
+    remoteFileAccessUsernameInput,
+    remoteConnectTargetServerId,
+    selectedServerId,
+    updateServerItem,
+    viewingServerId,
+    starmoteApi,
+    remoteFilesApi,
+  ]);
+
+  const handleRemoteDisconnect = useCallback(async () => {
+    if (!hasStarmoteApi || !starmoteApi || !effectiveServer || !canShowRemoteConnectControls || isRemoteDisconnectPending) return;
+    setIsRemoteDisconnectPending(true);
+    setRemoteConnectError(null);
+    try {
+      if (remoteFilesApi && effectiveServer) {
+        await remoteFilesApi.clearSession(effectiveServer.id);
+      }
+      setIsRemoteFileSessionActive(false);
+      const result = await starmoteApi.disconnect(effectiveServer.id);
+      if (!result.success) {
+        setRemoteConnectError(result.error ?? 'Failed to disconnect remote session.');
+      }
+      await refreshRemoteConnectionStatus(effectiveServer.id);
+    } catch (error) {
+      setRemoteConnectError(`Failed to disconnect remote session: ${String(error)}`);
+    } finally {
+      setIsRemoteDisconnectPending(false);
+    }
+  }, [canShowRemoteConnectControls, effectiveServer, hasStarmoteApi, isRemoteDisconnectPending, refreshRemoteConnectionStatus, remoteFilesApi, starmoteApi]);
+
+  useEffect(() => {
+    void refreshRemoteConnectionStatus();
+  }, [refreshRemoteConnectionStatus]);
+
+  useEffect(() => {
+    if (!hasStarmoteApi || !starmoteApi) return;
+    const unsubscribe = starmoteApi.onStatusChanged((status) => {
+      setRemoteStatusesByServerId((previous) => ({
+        ...previous,
+        [status.serverId]: status,
+      }));
+      if (!effectiveServer || status.serverId !== effectiveServer.id) return;
+      setRemoteConnectionStatus(status);
+    });
+    return unsubscribe;
+  }, [effectiveServer, hasStarmoteApi, starmoteApi]);
+
+  useEffect(() => {
+    if (!isRemoteServerProfile) return;
+    setLifecycleState(isRemoteCommandRuntimeReady ? 'running' : 'stopped');
+  }, [isRemoteCommandRuntimeReady, isRemoteServerProfile]);
+
+  useEffect(() => {
+    if (skipFileSessionResetRef.current) {
+      skipFileSessionResetRef.current = false;
+      return;
+    }
+    setIsRemoteFileSessionActive(false);
+  }, [effectiveServer?.id]);
 
   const allLogFiles = useMemo(() => {
     return logCategories
@@ -2164,7 +2707,45 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, []);
 
   const reloadLogCatalog = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi) {
+    if (!effectiveServer) {
+      setLogCategories([]);
+      setSelectedLogRelativePath(null);
+      setLogPath(null);
+      return;
+    }
+
+    if (isRemoteLogsEnabled && isRemoteFileSessionEnabled && remoteFilesApi) {
+      setIsLogListLoading(true);
+      setLogLoadError(null);
+      try {
+        const catalog = await remoteFilesApi.listLogFiles(effectiveServer.id);
+        setLogCategories(catalog.categories);
+        const knownPaths = new Set(catalog.categories.flatMap((category) => category.files.map((file) => file.relativePath)));
+        knownPaths.add(LIVE_PROCESS_LOG_PATH);
+        const fallback = catalog.defaultRelativePath ?? LIVE_PROCESS_LOG_PATH;
+        const currentSelection = selectedLogRelativePathRef.current;
+        const nextSelected = currentSelection && knownPaths.has(currentSelection) ? currentSelection : fallback;
+        setSelectedLogRelativePath(nextSelected ?? null);
+        setLogPath(nextSelected ? (nextSelected === LIVE_PROCESS_LOG_PATH ? 'process output (live)' : `logs/${nextSelected}`) : null);
+      } catch (error) {
+        setLogCategories([]);
+        setSelectedLogRelativePath(LIVE_PROCESS_LOG_PATH);
+        setLogPath('process output (live)');
+        setLogLoadError(`Failed to list remote log files: ${String(error)}`);
+      } finally {
+        setIsLogListLoading(false);
+      }
+      return;
+    }
+
+    if (isRemoteLogsEnabled && !isRemoteFileSessionEnabled) {
+      setLogCategories([]);
+      setSelectedLogRelativePath(LIVE_PROCESS_LOG_PATH);
+      setLogPath('process output (live)');
+      return;
+    }
+
+    if (!hasGameApi) {
       setLogCategories([]);
       setSelectedLogRelativePath(null);
       setLogPath(null);
@@ -2196,12 +2777,30 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setIsLogListLoading(false);
     }
-  }, [effectiveServer, hasGameApi]);
+  }, [effectiveServer, hasGameApi, isRemoteLogsEnabled, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   // ─── Chat callbacks ──────────────────────────────────────────────────────────
 
   const reloadChatChannels = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi) {
+    if (!effectiveServer) {
+      setChatChannels([]);
+      setSelectedChatChannelId(null);
+      return;
+    }
+
+    if (effectiveServer.isRemote) {
+      const mergedChannels = mergeFetchedChatChannels([createVirtualGeneralChannel()], chatChannelsRef.current);
+      setChatChannels(mergedChannels);
+      setSelectedChatChannelId((prev) => {
+        if (prev && mergedChannels.some((f) => f.channelId === prev)) return prev;
+        return GENERAL_CHANNEL_ID;
+      });
+      setChatError(null);
+      setIsChatListLoading(false);
+      return;
+    }
+
+    if (!hasGameApi) {
       setChatChannels([]);
       setSelectedChatChannelId(null);
       return;
@@ -2226,9 +2825,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [effectiveServer, hasGameApi]);
 
   const loadChatMessagesForChannel = useCallback(async (channelId: string | null) => {
-    if (!channelId || !effectiveServer || !hasGameApi) return;
+    if (!channelId || !effectiveServer) return;
     const channel = chatChannels.find((c) => c.channelId === channelId);
     if (!channel) return;
+
+    if (effectiveServer.isRemote) {
+      setIsChatLoading(false);
+      setChatError(null);
+      return;
+    }
+
+    if (!hasGameApi) return;
 
     if (!channel.fileName) {
       setIsChatLoading(false);
@@ -2260,10 +2867,32 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const handleSendChatMessage = useCallback(async () => {
     const text = chatInput.trim();
-    if (!text || !effectiveServer || !hasGameApi || !selectedChatChannelId) return;
+    if (!text || !effectiveServer || !selectedChatChannelId) return;
+    if (!isCommandRuntimeReady) {
+      setChatError(isRemoteServerProfile
+        ? 'Remote StarMote session is not ready to send commands yet.'
+        : 'Server is not running. Start the server to send messages.');
+      return;
+    }
+    if (!canExecuteRemoteCommandActions) {
+      setChatError('Remote StarMote session is not ready to send commands yet.');
+      return;
+    }
 
     setChatInput('');
     setChatError(null);
+
+    // If the input starts with /, treat it as a raw server command.
+    if (text.startsWith('/')) {
+      setChatInput('');
+      setChatError(null);
+      try {
+        await sendServerCommandOrThrow(text);
+      } catch (error) {
+        setChatError(String(error));
+      }
+      return;
+    }
 
     const channel = chatChannels.find((c) => c.channelId === selectedChatChannelId);
     let command: string;
@@ -2278,10 +2907,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       command = `/server_message_broadcast plain "${text}"`;
     }
 
-    const result = await window.launcher.game.sendServerCommand(effectiveServer.id, command);
-    if (!result.success) {
-      setChatError(result.error ?? 'Failed to send message.');
-    } else {
+    try {
+      await sendServerCommandOrThrow(command);
       // Optimistically add the message to the local buffer as a system message
       const optimistic: ChatMessage = {
         timestamp: new Date().toISOString().replace('T', ' - ').replace(/\.\d+Z$/, ''),
@@ -2294,8 +2921,18 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         const existing = prev[selectedChatChannelId] ?? [];
         return { ...prev, [selectedChatChannelId]: [...existing, optimistic] };
       });
+    } catch (error) {
+      setChatError(String(error));
     }
-  }, [chatChannels, chatInput, effectiveServer, hasGameApi, selectedChatChannelId]);
+  }, [
+    canExecuteRemoteCommandActions,
+    chatChannels,
+    chatInput,
+    isCommandRuntimeReady,
+    isRemoteServerProfile,
+    effectiveServer,
+    selectedChatChannelId,
+  ]);
 
   // Load chat channels when chat tab is active
   useEffect(() => {
@@ -2361,6 +2998,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       return;
     }
 
+    if (effectiveServer.isRemote) {
+      setRuntimePid(undefined);
+      setRuntimeUptimeMs(undefined);
+      setLifecycleState(isRemoteCommandRuntimeReady ? 'running' : 'stopped');
+      return;
+    }
+
     try {
       const status = await window.launcher.game.status(effectiveServer.id);
       setRuntimePid(status.pid);
@@ -2371,7 +3015,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setLifecycleState('error');
       setActionError('Failed to query server status.');
     }
-  }, [effectiveServer, hasGameApi]);
+  }, [effectiveServer, hasGameApi, isRemoteCommandRuntimeReady]);
 
   useEffect(() => {
     void refreshRuntimeStatus();
@@ -2383,6 +3027,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   useEffect(() => {
     setLogs([]);
+    // Cancel any pending flush and discard buffered lines
+    const buf = liveLogFlushRef.current;
+    if (buf.timer !== null) { window.clearTimeout(buf.timer); buf.timer = null; }
+    buf.pending.length = 0;
     setLiveProcessLogs([]);
     setActionError(null);
     setPendingServerAction(null);
@@ -2457,8 +3105,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setDatabaseEntities([]);
     setDatabaseEntityTypeFilter('all');
     setDatabaseFactionFilter('all');
+    setDatabaseSectorLoadFilter('all');
     setDatabaseSortKey('name-asc');
+    setDatabaseEntitySearchTerm('');
     setDatabaseClipboardMsg(null);
+    setDatabaseInspectEntity(null);
     pendingDbRequestRef.current = null;
     dbLinesByRequestRef.current.clear();
     if (dbTimeoutRef.current !== null) {
@@ -2468,7 +3119,27 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [effectiveServer?.id]);
 
   const readFactionConfigXmlFromInstallation = useCallback(async (): Promise<{ content: string; relativePath: string; error?: string }> => {
-    if (!effectiveServer || !hasGameApi) {
+    if (!effectiveServer) {
+      return { content: '', relativePath: FACTION_CONFIG_PATH_CANDIDATES[0], error: 'Server context unavailable.' };
+    }
+
+    if (isRemoteFileSessionEnabled && remoteFilesApi) {
+      let firstError: string | undefined;
+      for (const relativePath of FACTION_CONFIG_PATH_CANDIDATES) {
+        const payload = await remoteFilesApi.readFile(effectiveServer.id, relativePath);
+        if (!payload.error) {
+          return { content: payload.content ?? '', relativePath };
+        }
+        if (!firstError) firstError = payload.error;
+      }
+      return {
+        content: '',
+        relativePath: FACTION_CONFIG_PATH_CANDIDATES[0],
+        error: firstError ?? `Could not find faction config template (${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}).`,
+      };
+    }
+
+    if (!hasGameApi) {
       return { content: '', relativePath: FACTION_CONFIG_PATH_CANDIDATES[0], error: 'Server context unavailable.' };
     }
 
@@ -2486,10 +3157,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       relativePath: FACTION_CONFIG_PATH_CANDIDATES[0],
       error: firstError ?? `Could not find faction config template (${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}).`,
     };
-  }, [effectiveServer, hasGameApi]);
+  }, [effectiveServer, hasGameApi, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   const writeFactionConfigXmlToInstallation = useCallback(async (content: string): Promise<{ success: boolean; relativePath?: string; error?: string }> => {
-    if (!effectiveServer || !hasGameApi) {
+    if (!effectiveServer) {
       return { success: false, error: 'Server context unavailable.' };
     }
 
@@ -2497,6 +3168,25 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       factionConfigRelativePath,
       ...FACTION_CONFIG_PATH_CANDIDATES.filter((path) => path !== factionConfigRelativePath),
     ];
+
+    if (isRemoteFileSessionEnabled && remoteFilesApi) {
+      let firstError: string | undefined;
+      for (const relativePath of uniqueCandidates) {
+        const result = await remoteFilesApi.writeFile(effectiveServer.id, relativePath, content);
+        if (result.success) {
+          return { success: true, relativePath };
+        }
+        if (!firstError) firstError = result.error;
+      }
+      return {
+        success: false,
+        error: firstError ?? `Could not write faction config template (${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}).`,
+      };
+    }
+
+    if (!hasGameApi) {
+      return { success: false, error: 'Server context unavailable.' };
+    }
 
     let firstError: string | undefined;
     for (const relativePath of uniqueCandidates) {
@@ -2511,14 +3201,52 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       success: false,
       error: firstError ?? `Could not write faction config template (${FACTION_CONFIG_PATH_CANDIDATES.join(' or ')}).`,
     };
-  }, [effectiveServer, factionConfigRelativePath, hasGameApi]);
+  }, [effectiveServer, factionConfigRelativePath, hasGameApi, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   useEffect(() => {
     void reloadLogCatalog();
   }, [reloadLogCatalog]);
 
   const reloadServerConfigValues = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi) {
+    if (!effectiveServer) {
+      setConfigFields(serverConfigSchemaFields);
+      setServerConfigValues(serverConfigDefaults);
+      return;
+    }
+
+    if (isRemoteFileSessionEnabled && remoteFilesApi) {
+      setIsConfigLoading(true);
+      try {
+        const cfgEntries: ServerConfigEntry[] = await remoteFilesApi.listServerConfigValues(effectiveServer.id);
+        const discoveredFields: ServerConfigField[] = cfgEntries
+          .filter((entry) => !serverConfigFieldKeys.has(entry.key))
+          .map((entry) => ({
+            key: entry.key,
+            label: humanizeServerConfigKey(entry.key),
+            description: entry.comment || 'Discovered key from server.cfg.',
+            category: 'advanced' as ServerConfigCategory,
+            type: inferServerConfigFieldType(entry.value),
+            defaultValue: entry.value,
+          }))
+          .sort((a, b) => a.key.localeCompare(b.key));
+        const nextFields = [...serverConfigSchemaFields, ...discoveredFields];
+        const valueMap: Record<string, string> = Object.fromEntries(nextFields.map((field) => [field.key, field.defaultValue]));
+        for (const entry of cfgEntries) {
+          valueMap[entry.key] = entry.value;
+        }
+        setConfigFields(nextFields);
+        setServerConfigValues(valueMap);
+      } catch (error) {
+        console.warn('[ServerPanel] Failed to load remote configuration values from server.cfg:', error);
+        setConfigFields(serverConfigSchemaFields);
+        setServerConfigValues(serverConfigDefaults);
+      } finally {
+        setIsConfigLoading(false);
+      }
+      return;
+    }
+
+    if (!hasGameApi) {
       setConfigFields(serverConfigSchemaFields);
       setServerConfigValues(serverConfigDefaults);
       return;
@@ -2558,6 +3286,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [
     effectiveServer,
     hasGameApi,
+    isRemoteFileSessionEnabled,
+    remoteFilesApi,
     serverConfigDefaults,
     serverConfigFieldKeys,
     serverConfigSchemaFields,
@@ -2593,7 +3323,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   useEffect(() => {
     if (activeConfigTab !== 'game-config-xml') return;
-    if (!effectiveServer || !hasGameApi) return;
+    if (!effectiveServer) return;
+    if (!hasGameApi && !isRemoteFileSessionEnabled) return;
     if (gameConfigLoadedServerId === effectiveServer.id) return;
 
     let cancelled = false;
@@ -2602,11 +3333,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     const loadGameConfigXml = async () => {
       try {
-        const content = await window.launcher.game.readGameConfigXml(effectiveServer.path);
+        const content = isRemoteFileSessionEnabled && remoteFilesApi
+          ? await remoteFilesApi.readConfigXml(effectiveServer.id)
+          : await window.launcher.game.readGameConfigXml(effectiveServer.path);
         if (cancelled) return;
 
-        const next = content ?? '';
-        hydrateGameConfigState(next);
+        hydrateGameConfigState(content ?? '');
         setGameConfigLoadedServerId(effectiveServer.id);
       } catch (error) {
         if (cancelled) return;
@@ -2625,7 +3357,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     return () => {
       cancelled = true;
     };
-  }, [activeConfigTab, effectiveServer, gameConfigLoadedServerId, hasGameApi, hydrateGameConfigState]);
+  }, [activeConfigTab, effectiveServer, gameConfigLoadedServerId, hasGameApi, hydrateGameConfigState, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   const hydrateFactionConfigState = useCallback((xmlContent: string, options?: { keepDrafts?: boolean }) => {
     const parsed = extractFactionConfigFields(
@@ -2698,25 +3430,32 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   ]);
 
   const loadFileDirectory = useCallback(async (relativeDir = '') => {
-    if (!effectiveServer || !hasGameApi) return;
+    if (!effectiveServer) return;
 
     setIsFileBrowserLoading(true);
     try {
-      const entries = await window.launcher.game.listInstallationFiles(effectiveServer.path, relativeDir);
-      setFileEntriesByDir((prev) => ({ ...prev, [relativeDir]: entries }));
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        const rawEntries = await remoteFilesApi.listFiles(effectiveServer.id, relativeDir);
+        const entries: InstallationFileEntry[] = rawEntries.map((e) => ({ ...e, modifiedMs: 0 }));
+        setFileEntriesByDir((prev) => ({ ...prev, [relativeDir]: entries }));
+      } else if (hasGameApi) {
+        const entries = await window.launcher.game.listInstallationFiles(effectiveServer.path, relativeDir);
+        setFileEntriesByDir((prev) => ({ ...prev, [relativeDir]: entries }));
+      }
     } catch (error) {
       setFileTabError(`Failed to list files in ${relativeDir || '/'}: ${String(error)}`);
     } finally {
       setIsFileBrowserLoading(false);
     }
-  }, [effectiveServer, hasGameApi]);
+  }, [effectiveServer, hasGameApi, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   useEffect(() => {
     if (activeTab !== 'files') return;
-    if (!effectiveServer || !hasGameApi) return;
+    if (!effectiveServer) return;
+    if (!hasGameApi && !isRemoteFileSessionEnabled) return;
     if (fileEntriesByDir['']) return;
     void loadFileDirectory('');
-  }, [activeTab, effectiveServer, fileEntriesByDir, hasGameApi, loadFileDirectory]);
+  }, [activeTab, effectiveServer, fileEntriesByDir, hasGameApi, isRemoteFileSessionEnabled, loadFileDirectory]);
 
   const toggleFileDirectory = useCallback((relativeDir: string) => {
     setExpandedFileDirs((prev) => {
@@ -2733,7 +3472,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [fileEntriesByDir, loadFileDirectory]);
 
   const openFileInTab = useCallback(async (entry: InstallationFileEntry) => {
-    if (!effectiveServer || !hasGameApi) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled)) return;
 
     if (!entry.isEditableText) {
       const errorPath = entry.relativePath;
@@ -2755,7 +3494,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setFileTabError(null);
     setFileTabErrorPath(null);
     try {
-      const payload = await window.launcher.game.readInstallationFile(effectiveServer.path, relativePath);
+      let payload: { content: string; error?: string };
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        payload = await remoteFilesApi.readFile(effectiveServer.id, relativePath);
+      } else {
+        payload = await window.launcher.game.readInstallationFile(effectiveServer.path, relativePath);
+      }
       if (payload.error) {
         setFileTabError(`Failed to open ${relativePath}: ${payload.error}`);
         setFileTabErrorPath(relativePath);
@@ -2770,7 +3514,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setIsFileEditorLoading(false);
     }
-  }, [effectiveServer, fileContentByPath, hasGameApi]);
+  }, [effectiveServer, fileContentByPath, hasGameApi, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   const closeFileTab = useCallback((relativePath: string) => {
     setOpenFileTabs((prev) => {
@@ -2791,13 +3535,18 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, []);
 
   const reloadActiveFileTab = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || !activeFileTabPath) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled) || !activeFileTabPath) return;
 
     setIsFileEditorLoading(true);
     setFileTabError(null);
     setFileTabErrorPath(null);
     try {
-      const payload = await window.launcher.game.readInstallationFile(effectiveServer.path, activeFileTabPath);
+      let payload: { content: string; error?: string };
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        payload = await remoteFilesApi.readFile(effectiveServer.id, activeFileTabPath);
+      } else {
+        payload = await window.launcher.game.readInstallationFile(effectiveServer.path, activeFileTabPath);
+      }
       if (payload.error) {
         setFileTabError(`Failed to reload ${activeFileTabPath}: ${payload.error}`);
         setFileTabErrorPath(activeFileTabPath);
@@ -2811,17 +3560,22 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setIsFileEditorLoading(false);
     }
-  }, [activeFileTabPath, effectiveServer, hasGameApi]);
+  }, [activeFileTabPath, effectiveServer, hasGameApi, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   const saveActiveFileTab = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || !activeFileTabPath || isFileSaving) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled) || !activeFileTabPath || isFileSaving) return;
 
     setIsFileSaving(true);
     setFileTabError(null);
     setFileTabErrorPath(null);
     try {
       const content = fileContentByPath[activeFileTabPath] ?? '';
-      const result = await window.launcher.game.writeInstallationFile(effectiveServer.path, activeFileTabPath, content);
+      let result: { success: boolean; error?: string };
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        result = await remoteFilesApi.writeFile(effectiveServer.id, activeFileTabPath, content);
+      } else {
+        result = await window.launcher.game.writeInstallationFile(effectiveServer.path, activeFileTabPath, content);
+      }
       if (!result.success) {
         setFileTabError(result.error ?? `Failed to save ${activeFileTabPath}.`);
         setFileTabErrorPath(activeFileTabPath);
@@ -2835,7 +3589,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setIsFileSaving(false);
     }
-  }, [activeFileTabPath, effectiveServer, fileContentByPath, hasGameApi, isFileSaving]);
+  }, [activeFileTabPath, effectiveServer, fileContentByPath, hasGameApi, isFileSaving, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   const closeFileContextMenu = useCallback(() => {
     setFileContextMenu(null);
@@ -2963,7 +3717,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [closeFileContextMenu, effectiveServer]);
 
   const renameFileTarget = useCallback(async (target: FileActionTarget, closeMenu = true) => {
-    if (!effectiveServer || !hasGameApi) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled)) return;
 
     const promptedName = window.prompt(`Rename "${target.name}" to:`, target.name);
     if (promptedName === null) {
@@ -2980,29 +3734,47 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     setFileTabError(null);
     try {
-      const result = await window.launcher.game.renameInstallationPath(
-        effectiveServer.path,
-        target.path,
-        nextName,
-      );
-      if (!result.success || !result.oldRelativePath || !result.newRelativePath) {
-        setFileTabError(result.error ?? `Failed to rename ${target.name}.`);
-        return;
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        const parentDir = getRelativeParentDir(target.path);
+        const newRelPath = parentDir ? `${parentDir}/${nextName}` : nextName;
+        const result = await remoteFilesApi.renameFile(effectiveServer.id, target.path, newRelPath);
+        if (!result.success) {
+          setFileTabError(result.error ?? `Failed to rename ${target.name}.`);
+          return;
+        }
+        remapOpenFilePaths(target.path, newRelPath, target.isDirectory);
+        if (fileClipboard && fileClipboard.sourcePath === target.path) {
+          setFileClipboard((prev) => {
+            if (!prev || prev.sourcePath !== target.path) return prev;
+            return { ...prev, sourcePath: newRelPath, sourceName: nextName };
+          });
+        }
+        await refreshFileBrowserAfterMutation([parentDir, parentDir]);
+      } else {
+        const result = await window.launcher.game.renameInstallationPath(
+          effectiveServer.path,
+          target.path,
+          nextName,
+        );
+        if (!result.success || !result.oldRelativePath || !result.newRelativePath) {
+          setFileTabError(result.error ?? `Failed to rename ${target.name}.`);
+          return;
+        }
+
+        remapOpenFilePaths(result.oldRelativePath, result.newRelativePath, target.isDirectory);
+
+        if (fileClipboard && fileClipboard.sourcePath === result.oldRelativePath) {
+          setFileClipboard((prev) => {
+            if (!prev || prev.sourcePath !== result.oldRelativePath) return prev;
+            return { ...prev, sourcePath: result.newRelativePath, sourceName: nextName };
+          });
+        }
+
+        await refreshFileBrowserAfterMutation([
+          getRelativeParentDir(result.oldRelativePath),
+          getRelativeParentDir(result.newRelativePath),
+        ]);
       }
-
-      remapOpenFilePaths(result.oldRelativePath, result.newRelativePath, target.isDirectory);
-
-      if (fileClipboard && fileClipboard.sourcePath === result.oldRelativePath) {
-        setFileClipboard((prev) => {
-          if (!prev || prev.sourcePath !== result.oldRelativePath) return prev;
-          return { ...prev, sourcePath: result.newRelativePath, sourceName: nextName };
-        });
-      }
-
-      await refreshFileBrowserAfterMutation([
-        getRelativeParentDir(result.oldRelativePath),
-        getRelativeParentDir(result.newRelativePath),
-      ]);
     } catch (error) {
       setFileTabError(`Failed to rename ${target.name}: ${String(error)}`);
     } finally {
@@ -3013,12 +3785,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     effectiveServer,
     fileClipboard,
     hasGameApi,
+    isRemoteFileSessionEnabled,
+    remoteFilesApi,
     refreshFileBrowserAfterMutation,
     remapOpenFilePaths,
   ]);
 
   const deleteFileTarget = useCallback(async (target: FileActionTarget, closeMenu = true) => {
-    if (!effectiveServer || !hasGameApi) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled)) return;
 
     const targetLabel = target.isDirectory ? 'folder' : 'file';
     const shouldDelete = window.confirm(`Delete ${targetLabel} "${target.name}"? This cannot be undone.`);
@@ -3029,21 +3803,34 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     setFileTabError(null);
     try {
-      const result = await window.launcher.game.deleteInstallationPath(effectiveServer.path, target.path);
-      if (!result.success || !result.deletedRelativePath) {
-        setFileTabError(result.error ?? `Failed to delete ${target.name}.`);
-        return;
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        const result = await remoteFilesApi.deleteFile(effectiveServer.id, target.path);
+        if (!result.success) {
+          setFileTabError(result.error ?? `Failed to delete ${target.name}.`);
+          return;
+        }
+        removeFilePathsFromTabs(target.path);
+        if (fileClipboard && isSamePathOrChild(fileClipboard.sourcePath, target.path)) {
+          setFileClipboard(null);
+        }
+        await refreshFileBrowserAfterMutation([getRelativeParentDir(target.path)]);
+      } else {
+        const result = await window.launcher.game.deleteInstallationPath(effectiveServer.path, target.path);
+        if (!result.success || !result.deletedRelativePath) {
+          setFileTabError(result.error ?? `Failed to delete ${target.name}.`);
+          return;
+        }
+
+        removeFilePathsFromTabs(result.deletedRelativePath);
+
+        if (fileClipboard && isSamePathOrChild(fileClipboard.sourcePath, result.deletedRelativePath)) {
+          setFileClipboard(null);
+        }
+
+        await refreshFileBrowserAfterMutation([
+          getRelativeParentDir(result.deletedRelativePath),
+        ]);
       }
-
-      removeFilePathsFromTabs(result.deletedRelativePath);
-
-      if (fileClipboard && isSamePathOrChild(fileClipboard.sourcePath, result.deletedRelativePath)) {
-        setFileClipboard(null);
-      }
-
-      await refreshFileBrowserAfterMutation([
-        getRelativeParentDir(result.deletedRelativePath),
-      ]);
     } catch (error) {
       setFileTabError(`Failed to delete ${target.name}: ${String(error)}`);
     } finally {
@@ -3054,12 +3841,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     effectiveServer,
     fileClipboard,
     hasGameApi,
+    isRemoteFileSessionEnabled,
+    remoteFilesApi,
     refreshFileBrowserAfterMutation,
     removeFilePathsFromTabs,
   ]);
 
   const pasteIntoDestinationDir = useCallback(async (destinationDir: string, closeMenu = true) => {
-    if (!effectiveServer || !hasGameApi || !fileClipboard) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled) || !fileClipboard) return;
 
     if (fileClipboard.sourceServerId !== effectiveServer.id) {
       setFileTabError('Paste is only supported within the same server installation.');
@@ -3069,6 +3858,29 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     setFileTabError(null);
     try {
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        const srcName = fileClipboard.sourcePath.split('/').pop() ?? fileClipboard.sourceName;
+        const dstRelPath = destinationDir ? `${destinationDir}/${srcName}` : srcName;
+        if (fileClipboard.mode === 'copy') {
+          const result = await remoteFilesApi.copyFile(effectiveServer.id, fileClipboard.sourcePath, dstRelPath);
+          if (!result.success) {
+            setFileTabError(result.error ?? `Failed to copy ${fileClipboard.sourceName}.`);
+            return;
+          }
+          await refreshFileBrowserAfterMutation([destinationDir]);
+          return;
+        }
+        const result = await remoteFilesApi.moveFile(effectiveServer.id, fileClipboard.sourcePath, dstRelPath);
+        if (!result.success) {
+          setFileTabError(result.error ?? `Failed to move ${fileClipboard.sourceName}.`);
+          return;
+        }
+        remapOpenFilePaths(fileClipboard.sourcePath, dstRelPath, fileClipboard.isDirectory);
+        setFileClipboard(null);
+        await refreshFileBrowserAfterMutation([getRelativeParentDir(fileClipboard.sourcePath), destinationDir]);
+        return;
+      }
+
       if (fileClipboard.mode === 'copy') {
         const result = await window.launcher.game.copyInstallationPath(
           effectiveServer.path,
@@ -3111,6 +3923,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     effectiveServer,
     fileClipboard,
     hasGameApi,
+    isRemoteFileSessionEnabled,
+    remoteFilesApi,
     refreshFileBrowserAfterMutation,
     remapOpenFilePaths,
   ]);
@@ -3146,6 +3960,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     if (!fileContextMenu) return;
     await pasteIntoDestinationDir(fileContextMenu.destinationDir);
   }, [fileContextMenu, pasteIntoDestinationDir]);
+
+  const handleFileContextOpenNative = useCallback(async () => {
+    if (!effectiveServer) return;
+    const relativePath = fileContextMenu?.targetPath ?? null;
+    // Build the full absolute path. Use the root when no entry is targeted.
+    const fullPath = relativePath
+      ? `${effectiveServer.path}/${relativePath}`
+      : effectiveServer.path;
+    setFileContextMenu(null);
+    await window.launcher?.shell?.openPath(fullPath);
+  }, [effectiveServer, fileContextMenu?.targetPath]);
 
   useEffect(() => {
     if (activeTab !== 'files' || !effectiveServer || !hasGameApi) return;
@@ -3261,7 +4086,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   useEffect(() => {
     let cancelled = false;
 
-    if (!effectiveServer || !hasGameApi || !selectedLogRelativePath) {
+    if (!effectiveServer || !selectedLogRelativePath) {
       setLogs([]);
       setIsLogFileTruncated(false);
       setIsLogFileLoading(false);
@@ -3276,13 +4101,27 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       return;
     }
 
+    if (!isRemoteLogsEnabled && !hasGameApi) {
+      setLogs([]);
+      setIsLogFileTruncated(false);
+      setIsLogFileLoading(false);
+      return;
+    }
+
     setIsLogFileLoading(true);
     setLogLoadError(null);
     setLogPath(`logs/${selectedLogRelativePath}`);
 
     const loadLogFile = async () => {
       try {
-        const payload = await window.launcher.game.readLogFile(effectiveServer.path, selectedLogRelativePath);
+        let payload: { content: string; truncated: boolean; error?: string };
+        if (isRemoteLogsEnabled && isRemoteFileSessionEnabled && remoteFilesApi) {
+          payload = await remoteFilesApi.readLogFile(effectiveServer.id, selectedLogRelativePath);
+        } else if (hasGameApi) {
+          payload = await window.launcher.game.readLogFile(effectiveServer.path, selectedLogRelativePath);
+        } else {
+          return;
+        }
         if (cancelled) return;
 
         if (payload.error) {
@@ -3317,7 +4156,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     return () => {
       cancelled = true;
     };
-  }, [effectiveServer, hasGameApi, selectedLogRelativePath]);
+  }, [effectiveServer, hasGameApi, isRemoteLogsEnabled, isRemoteFileSessionEnabled, remoteFilesApi, selectedLogRelativePath]);
 
   useEffect(() => {
     if (autoScroll && logContainerRef.current) {
@@ -3463,18 +4302,75 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [effectiveServer, hasGameApi, activeAccount?.id, refreshRuntimeStatus]);
 
   const sendServerCommandOrThrow = useCallback(async (command: string) => {
-    if (!effectiveServer || !hasGameApi) {
+    if (!effectiveServer) {
       throw new Error('Server context unavailable.');
+    }
+    if (isRemoteServerProfile && !canExecuteRemoteCommandActions) {
+      throw new Error('Remote session is not ready to execute commands yet.');
+    }
+
+    if (isRemoteServerProfile) {
+      if (!hasStarmoteApi || !starmoteApi) {
+        throw new Error('Remote connection API unavailable in this build.');
+      }
+      const remoteResult = await starmoteApi.sendAdminCommand({
+        version: 1,
+        serverId: effectiveServer.id,
+        command,
+      });
+      if (!remoteResult.success) {
+        throw new Error(remoteResult.error ?? `Failed to execute remote command: ${command}`);
+      }
+      return;
+    }
+
+    if (!hasGameApi) {
+      throw new Error('Game API unavailable for local command execution.');
     }
 
     const result = await window.launcher.game.sendServerCommand(effectiveServer.id, command);
     if (!result.success) {
       throw new Error(result.error ?? `Failed to execute command: ${command}`);
     }
-  }, [effectiveServer, hasGameApi]);
+  }, [canExecuteRemoteCommandActions, effectiveServer, hasGameApi, hasStarmoteApi, isRemoteServerProfile, starmoteApi]);
+
+  const sendRawRemoteCommand = useCallback(async () => {
+    const command = remoteCommandInput.trim();
+    if (!command || !isRemoteServerProfile) return;
+    if (!isCommandRuntimeReady || isRemoteCommandSending) return;
+
+    setIsRemoteCommandSending(true);
+    try {
+      await sendServerCommandOrThrow(command);
+      setRemoteCommandHistory((prev) => [
+        {
+          id: Date.now(),
+          timestamp: new Date().toLocaleTimeString(),
+          command,
+          success: true,
+          message: 'Command sent.',
+        },
+        ...prev,
+      ].slice(0, 40));
+      setRemoteCommandInput('');
+    } catch (error) {
+      setRemoteCommandHistory((prev) => [
+        {
+          id: Date.now(),
+          timestamp: new Date().toLocaleTimeString(),
+          command,
+          success: false,
+          message: String(error),
+        },
+        ...prev,
+      ].slice(0, 40));
+    } finally {
+      setIsRemoteCommandSending(false);
+    }
+  }, [isCommandRuntimeReady, isRemoteCommandSending, isRemoteServerProfile, remoteCommandInput, sendServerCommandOrThrow]);
 
   const refreshPlayers = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') {
+    if (!effectiveServer || !isCommandRuntimeReady) {
       setOnlinePlayers([]);
       setIsPlayersRefreshing(false);
       return;
@@ -3501,17 +4397,18 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     playersListCollectionRef.current = { token, names, timeoutId };
 
-    const result = await window.launcher.game.sendServerCommand(effectiveServer.id, '/player_list');
-    if (!result.success) {
+    try {
+      await sendServerCommandOrThrow('/player_list');
+    } catch (error) {
       window.clearTimeout(timeoutId);
       playersListCollectionRef.current = null;
       setIsPlayersRefreshing(false);
-      setPlayersError(result.error ?? 'Failed to request player list.');
+      setPlayersError(String(error));
     }
-  }, [effectiveServer, hasGameApi, lifecycleState]);
+  }, [effectiveServer, isCommandRuntimeReady, sendServerCommandOrThrow]);
 
   const handleKickPlayer = useCallback(async (playerName: string) => {
-    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') return;
+    if (!effectiveServer || !isCommandRuntimeReady) return;
     if (kickingPlayerName || isPlayerMessageSending || isPlayersBroadcasting) return;
 
     const confirmed = typeof window !== 'undefined'
@@ -3545,18 +4442,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
   }, [
     effectiveServer,
-    hasGameApi,
+    isCommandRuntimeReady,
     isPlayerMessageSending,
     isPlayersBroadcasting,
     kickingPlayerName,
-    lifecycleState,
     playerMessageTarget,
     refreshPlayers,
     sendServerCommandOrThrow,
   ]);
 
   const sendPlayerMessage = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') return;
+    if (!effectiveServer || !isCommandRuntimeReady) return;
     if (!playerMessageTarget || isPlayerMessageSending || kickingPlayerName || isPlayersBroadcasting) return;
 
     const text = playerMessageText.trim();
@@ -3570,6 +4466,23 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     try {
       const command = `/server_message_to plain ${quoteServerCommandArg(playerMessageTarget)} ${quoteServerCommandArg(text)}`;
       await sendServerCommandOrThrow(command);
+      // Optimistically add the message to the chat pane under the DM channel
+      const dmChannelId = `##${playerMessageTarget}`;
+      const optimistic: ChatMessage = {
+        timestamp: new Date().toISOString().replace('T', ' - ').replace(/\.\d+Z$/, ''),
+        sender: '[SERVER]',
+        receiverType: 'DIRECT',
+        receiver: playerMessageTarget,
+        text,
+      };
+      setChatMessagesByChannel((prev) => {
+        const existing = prev[dmChannelId] ?? [];
+        return { ...prev, [dmChannelId]: [...existing, optimistic] };
+      });
+      setChatChannels((prev) => {
+        if (prev.some((c) => c.channelId === dmChannelId)) return prev;
+        return [buildLiveChannelInfo(dmChannelId, 'DIRECT'), ...prev];
+      });
       setPlayerMessageText('');
       setPlayerMessageTarget(null);
     } catch (error) {
@@ -3579,9 +4492,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
   }, [
     effectiveServer,
-    hasGameApi,
+    isCommandRuntimeReady,
     kickingPlayerName,
-    lifecycleState,
     isPlayersBroadcasting,
     playerMessageTarget,
     playerMessageText,
@@ -3590,7 +4502,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   ]);
 
   const messageAllOnlinePlayers = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') return;
+    if (!effectiveServer || !isCommandRuntimeReady) return;
     if (isPlayersBroadcasting || isPlayerMessageSending || kickingPlayerName) return;
 
     const messageRaw = typeof window !== 'undefined'
@@ -3612,8 +4524,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
   }, [
     effectiveServer,
-    hasGameApi,
-    lifecycleState,
+    isCommandRuntimeReady,
     isPlayersBroadcasting,
     isPlayerMessageSending,
     kickingPlayerName,
@@ -3660,6 +4571,25 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const stopServer = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) return;
 
+    if (isRemoteServerProfile) {
+      if (!isRemoteCommandRuntimeReady) {
+        setActionError('Remote StarMote session is not ready to stop this server yet.');
+        return;
+      }
+
+      setActionError(null);
+      setPendingServerAction('stop');
+      try {
+        await scheduleTimedShutdown(STOP_SHUTDOWN_SECONDS);
+        setActionError('Remote shutdown command sent. Refresh after the countdown to confirm status.');
+      } catch (error) {
+        setActionError(`Failed to schedule remote shutdown: ${String(error)}`);
+      } finally {
+        setPendingServerAction(null);
+      }
+      return;
+    }
+
     setActionError(null);
     setPendingServerAction('stop');
     setLifecycleState('stopping');
@@ -3681,7 +4611,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setPendingServerAction(null);
     }
-  }, [effectiveServer, hasGameApi, scheduleTimedShutdown, waitForServerToStop]);
+  }, [effectiveServer, hasGameApi, isRemoteCommandRuntimeReady, isRemoteServerProfile, scheduleTimedShutdown, waitForServerToStop]);
 
   const forceStopServer = useCallback(async () => {
     if (!effectiveServer || !hasGameApi || pendingServerAction !== 'stop') return;
@@ -3712,9 +4642,16 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const executeDatabaseSql = useCallback(async (query: string, mode: DatabaseSqlMode) => {
     const trimmed = query.trim();
-    if (!trimmed || !effectiveServer || !hasGameApi) return;
-    if (lifecycleState !== 'running') {
-      setDatabaseSqlError('Server must be running to execute SQL admin commands.');
+    const canRunCommands = isRemoteServerProfile ? hasStarmoteApi : hasGameApi;
+    if (!trimmed || !effectiveServer || !canRunCommands) return;
+    if (!isCommandRuntimeReady) {
+      setDatabaseSqlError(isRemoteServerProfile
+        ? 'Remote StarMote session is not ready to execute SQL admin commands yet.'
+        : 'Server must be running to execute SQL admin commands.');
+      return;
+    }
+    if (isRemoteServerProfile && !canExecuteRemoteCommandActions) {
+      setDatabaseSqlError('Remote StarMote session is not ready to execute SQL admin commands yet.');
       return;
     }
 
@@ -3727,19 +4664,20 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setDatabaseIsExecuting(true);
 
     const command = `/${DATABASE_CMD_BY_MODE[mode]} ${quoteServerCommandArg(trimmed)}`;
-    const result = await window.launcher.game.sendServerCommand(effectiveServer.id, command);
-    if (!result.success) {
+    try {
+      await sendServerCommandOrThrow(command);
+    } catch (error) {
       clearPendingDatabaseSql();
-      setDatabaseSqlError(result.error ?? 'Failed to submit SQL command.');
+      setDatabaseSqlError(String(error));
       return;
     }
 
     dbTimeoutRef.current = window.setTimeout(() => {
       if (!pendingDbRequestRef.current) return;
       clearPendingDatabaseSql();
-      setDatabaseSqlError('Timed out (15 s) waiting for SQL response in server log.');
-    }, 15_000);
-  }, [clearPendingDatabaseSql, effectiveServer, hasGameApi, lifecycleState]);
+      setDatabaseSqlError('Timed out (30 s) waiting for SQL response in server log.');
+    }, 30000);
+  }, [canExecuteRemoteCommandActions, clearPendingDatabaseSql, effectiveServer, hasGameApi, hasStarmoteApi, isCommandRuntimeReady, isRemoteServerProfile, sendServerCommandOrThrow]);
 
   const loadDatabaseEntities = useCallback(async () => {
     setDatabaseSqlInput(DATABASE_ENTITY_LIST_SQL);
@@ -3762,6 +4700,27 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   const restartServer = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) return;
+
+    if (isRemoteServerProfile) {
+      if (!isRemoteCommandRuntimeReady) {
+        setActionError('Remote StarMote session is not ready to restart this server yet.');
+        return;
+      }
+
+      setActionError(null);
+      setPendingServerAction('restart');
+
+      try {
+        await sendBroadcastNotice(`Server restart in ${RESTART_SHUTDOWN_SECONDS} seconds.`);
+        await scheduleTimedShutdown(RESTART_SHUTDOWN_SECONDS);
+        setActionError('Remote restart command sent. Refresh after the countdown to confirm status.');
+      } catch (error) {
+        setActionError(`Failed to restart remote server: ${String(error)}`);
+      } finally {
+        setPendingServerAction(null);
+      }
+      return;
+    }
 
     setActionError(null);
     setPendingServerAction('restart');
@@ -3788,7 +4747,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setPendingServerAction(null);
     }
-  }, [effectiveServer, hasGameApi, scheduleTimedShutdown, sendBroadcastNotice, startServer, waitForServerToStop]);
+  }, [effectiveServer, hasGameApi, isRemoteCommandRuntimeReady, isRemoteServerProfile, scheduleTimedShutdown, sendBroadcastNotice, startServer, waitForServerToStop]);
 
   const updateServer = useCallback(async () => {
     if (!effectiveServer || !hasDownloadApi) return;
@@ -3838,100 +4797,166 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     waitForServerToStop,
   ]);
 
+  const ingestRuntimeLine = useCallback((message: string, level: string) => {
+    const runtimeEntry: LogEntry = {
+      timestamp: new Date().toISOString().slice(11, 19),
+      level: normalizeLogLevel(level),
+      message,
+    };
+    // Buffer lines and flush in batches so high-throughput SSH streams (e.g.
+    // 60k SQL result rows) don't trigger a React re-render per line.
+    const buf = liveLogFlushRef.current;
+    buf.pending.push(runtimeEntry);
+    if (buf.timer === null) {
+      buf.timer = window.setTimeout(() => {
+        buf.timer = null;
+        const lines = buf.pending.splice(0);
+        if (lines.length === 0) return;
+        setLiveProcessLogs((prev) => {
+          const next = [...prev, ...lines];
+          return next.length <= LOG_BUFFER_CAP
+            ? next
+            : next.slice(next.length - LOG_BUFFER_CAP);
+        });
+      }, 100);
+    }
+
+    // Strip optional syslog/journalctl prefix so pattern matching works regardless of log source.
+    const line = message.replace(/^\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+\S+:\s*/, '');
+
+    const playerNameMatch = line.match(/\[PL\]\s+Name:\s*(.+)$/i);
+    if (playerNameMatch) {
+      const playerName = playerNameMatch[1].trim();
+      if (playerName) {
+        const active = playersListCollectionRef.current;
+        if (active) active.names.add(playerName);
+      }
+    }
+
+    const parsedChat = parseChatLogLine(line, GENERAL_CHANNEL_ID);
+    if (parsedChat) {
+      const channelId = normalizeLiveChatChannelId(parsedChat.receiverType, parsedChat.receiver);
+      setChatMessagesByChannel((prev) => {
+        const existing = prev[channelId] ?? [];
+        return { ...prev, [channelId]: [...existing, parsedChat] };
+      });
+      setChatChannels((prev) => {
+        if (prev.some((c) => c.channelId === channelId)) return prev;
+        return [buildLiveChannelInfo(channelId, parsedChat.receiverType), ...prev];
+      });
+      setSelectedChatChannelId((prev) => prev ?? channelId);
+    }
+
+    const pending = pendingDbRequestRef.current;
+    if (!pending) return;
+
+    if (line.includes('YOU DO NOT HAVE PERMISSIONS TO DO SQL QUERIES')) {
+      clearPendingDatabaseSql();
+      setDatabaseSqlError('Permission denied. Add your name to SQL_PERMISSION in server.cfg.');
+      return;
+    }
+
+    const beginMatch = line.match(/SQL QUERY\s+(\d+)\s+BEGIN/i);
+    if (beginMatch) {
+      const rid = Number.parseInt(beginMatch[1], 10);
+      dbLinesByRequestRef.current.set(rid, []);
+      if (pending.awaitingRequestId) {
+        pending.awaitingRequestId = false;
+        pending.requestId = rid;
+        setDatabaseLastRequestId(rid);
+      }
+      return;
+    }
+
+    const rowMatch = line.match(/(?:^|\s)SQL#(\d+):\s*(.*)$/);
+    if (rowMatch) {
+      const rid = Number.parseInt(rowMatch[1], 10);
+      const lines = dbLinesByRequestRef.current.get(rid) ?? [];
+      lines.push(rowMatch[2]);
+      dbLinesByRequestRef.current.set(rid, lines);
+      // If BEGIN was missing or arrived before pending was set, infer requestId from the first row.
+      if (pending.awaitingRequestId) {
+        pending.awaitingRequestId = false;
+        pending.requestId = rid;
+        setDatabaseLastRequestId(rid);
+      }
+      return;
+    }
+
+    const endMatch = line.match(/SQL QUERY\s+(\d+)\s+END/i);
+    if (!endMatch) return;
+
+    const rid = Number.parseInt(endMatch[1], 10);
+    const lines = dbLinesByRequestRef.current.get(rid) ?? [];
+    dbLinesByRequestRef.current.delete(rid);
+    if (pending.requestId !== rid) return;
+
+    const savedMode = pending.mode;
+    clearPendingDatabaseSql();
+    setDatabaseSqlStatus('Processing results…');
+
+    // Defer the heavy parse off the synchronous event-handler call stack so the
+    // UI can repaint (showing "Processing results…") before potentially blocking
+    // for hundreds of milliseconds on a large result set.
+    setTimeout(() => {
+      setDatabaseSqlRawLines(lines);
+      const table = parseDatabaseSqlTable(lines);
+      setDatabaseSqlOutput(table);
+
+      if (savedMode === 'query') {
+        const entities = parseDatabaseEntities(table);
+        setDatabaseEntities(entities);
+        setDatabaseEntityPage(0);
+        setDatabaseSqlStatus(`Query completed — ${table.rows.length} row${table.rows.length === 1 ? '' : 's'} returned.`);
+      } else if (savedMode === 'update') {
+        setDatabaseSqlStatus('Update completed. SQL_UPDATE does not return row data.');
+      } else {
+        setDatabaseSqlStatus(`Insert completed — ${table.rows.length} generated key row${table.rows.length === 1 ? '' : 's'} returned.`);
+      }
+    }, 0);
+  }, [clearPendingDatabaseSql]);
+
   useEffect(() => {
     if (!effectiveServer || typeof window === 'undefined' || !window.launcher?.game?.onLog) return;
 
     const cleanup = window.launcher.game.onLog((data) => {
       if (data.installationId !== effectiveServer.id) return;
-
-      const runtimeEntry: LogEntry = {
-        timestamp: new Date().toISOString().slice(11, 19),
-        level: normalizeLogLevel(data.level),
-        message: data.message,
-      };
-      setLiveProcessLogs((prev) => {
-        const next = [...prev, runtimeEntry];
-        return next.length <= LOG_BUFFER_CAP
-          ? next
-          : next.slice(next.length - LOG_BUFFER_CAP);
-      });
-
-      // ── Player-list parsing ────────────────────────────────────────────────
-      const playerNameMatch = data.message.match(/\[PL\]\s+Name:\s*(.+)$/i);
-      if (playerNameMatch) {
-        const playerName = playerNameMatch[1].trim();
-        if (playerName) {
-          const active = playersListCollectionRef.current;
-          if (active) active.names.add(playerName);
-        }
-      }
-
-      // ── Database SQL output parsing ────────────────────────────────────────
-      const pending = pendingDbRequestRef.current;
-      if (!pending) return;
-
-      // Permission error
-      if (data.message.includes('YOU DO NOT HAVE PERMISSIONS TO DO SQL QUERIES')) {
-        clearPendingDatabaseSql();
-        setDatabaseSqlError('Permission denied. Add your name to SQL_PERMISSION in server.cfg.');
-        return;
-      }
-
-      // "---------- SQL QUERY N BEGIN ----------"
-      const beginMatch = data.message.match(/SQL QUERY\s+(\d+)\s+BEGIN/i);
-      if (beginMatch) {
-        const rid = Number.parseInt(beginMatch[1], 10);
-        dbLinesByRequestRef.current.set(rid, []);
-        if (pending.awaitingRequestId) {
-          pending.awaitingRequestId = false;
-          pending.requestId = rid;
-          setDatabaseLastRequestId(rid);
-        }
-        return;
-      }
-
-      // "SQL#N: <csv-row>"
-      const rowMatch = data.message.match(/^SQL#(\d+):\s*(.*)$/);
-      if (rowMatch) {
-        const rid = Number.parseInt(rowMatch[1], 10);
-        const lines = dbLinesByRequestRef.current.get(rid) ?? [];
-        lines.push(rowMatch[2]);
-        dbLinesByRequestRef.current.set(rid, lines);
-        return;
-      }
-
-      // "---------- SQL QUERY N END ----------"
-      const endMatch = data.message.match(/SQL QUERY\s+(\d+)\s+END/i);
-      if (endMatch) {
-        const rid = Number.parseInt(endMatch[1], 10);
-        const lines = dbLinesByRequestRef.current.get(rid) ?? [];
-        dbLinesByRequestRef.current.delete(rid);
-        if (pending.requestId !== rid) return;
-
-        const savedMode = pending.mode;
-        clearPendingDatabaseSql();
-
-        setDatabaseSqlRawLines(lines);
-        const table = parseDatabaseSqlTable(lines);
-        setDatabaseSqlOutput(table);
-
-        if (savedMode === 'query') {
-          const entities = parseDatabaseEntities(table);
-          setDatabaseEntities(entities);
-          setDatabaseSqlStatus(`Query completed — ${table.rows.length} row${table.rows.length === 1 ? '' : 's'} returned.`);
-        } else if (savedMode === 'update') {
-          setDatabaseSqlStatus('Update completed. SQL_UPDATE does not return row data.');
-        } else {
-          setDatabaseSqlStatus(`Insert completed — ${table.rows.length} generated key row${table.rows.length === 1 ? '' : 's'} returned.`);
-        }
-      }
+      ingestRuntimeLine(data.message, data.level);
     });
 
     return cleanup;
-  }, [clearPendingDatabaseSql, effectiveServer]);
+  }, [effectiveServer, ingestRuntimeLine]);
 
   useEffect(() => {
-    if (!effectiveServer || !hasGameApi || lifecycleState !== 'running') {
+    if (!effectiveServer || !starmoteApi?.onRuntimeEvent) return;
+
+    const unsubscribe = starmoteApi.onRuntimeEvent((event) => {
+      if (event.serverId !== effectiveServer.id) return;
+      ingestRuntimeLine(event.line, 'INFO');
+    });
+
+    return unsubscribe;
+  }, [effectiveServer, ingestRuntimeLine, starmoteApi]);
+
+  useEffect(() => {
+    if (!databaseInspectEntity) return;
+
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      closeDatabaseInspectModal();
+    };
+
+    window.addEventListener('keydown', onEscape);
+    return () => {
+      window.removeEventListener('keydown', onEscape);
+    };
+  }, [closeDatabaseInspectModal, databaseInspectEntity]);
+
+  useEffect(() => {
+    if (!effectiveServer || !isCommandRuntimeReady) {
+      if (effectiveServer?.id) {
+        databaseAutoLoadedServerIdsRef.current.delete(effectiveServer.id);
+      }
       setOnlinePlayers([]);
       setIsPlayersRefreshing(false);
       setPlayersError(null);
@@ -3954,14 +4979,24 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         playersListCollectionRef.current = null;
       }
     };
-  }, [effectiveServer?.id, hasGameApi, lifecycleState, refreshPlayers]);
+  }, [effectiveServer?.id, isCommandRuntimeReady, refreshPlayers]);
 
   // Auto-load entity list when switching to the database tab (only if no data yet)
   useEffect(() => {
-    if (activeTab !== 'database') return;
-    if (databaseEntities.length > 0 || databaseIsExecuting) return;
+    const currentServerId = effectiveServer?.id;
+    if (!shouldAutoLoadDatabaseEntities({
+      activeTab,
+      databaseIsExecuting,
+      lifecycleState,
+      serverId: currentServerId,
+      autoLoadedServerIds: databaseAutoLoadedServerIdsRef.current,
+    })) {
+      return;
+    }
+
+    databaseAutoLoadedServerIdsRef.current.add(currentServerId);
     void loadDatabaseEntities();
-  }, [activeTab, databaseEntities.length, databaseIsExecuting, loadDatabaseEntities]);
+  }, [activeTab, databaseIsExecuting, effectiveServer?.id, lifecycleState, loadDatabaseEntities]);
 
   // Cleanup pending DB request timeout on unmount
   useEffect(() => {
@@ -4009,9 +5044,22 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   );
 
   const filteredSortedDatabaseEntities = useMemo(() => {
+    const search = databaseEntitySearchTerm.trim().toLowerCase();
     const filtered = databaseEntities.filter((e) => {
+      if (!matchesDatabaseSectorLoadFilter(e.sectorLoaded, databaseSectorLoadFilter)) return false;
       if (databaseEntityTypeFilter !== 'all' && e.typeValue !== databaseEntityTypeFilter) return false;
       if (databaseFactionFilter !== 'all' && e.factionValue !== databaseFactionFilter) return false;
+      if (search) {
+        const searchable = [
+          e.name,
+          e.id,
+          e.uid,
+          e.factionValue,
+          e.typeValue,
+          `${e.x},${e.y},${e.z}`,
+        ].join(' ').toLowerCase();
+        if (!searchable.includes(search)) return false;
+      }
       return true;
     });
 
@@ -4021,7 +5069,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     });
 
     return filtered;
-  }, [databaseEntities, databaseEntityTypeFilter, databaseFactionFilter, databaseSortKey]);
+  }, [
+    databaseEntities,
+    databaseEntitySearchTerm,
+    databaseEntityTypeFilter,
+    databaseFactionFilter,
+    databaseSectorLoadFilter,
+    databaseSortKey,
+  ]);
 
   const databaseSectorGroups = useMemo(() => {
     const bySector = new Map<string, DatabaseEntityRow[]>();
@@ -4033,6 +5088,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
     return Array.from(bySector.entries()).map(([sector, entities]) => ({ sector, entities }));
   }, [filteredSortedDatabaseEntities]);
+
+  // Reset to first page whenever the filtered/grouped data changes
+  useEffect(() => {
+    setDatabaseEntityPage(0);
+  }, [databaseSectorGroups]);
 
   const toggleLogFilter = useCallback((filter: LogFilter) => {
     setActiveLogFilters((prev) => {
@@ -4050,10 +5110,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setActiveLogFilters([...LOG_FILTER_OPTIONS]);
   }, []);
 
-  const canStart = !!effectiveServer && !isUpdating && lifecycleState !== 'running' && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
-  const canStop = !!effectiveServer && !isUpdating && (lifecycleState === 'running' || lifecycleState === 'starting');
-  const canRestart = !!effectiveServer && !isUpdating && lifecycleState === 'running';
-  const canUpdate = !!effectiveServer && !isUpdating && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
+  const canStart = !!effectiveServer && !effectiveServer.isRemote && !isUpdating && lifecycleState !== 'running' && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
+  const canStop = !!effectiveServer && !isUpdating && (effectiveServer.isRemote ? isRemoteCommandRuntimeReady : (lifecycleState === 'running' || lifecycleState === 'starting'));
+  const canRestart = !!effectiveServer && !isUpdating && (effectiveServer.isRemote ? isRemoteCommandRuntimeReady : lifecycleState === 'running');
+  const canUpdate = isServerUpdateSupported(effectiveServer) && !isUpdating && lifecycleState !== 'starting' && lifecycleState !== 'stopping';
 
   const getLogLevelColor = (level: LogEntry['level']) => {
     switch (level) {
@@ -4263,8 +5323,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       id: 'start',
       label: 'Start Server',
       buttonLabel: lifecycleState === 'starting' ? 'Starting...' : 'Start Server',
-      description: 'Launch the selected StarMade server using its current install and Java settings.',
-      detail: lifecycleState === 'running' ? 'Server is already online.' : 'Starts the dedicated server process.',
+      description: effectiveServer?.isRemote
+        ? 'Remote servers are started from their host machine or orchestration layer.'
+        : 'Launch the selected StarMade server using its current install and Java settings.',
+      detail: effectiveServer?.isRemote
+        ? 'Remote start is unavailable in this launcher.'
+        : (lifecycleState === 'running' ? 'Server is already online.' : 'Starts the dedicated server process.'),
       enabled: canStart,
       isLoading: lifecycleState === 'starting',
       emphasis: 'accent',
@@ -4273,16 +5337,20 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     {
       id: 'stop',
       label: 'Stop Server',
-      description: 'Gracefully stop the currently running dedicated server process.',
-      buttonLabel: pendingServerAction === 'stop' ? 'Force Stop' : 'Stop Server',
-      detail: pendingServerAction === 'stop'
-        ? 'Timed shutdown is in progress. Click Force Stop to kill the process immediately.'
-        : lifecycleState === 'stopped'
-          ? 'Server is currently offline.'
-          : 'Schedules a timed shutdown and waits for the process to stop.',
-      enabled: pendingServerAction === 'stop' ? true : canStop,
+      description: effectiveServer?.isRemote
+        ? 'Send a remote /shutdown command over StarMote.'
+        : 'Gracefully stop the currently running dedicated server process.',
+      buttonLabel: pendingServerAction === 'stop' && !effectiveServer?.isRemote ? 'Force Stop' : 'Stop Server',
+      detail: effectiveServer?.isRemote
+        ? 'Schedules a timed shutdown command on the remote host.'
+        : (pendingServerAction === 'stop'
+          ? 'Timed shutdown is in progress. Click Force Stop to kill the process immediately.'
+          : lifecycleState === 'stopped'
+            ? 'Server is currently offline.'
+            : 'Schedules a timed shutdown and waits for the process to stop.'),
+      enabled: pendingServerAction === 'stop' && !effectiveServer?.isRemote ? true : canStop,
       isLoading: pendingServerAction === 'stop',
-      allowClickWhileLoading: pendingServerAction === 'stop',
+      allowClickWhileLoading: pendingServerAction === 'stop' && !effectiveServer?.isRemote,
       emphasis: 'danger',
       onClick: () => {
         if (pendingServerAction === 'stop') {
@@ -4296,8 +5364,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       id: 'restart',
       label: 'Restart Server',
       buttonLabel: pendingServerAction === 'restart' ? 'Restarting...' : 'Restart Server',
-      description: 'Stop and then start the server again with the current configuration.',
-      detail: 'Useful after config changes or when you want a clean runtime reset.',
+      description: effectiveServer?.isRemote
+        ? 'Send remote restart notices and timed shutdown commands over StarMote.'
+        : 'Stop and then start the server again with the current configuration.',
+      detail: effectiveServer?.isRemote
+        ? 'Remote restart does not spawn local processes; it dispatches remote commands only.'
+        : 'Useful after config changes or when you want a clean runtime reset.',
       enabled: canRestart,
       isLoading: pendingServerAction === 'restart',
       onClick: () => { void restartServer(); },
@@ -4310,12 +5382,16 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         : pendingServerAction === 'update'
           ? 'Scheduling Update...'
           : 'Update Server',
-      description: 'Download and verify the selected StarMade server version into this server path.',
-      detail: isUpdating
-        ? `Download state: ${serverDownloadStatus?.state ?? 'downloading'}`
-        : pendingServerAction === 'update'
-          ? 'Broadcasting update notice and waiting for timed shutdown.'
-        : 'Checks the current version manifest and updates local files.',
+      description: effectiveServer?.isRemote
+        ? 'Remote servers must be updated manually or through the remote host environment.'
+        : 'Download and verify the selected StarMade server version into this server path.',
+      detail: effectiveServer?.isRemote
+        ? 'Remote update is disabled until a universal remote-update workflow exists.'
+        : isUpdating
+          ? `Download state: ${serverDownloadStatus?.state ?? 'downloading'}`
+          : pendingServerAction === 'update'
+            ? 'Broadcasting update notice and waiting for timed shutdown.'
+            : 'Checks the current version manifest and updates local files.',
       enabled: canUpdate,
       isLoading: isUpdating || pendingServerAction === 'update',
       onClick: () => { void updateServer(); },
@@ -4405,7 +5481,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [updateQuickActions]);
 
   const handleClearLogs = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || isClearingLogFiles) return;
+    const canClearRemote = isRemoteLogsEnabled && isRemoteFileSessionEnabled && !!remoteFilesApi;
+    if (!effectiveServer || (!hasGameApi && !canClearRemote) || isClearingLogFiles) return;
 
     const confirmed = window.confirm('Are you sure you want to delete all files in this server\'s logs folder? This cannot be undone.');
     if (!confirmed) return;
@@ -4414,10 +5491,24 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setLogLoadError(null);
 
     try {
-      const result = await window.launcher.game.clearLogFiles(effectiveServer.path);
-      if (!result.success) {
-        setLogLoadError(result.error ?? 'Failed to clear logs folder.');
-        return;
+      if (canClearRemote) {
+        const catalog = await remoteFilesApi.listLogFiles(effectiveServer.id);
+        const allFiles = catalog.categories.flatMap((cat) => cat.files);
+        const errors: string[] = [];
+        for (const file of allFiles) {
+          const result = await remoteFilesApi.deleteFile(effectiveServer.id, `logs/${file.relativePath}`);
+          if (!result.success) errors.push(file.relativePath);
+        }
+        if (errors.length > 0) {
+          setLogLoadError(`Failed to delete: ${errors.join(', ')}`);
+          return;
+        }
+      } else {
+        const result = await window.launcher.game.clearLogFiles(effectiveServer.path);
+        if (!result.success) {
+          setLogLoadError(result.error ?? 'Failed to clear logs folder.');
+          return;
+        }
       }
 
       setLogs([]);
@@ -4430,11 +5521,15 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setIsClearingLogFiles(false);
     }
-  }, [effectiveServer, hasGameApi, isClearingLogFiles, reloadLogCatalog]);
+  }, [effectiveServer, hasGameApi, isClearingLogFiles, isRemoteFileSessionEnabled, isRemoteLogsEnabled, reloadLogCatalog, remoteFilesApi]);
 
   const handleClearBufferedLogs = useCallback(() => {
     if (isLiveLogSelected) {
-      setLiveProcessLogs([]);
+      // Cancel any pending flush and discard buffered lines
+    const buf = liveLogFlushRef.current;
+    if (buf.timer !== null) { window.clearTimeout(buf.timer); buf.timer = null; }
+    buf.pending.length = 0;
+    setLiveProcessLogs([]);
     } else {
       setLogs([]);
     }
@@ -4498,21 +5593,22 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [effectiveServer?.id, effectiveServer?.name, effectiveServerName, serverId, serverName]);
 
   const reloadGameConfigXml = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled)) return;
 
     setIsGameConfigLoading(true);
     setGameConfigError(null);
     try {
-      const content = await window.launcher.game.readGameConfigXml(effectiveServer.path);
-      const next = content ?? '';
-      hydrateGameConfigState(next);
+      const content = isRemoteFileSessionEnabled && remoteFilesApi
+        ? await remoteFilesApi.readConfigXml(effectiveServer.id)
+        : await window.launcher.game.readGameConfigXml(effectiveServer.path);
+      hydrateGameConfigState(content ?? '');
       setGameConfigLoadedServerId(effectiveServer.id);
     } catch (error) {
       setGameConfigError(`Failed to reload GameConfig.xml: ${String(error)}`);
     } finally {
       setIsGameConfigLoading(false);
     }
-  }, [effectiveServer, hasGameApi, hydrateGameConfigState]);
+  }, [effectiveServer, hasGameApi, hydrateGameConfigState, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   const reloadFactionConfigXml = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) return;
@@ -4537,7 +5633,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [effectiveServer, hasGameApi, hydrateFactionConfigState, readFactionConfigXmlFromInstallation]);
 
   const setGameConfigCommentToggle = useCallback(async (entry: GameConfigCommentToggleEntry, enabled: boolean) => {
-    if (!effectiveServer || !hasGameApi || savingGameConfigPath || savingGameConfigToggleId) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled) || savingGameConfigPath || savingGameConfigToggleId) return;
 
     setSavingGameConfigToggleId(entry.id);
     setGameConfigError(null);
@@ -4569,13 +5665,18 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           }
         }
       } else if (target) {
-        const serializedTarget = new XMLSerializer().serializeToString(target);
+        const serializedTarget = serializeXmlDoc(target);
         const replacement = doc.createComment(`\n  ${serializedTarget}\n  `);
         target.parentNode?.replaceChild(replacement, target);
       }
 
-      const serialized = new XMLSerializer().serializeToString(doc);
-      const result = await window.launcher.game.writeGameConfigXml(effectiveServer.path, serialized);
+      const serialized = serializeXmlDoc(doc);
+      let result: { success: boolean; error?: string };
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        result = await remoteFilesApi.writeConfigXml(effectiveServer.id, serialized);
+      } else {
+        result = await window.launcher.game.writeGameConfigXml(effectiveServer.path, serialized);
+      }
       if (!result.success) {
         setGameConfigError(result.error ?? `Failed to update ${entry.label} in GameConfig.xml.`);
         return;
@@ -4593,12 +5694,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     gameConfigXmlText,
     hasGameApi,
     hydrateGameConfigState,
+    isRemoteFileSessionEnabled,
+    remoteFilesApi,
     savingGameConfigPath,
     savingGameConfigToggleId,
   ]);
 
   const saveGameConfigField = useCallback(async (field: GameConfigField, explicitValue?: string) => {
-    if (!effectiveServer || !hasGameApi || savingGameConfigPath || savingGameConfigToggleId) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled) || savingGameConfigPath || savingGameConfigToggleId) return;
 
     const currentRaw = explicitValue ?? gameConfigValues[field.path] ?? field.defaultValue;
     const validation = getGameConfigFieldValidation(field, currentRaw);
@@ -4629,8 +5732,13 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       }
 
       target.textContent = sanitized;
-      const serialized = new XMLSerializer().serializeToString(doc);
-      const result = await window.launcher.game.writeGameConfigXml(effectiveServer.path, serialized);
+      const serialized = serializeXmlDoc(doc);
+      let result: { success: boolean; error?: string };
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        result = await remoteFilesApi.writeConfigXml(effectiveServer.id, serialized);
+      } else {
+        result = await window.launcher.game.writeGameConfigXml(effectiveServer.path, serialized);
+      }
       if (!result.success) {
         setGameConfigError(result.error ?? `Failed to save ${field.label} to GameConfig.xml.`);
         return;
@@ -4643,7 +5751,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setSavingGameConfigPath(null);
     }
-  }, [effectiveServer, gameConfigValues, gameConfigXmlText, hasGameApi, hydrateGameConfigState, savingGameConfigPath, savingGameConfigToggleId]);
+  }, [effectiveServer, gameConfigValues, gameConfigXmlText, hasGameApi, hydrateGameConfigState, isRemoteFileSessionEnabled, remoteFilesApi, savingGameConfigPath, savingGameConfigToggleId]);
 
   const saveFactionConfigField = useCallback(async (field: FactionConfigField, explicitValue?: string) => {
     if (!effectiveServer || !hasGameApi || savingFactionConfigPath) return;
@@ -4677,7 +5785,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       }
 
       target.textContent = sanitized;
-      const serialized = new XMLSerializer().serializeToString(doc);
+      const serialized = serializeXmlDoc(doc);
       const result = await writeFactionConfigXmlToInstallation(serialized);
       if (!result.success) {
         setFactionConfigError(result.error ?? `Failed to save ${field.label} to the faction config template.`);
@@ -4751,14 +5859,23 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [effectiveServer, isSavingServerPort, serverPortInput, updateServerItem]);
 
   const persistServerCfgValue = useCallback(async (key: string, value: string): Promise<boolean> => {
-    if (!effectiveServer || !hasGameApi) return false;
+    if (!effectiveServer) return false;
+    if (isRemoteFileSessionEnabled && remoteFilesApi) {
+      const result = await remoteFilesApi.writeServerConfigValue(effectiveServer.id, key, value);
+      if (!result.success) {
+        setActionError(result.error ?? `Failed to save ${key} in server.cfg.`);
+        return false;
+      }
+      return true;
+    }
+    if (!hasGameApi) return false;
     const result = await window.launcher.game.writeServerConfigValue(effectiveServer.path, key, value);
     if (!result.success) {
       setActionError(result.error ?? `Failed to save ${key} in server.cfg.`);
       return false;
     }
     return true;
-  }, [effectiveServer, hasGameApi]);
+  }, [effectiveServer, hasGameApi, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   const saveConfigField = useCallback(async (field: ServerConfigField, explicitValue?: string) => {
     if (savingConfigKey) return;
@@ -4801,11 +5918,6 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         }
       }
 
-      if (field.key === 'SERVER_LISTEN_IP') {
-        if (effectiveServer && effectiveServer.serverIp !== nextValue) {
-          updateServerItem({ ...effectiveServer, serverIp: nextValue });
-        }
-      }
 
       if (field.key === 'USE_STARMADE_AUTHENTICATION') {
         const enabled = parseCfgBoolean(nextValue, false);
@@ -5016,6 +6128,57 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const renderConnectionWidget = () => (
     <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
       <div className="space-y-3">
+        {canShowRemoteConnectControls ? (
+          <>
+            <div className="flex items-center justify-between gap-3 rounded-md border border-white/10 bg-black/20 px-3 py-2">
+              <div className="space-y-1">
+                <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                  Remote Target: <span className="text-gray-200">{resolveDefaultRemoteConnectHost(effectiveServer, serverConfigValues.SERVER_LISTEN_IP)}</span>
+                </p>
+                <p className="text-[11px] text-gray-400">
+                  Status:{' '}
+                  <span className={remoteConnectionDisplay.className}>
+                    {remoteConnectionDisplay.label}
+                  </span>
+                  {remoteConnectionStatus?.connectedAt ? ` · ${new Date(remoteConnectionStatus.connectedAt).toLocaleTimeString()}` : ''}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={openRemoteConnectModal}
+                  disabled={!canOpenRemoteConnectModal}
+                  className="rounded border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Remote Connect
+                </button>
+                <button
+                  onClick={() => { void handleRemoteDisconnect(); }}
+                  disabled={!canDisconnectRemoteSession || isRemoteDisconnectPending || !hasStarmoteApi}
+                  className="rounded border border-white/20 bg-black/30 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-200 transition-colors hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isRemoteDisconnectPending ? 'Disconnecting...' : 'Disconnect'}
+                </button>
+              </div>
+            </div>
+            <div className="rounded-md border border-white/10 bg-black/15 px-3 py-2 text-[11px] text-gray-300">
+              <p className="font-semibold uppercase tracking-wider text-gray-400">Protocol Diagnostics</p>
+              <p className="mt-1 text-gray-300">
+                Reason Code: <span className="font-mono text-gray-100">{remoteConnectionStatus?.reasonCode ?? 'none'}</span>
+              </p>
+              {remoteConnectionStatus?.error && (
+                <p className="mt-1 text-red-200">Last Error: {remoteConnectionStatus.error}</p>
+              )}
+              {remoteDiagnosticsHint && (
+                <p className="mt-1 text-amber-200">Hint: {remoteDiagnosticsHint}</p>
+              )}
+            </div>
+          </>
+        ) : (
+          <div className="rounded-md border border-white/10 bg-black/15 px-3 py-2 text-[11px] text-gray-300">
+            <p className="font-semibold uppercase tracking-wider text-gray-400">Remote Control</p>
+            <p className="mt-1">Remote Connect is hidden for local server profiles.</p>
+          </div>
+        )}
         {renderDashboardConfigField('SERVER_LISTEN_IP', { labelWidthClassName: 'w-28' })}
         <label className="flex items-center gap-3 text-sm">
           <span className="w-28 text-gray-300">Server Port:</span>
@@ -5045,6 +6208,400 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     </div>
   );
 
+  const renderRemoteConnectModal = () => {
+    if (!isRemoteConnectModalOpen || !canShowRemoteConnectControls) return null;
+
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Remote connection"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) {
+            closeRemoteConnectModal();
+          }
+        }}
+      >
+        <div className="flex w-full max-w-xl flex-col rounded-lg border border-white/15 bg-[#101422] shadow-xl" style={{ maxHeight: '90vh' }}>
+          <div className="flex-shrink-0 border-b border-white/10 px-5 pt-5 pb-4">
+            <h3 className="text-lg font-semibold text-white">Remote Connection</h3>
+            <p className="mt-1 text-sm text-gray-400">
+              Enter remote server details and load them into the panel.
+            </p>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+          <div className="space-y-3">
+            <label className="block text-sm">
+              <span className="mb-1 block text-gray-300">Server Profile</span>
+              <select
+                value={remoteConnectTargetServerId}
+                onChange={(event) => {
+                  const nextServerId = event.target.value;
+                  const nextServer = remoteConnectEligibleServers.find((server) => server.id === nextServerId) ?? null;
+                  populateRemoteConnectForm(nextServer, nextServerId);
+                }}
+                disabled={isRemoteConnectPending || remoteConnectEligibleServers.length === 0}
+                className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+              >
+                {remoteConnectEligibleServers.map((server) => (
+                  <option key={server.id} value={server.id}>
+                    {server.name || `Server ${server.id}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block text-sm">
+              <span className="mb-1 block text-gray-300">Connection Backend</span>
+              <select
+                value={remoteBackendInput}
+                onChange={(event) => {
+                  const next = event.target.value as RemoteBackendType;
+                  setRemoteBackendInput(next);
+                  setRemoteConnectPortInput(getDefaultRemoteConnectPort(next));
+                  if (next === 'azure-vm') {
+                    setRemoteConnectUsernameInput('azureuser');
+                  } else {
+                    setRemoteConnectUsernameInput(activeAccount?.name?.trim() || '');
+                  }
+                }}
+                disabled={isRemoteConnectPending}
+                className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+              >
+                <option value="starmote">StarMote (game protocol)</option>
+                <option value="azure-vm">Azure VM (SSH)</option>
+              </select>
+            </label>
+
+            <label className="block text-sm">
+              <span className="mb-1 block text-gray-300">Display Name</span>
+              <input
+                value={remoteConnectNameInput}
+                onChange={(event) => setRemoteConnectNameInput(event.target.value)}
+                disabled={isRemoteConnectPending}
+                placeholder="My Remote Server"
+                className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+              />
+            </label>
+
+            {remoteBackendInput === 'starmote' && (
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-300">StarMade Login Name</span>
+                <input
+                  value={remoteConnectUsernameInput}
+                  onChange={(event) => setRemoteConnectUsernameInput(event.target.value)}
+                  disabled={isRemoteConnectPending}
+                  placeholder={activeAccount?.name || 'Admin username'}
+                  className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                />
+              </label>
+            )}
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-300">Host / IP</span>
+                <input
+                  value={remoteConnectHostInput}
+                  onChange={(event) => setRemoteConnectHostInput(event.target.value)}
+                  disabled={isRemoteConnectPending}
+                  placeholder="example.org or 203.0.113.10"
+                  className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                />
+              </label>
+
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-300">
+                  {remoteBackendInput === 'azure-vm' ? 'SSH Port' : 'Game Port'}
+                </span>
+                <input
+                  value={remoteConnectPortInput}
+                  onChange={(event) => setRemoteConnectPortInput(event.target.value)}
+                  disabled={isRemoteConnectPending}
+                  inputMode="numeric"
+                  placeholder={remoteBackendInput === 'azure-vm' ? '22' : '4242'}
+                  className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                />
+              </label>
+            </div>
+
+            {remoteBackendInput === 'azure-vm' && (
+              <div className="space-y-3">
+                <div className="rounded-md border border-sky-500/20 bg-sky-500/5 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-sky-200">Azure VM (SSH)</p>
+                  <p className="mt-1 text-xs text-gray-400">
+                    Connects via SSH using a key file or password. Provide a key path <em>or</em> a password — key takes priority if both are set.
+                  </p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-gray-300">SSH Username</span>
+                    <input
+                      value={remoteConnectUsernameInput}
+                      onChange={(event) => setRemoteConnectUsernameInput(event.target.value)}
+                      disabled={isRemoteConnectPending}
+                      placeholder="azureuser"
+                      className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                    />
+                  </label>
+                  <label className="block text-sm sm:col-span-2">
+                    <span className="mb-1 block text-gray-300">SSH Key Path</span>
+                    <input
+                      value={azureVmSshKeyPathInput}
+                      onChange={(event) => setAzureVmSshKeyPathInput(event.target.value)}
+                      disabled={isRemoteConnectPending}
+                      placeholder="~/.ssh/id_rsa  (leave blank for SSH agent)"
+                      className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200 font-mono text-xs"
+                    />
+                  </label>
+                  <label className="block text-sm sm:col-span-2">
+                    <span className="mb-1 block text-gray-300">SSH Password <span className="text-gray-500">(if not using a key)</span></span>
+                    <input
+                      type="password"
+                      value={azureVmSshPasswordInput}
+                      onChange={(event) => setAzureVmSshPasswordInput(event.target.value)}
+                      disabled={isRemoteConnectPending}
+                      placeholder="Leave blank to use key auth or SSH agent"
+                      className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                    />
+                  </label>
+                </div>
+
+                <div>
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-gray-300">Screen/tmux Session Name</span>
+                    <input
+                      value={azureVmScreenSessionInput}
+                      onChange={(event) => setAzureVmScreenSessionInput(event.target.value)}
+                      disabled={isRemoteConnectPending}
+                      placeholder="StarMade  (auto-detected if blank)"
+                      className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                    />
+                  </label>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Name of the screen or tmux session running the StarMade server process. Used when sending admin commands.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div className="rounded-md border border-cyan-500/20 bg-cyan-500/5 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-cyan-200">Remote File Access</p>
+              <p className="mt-1 text-xs text-gray-400">
+                Optional FTP/SFTP profile details for future Files and Configuration tab support. Passwords and SSH keys will be added separately.
+              </p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-300">Protocol</span>
+                <select
+                  value={remoteFileAccessProtocolInput}
+                  onChange={(event) => {
+                    const nextProtocol = event.target.value as RemoteFileAccessProtocol;
+                    setRemoteFileAccessProtocolInput(nextProtocol);
+                    setRemoteFileAccessPortInput((previous) => previous.trim() || getDefaultRemoteFileAccessPort(nextProtocol));
+                  }}
+                  disabled={isRemoteConnectPending}
+                  className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                >
+                  <option value="none">None yet</option>
+                  <option value="ftp">FTP</option>
+                  <option value="sftp">SFTP</option>
+                </select>
+              </label>
+
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-300">File Host</span>
+                <input
+                  value={remoteFileAccessHostInput}
+                  onChange={(event) => setRemoteFileAccessHostInput(event.target.value)}
+                  disabled={isRemoteConnectPending}
+                  placeholder="Leave blank to reuse remote host"
+                  className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                />
+              </label>
+
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-300">File Port</span>
+                <input
+                  value={remoteFileAccessPortInput}
+                  onChange={(event) => setRemoteFileAccessPortInput(event.target.value)}
+                  disabled={isRemoteConnectPending}
+                  placeholder={remoteFileAccessProtocolInput === 'sftp' ? '22' : remoteFileAccessProtocolInput === 'ftp' ? '21' : 'Optional'}
+                  className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                />
+              </label>
+
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-300">File Username</span>
+                <input
+                  value={remoteFileAccessUsernameInput}
+                  onChange={(event) => setRemoteFileAccessUsernameInput(event.target.value)}
+                  disabled={isRemoteConnectPending}
+                  placeholder="Optional"
+                  className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                />
+              </label>
+            </div>
+
+            {remoteFileAccessProtocolInput === 'ftp' && (
+              <label className="block text-sm">
+                <span className="mb-1 block text-gray-300">FTP Password</span>
+                <input
+                  type="password"
+                  value={remoteFileAccessPasswordInput}
+                  onChange={(event) => setRemoteFileAccessPasswordInput(event.target.value)}
+                  disabled={isRemoteConnectPending}
+                  placeholder="Leave blank for anonymous"
+                  className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                />
+              </label>
+            )}
+
+            <label className="block text-sm">
+              <span className="mb-1 block text-gray-300">Remote Root Path</span>
+              <input
+                value={remoteFileAccessRootPathInput}
+                onChange={(event) => setRemoteFileAccessRootPathInput(event.target.value)}
+                disabled={isRemoteConnectPending}
+                placeholder="/home/starmade/server"
+                className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+              />
+            </label>
+
+            {remoteConnectError && (
+              <p className="rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+                {remoteConnectError}
+              </p>
+            )}
+          </div>
+          </div>{/* end scroll wrapper */}
+
+          <div className="flex-shrink-0 border-t border-white/10 px-5 py-4 flex items-center justify-end gap-2">
+            <button
+              onClick={closeRemoteConnectModal}
+              disabled={isRemoteConnectPending}
+              className="rounded-md border border-white/15 bg-black/25 px-3 py-1.5 text-sm font-semibold text-gray-200 transition-colors hover:bg-black/35 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => { void handleRemoteConnect(); }}
+              disabled={isRemoteConnectPending || remoteConnectEligibleServers.length === 0 || !hasStarmoteApi}
+              className="rounded-md border border-cyan-500/40 bg-cyan-500/15 px-3 py-1.5 text-sm font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isRemoteConnectPending ? 'Connecting...' : 'Connect'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderDatabaseInspectModal = () => {
+    if (!databaseInspectEntity) return null;
+
+    const typeLabel = formatDatabaseEntityType(databaseInspectEntity.typeValue);
+    const typeDisplay = `${typeLabel} (${databaseInspectEntity.typeValue})`;
+
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Entity details"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) {
+            closeDatabaseInspectModal();
+          }
+        }}
+      >
+        <div className="w-full max-w-2xl rounded-lg border border-white/15 bg-[#101422] p-5 shadow-xl">
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-semibold text-white">Entity Details</h3>
+              <p className="mt-1 text-sm text-gray-300">{databaseInspectEntity.name || '(Unnamed entity)'}</p>
+            </div>
+            <span className={`rounded border px-2 py-0.5 text-[10px] uppercase tracking-wider ${databaseInspectEntity.sectorLoaded
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+              : 'border-amber-500/30 bg-amber-500/10 text-amber-200'}`}>
+              {databaseInspectEntity.sectorLoaded ? 'Sector Loaded' : 'Sector Unloaded'}
+            </span>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded border border-white/10 bg-black/25 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Identity</p>
+              <p className="mt-2 font-mono text-xs text-gray-200">ID: {databaseInspectEntity.id}</p>
+              <p className="mt-1 break-all font-mono text-xs text-gray-200">UID: {databaseInspectEntity.uid}</p>
+            </div>
+
+            <div className="rounded border border-white/10 bg-black/25 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Class</p>
+              <p className="mt-2 text-sm text-gray-200">
+                Type: {typeDisplay}
+              </p>
+              <p className="mt-1 text-sm text-gray-300">Faction: {databaseInspectEntity.factionValue}</p>
+            </div>
+
+            <div className="rounded border border-white/10 bg-black/25 p-3 sm:col-span-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Sector Coordinates</p>
+              <p className="mt-2 font-mono text-sm text-gray-200">
+                {databaseInspectEntity.x}, {databaseInspectEntity.y}, {databaseInspectEntity.z}
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+            <button
+              onClick={() => { void copyToClipboard(databaseInspectEntity.uid, 'UID'); }}
+              className="rounded-md border border-white/15 bg-black/25 px-3 py-1.5 text-sm font-semibold text-gray-200 transition-colors hover:bg-black/35"
+            >
+              Copy UID
+            </button>
+            <button
+              onClick={() => {
+                const payload = [
+                  `Name: ${databaseInspectEntity.name || '(Unnamed entity)'}`,
+                  `ID: ${databaseInspectEntity.id}`,
+                  `UID: ${databaseInspectEntity.uid}`,
+                  `Type: ${typeDisplay}`,
+                  `Faction: ${databaseInspectEntity.factionValue}`,
+                  `Sector: ${databaseInspectEntity.x}, ${databaseInspectEntity.y}, ${databaseInspectEntity.z}`,
+                  `Sector loaded: ${databaseInspectEntity.sectorLoaded ? 'yes' : 'no'}`,
+                ].join('\n');
+                void copyToClipboard(payload, 'Entity fields');
+              }}
+              className="rounded-md border border-white/15 bg-black/25 px-3 py-1.5 text-sm font-semibold text-gray-200 transition-colors hover:bg-black/35"
+            >
+              Copy All Fields
+            </button>
+            <button
+              onClick={() => {
+                const q = `SELECT * FROM ENTITIES WHERE ID = ${databaseInspectEntity.id};`;
+                setDatabaseSqlInput(q);
+                setDatabaseSqlMode('query');
+                void executeDatabaseSql(q, 'query');
+              }}
+              disabled={databaseIsExecuting || !isCommandRuntimeReady}
+              className="rounded-md border border-cyan-500/35 bg-cyan-500/10 px-3 py-1.5 text-sm font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Query Full Row
+            </button>
+            <button
+              onClick={closeDatabaseInspectModal}
+              className="rounded-md border border-white/15 bg-black/25 px-3 py-1.5 text-sm font-semibold text-gray-200 transition-colors hover:bg-black/35"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderPlayersWidget = () => (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2">
@@ -5054,7 +6611,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         <div className="flex items-center gap-2">
           <button
             onClick={() => { void messageAllOnlinePlayers(); }}
-            disabled={lifecycleState !== 'running' || !hasGameApi || isPlayersBroadcasting || isPlayersRefreshing || !!kickingPlayerName || isPlayerMessageSending || onlinePlayers.length === 0}
+            disabled={!isCommandRuntimeReady || isPlayersBroadcasting || isPlayersRefreshing || !!kickingPlayerName || isPlayerMessageSending || (!isRemoteServerProfile && onlinePlayers.length === 0)}
             className="rounded border border-cyan-500/35 bg-cyan-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <span className="inline-flex items-center gap-1.5">
@@ -5069,7 +6626,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           </button>
           <button
             onClick={() => { void refreshPlayers(); }}
-            disabled={lifecycleState !== 'running' || isPlayersRefreshing || !hasGameApi || !!kickingPlayerName || isPlayerMessageSending || isPlayersBroadcasting}
+            disabled={!isCommandRuntimeReady || isPlayersRefreshing || !!kickingPlayerName || isPlayerMessageSending || isPlayersBroadcasting}
             className="rounded border border-white/15 bg-black/25 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-200 transition-colors hover:bg-black/40 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <span className="inline-flex items-center gap-1.5">
@@ -5089,10 +6646,18 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         {playersError && (
           <p className="mb-2 text-red-300">{playersError}</p>
         )}
-        {lifecycleState !== 'running' ? (
-          <p className="text-gray-500">Server is offline. Start the server to view connected players.</p>
+        {!isCommandRuntimeReady ? (
+          <p className="text-gray-500">
+            {isRemoteServerProfile
+              ? 'Remote session is not ready. Connect and wait for Ready before requesting players.'
+              : 'Server is offline. Start the server to view connected players.'}
+          </p>
         ) : onlinePlayers.length === 0 ? (
-          <p className="text-gray-500">No players online.</p>
+          <p className="text-gray-500">
+            {isRemoteServerProfile
+              ? 'Player list telemetry is limited in remote mode. Use Message All or server-side logs to confirm online users.'
+              : 'No players online.'}
+          </p>
         ) : (
           <div className="space-y-1">
             {onlinePlayers.map((playerName) => (
@@ -5149,12 +6714,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 }
               }}
               placeholder="Type a direct server message..."
-              disabled={isPlayerMessageSending || !!kickingPlayerName || lifecycleState !== 'running'}
+              disabled={isPlayerMessageSending || !!kickingPlayerName || !isCommandRuntimeReady}
               className="flex-1 rounded border border-white/15 bg-black/25 px-2 py-1.5 text-xs text-gray-100 placeholder-gray-500"
             />
             <button
               onClick={() => { void sendPlayerMessage(); }}
-              disabled={!playerMessageText.trim() || isPlayerMessageSending || !!kickingPlayerName || isPlayersBroadcasting || lifecycleState !== 'running'}
+              disabled={!playerMessageText.trim() || isPlayerMessageSending || !!kickingPlayerName || isPlayersBroadcasting || !isCommandRuntimeReady}
               className="rounded border border-cyan-400/40 bg-cyan-500/10 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-cyan-200 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isPlayerMessageSending ? 'Sending...' : 'Send'}
@@ -5426,6 +6991,59 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             emptyMessage: 'No dashboard config controls are available for this server.',
           })}
         </section>
+
+        {isRemoteServerProfile && (
+          <section className="space-y-3">
+            <div>
+              <h4 className="text-sm font-semibold uppercase tracking-wider text-gray-300">Remote Admin Console</h4>
+              <p className="mt-1 text-xs text-gray-500">
+                Send raw admin commands over StarMote for controls that do not yet have dedicated UI bindings.
+              </p>
+            </div>
+
+            <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+              <div className="flex gap-2">
+                <input
+                  value={remoteCommandInput}
+                  onChange={(event) => setRemoteCommandInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      void sendRawRemoteCommand();
+                    }
+                  }}
+                  disabled={!isCommandRuntimeReady || isRemoteCommandSending}
+                  placeholder={isCommandRuntimeReady ? 'Type command, e.g. /player_list' : 'Remote session not ready...'}
+                  className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 font-mono text-sm text-gray-200 placeholder-gray-500"
+                />
+                <button
+                  onClick={() => { void sendRawRemoteCommand(); }}
+                  disabled={!remoteCommandInput.trim() || !isCommandRuntimeReady || isRemoteCommandSending}
+                  className="rounded-md border border-cyan-500/35 bg-cyan-500/10 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-cyan-100 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isRemoteCommandSending ? 'Sending...' : 'Send'}
+                </button>
+              </div>
+
+              <div className="mt-3 max-h-40 overflow-y-auto rounded-md border border-white/10 bg-black/30 p-2 text-xs font-mono">
+                {remoteCommandHistory.length === 0 ? (
+                  <p className="text-gray-500">No commands sent in this session yet.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {remoteCommandHistory.map((entry) => (
+                      <div key={entry.id} className="rounded border border-white/10 bg-black/25 px-2 py-1.5">
+                        <p className="text-gray-300">[{entry.timestamp}] {entry.command}</p>
+                        <p className={entry.success ? 'text-emerald-300' : 'text-red-300'}>
+                          {entry.message}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );
@@ -5927,7 +7545,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   {isLiveLogSelected ? 'No output from the current process yet.' : 'No log lines in this file yet.'}
                 </p>
               )}
-              {filteredLogs.map((log, index) => (
+              {filteredLogs.length > LOG_DISPLAY_LIMIT && (
+                <p className="mb-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
+                  Showing last {LOG_DISPLAY_LIMIT} of {filteredLogs.length} matching entries. Use filters or Clear Buffer to see earlier lines.
+                </p>
+              )}
+              {filteredLogs.slice(-LOG_DISPLAY_LIMIT).map((log, index) => (
                 <div
                   key={`${log.timestamp}-${index}`}
                   className={`flex gap-3 rounded px-2 py-1 hover:bg-white/5 ${isLogWrapEnabled ? '' : 'min-w-max'}`}
@@ -5944,7 +7567,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
       <div className="flex items-center justify-between gap-3 border-t border-white/10 bg-black/20 px-4 py-3">
         <p className="text-sm text-gray-400">
-          {filteredLogs.length} / {LOG_BUFFER_CAP} buffered log entries
+          {filteredLogs.length} / {LOG_BUFFER_CAP} buffered log entries (last {LOG_DISPLAY_LIMIT} shown)
           {!isLiveLogSelected && isLogFileTruncated ? ' (tail view)' : ''}
         </p>
         <div className="flex gap-2">
@@ -5957,12 +7580,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           </button>
           <button
             onClick={() => { void handleClearLogs(); }}
-            disabled={!effectiveServer || !hasGameApi || isClearingLogFiles}
+            disabled={!effectiveServer || isClearingLogFiles || (!hasGameApi && !(isRemoteLogsEnabled && isRemoteFileSessionEnabled))}
             className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isClearingLogFiles ? 'Clearing...' : 'Delete Log Files'}
           </button>
-          <button onClick={() => { void handleOpenLogFolder(); }} className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600">
+          <button onClick={() => { void handleOpenLogFolder(); }} disabled={isRemoteServerProfile} className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60">
             Open Folder
           </button>
           <button onClick={handleExportLogs} className="rounded-md bg-starmade-accent px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-starmade-accent/80">
@@ -6118,7 +7741,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       },
       reloadLabel: 'Reload',
       onReload: reloadGameConfigXml,
-      reloadDisabled: !effectiveServer || !hasGameApi || isGameConfigLoading || !!savingGameConfigPath || !!savingGameConfigToggleId,
+      reloadDisabled: !effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled) || isGameConfigLoading || !!savingGameConfigPath || !!savingGameConfigToggleId,
       categoryExtras: toggleEntriesByCategory,
     };
 
@@ -6312,6 +7935,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             onClick={(event) => event.stopPropagation()}
             onContextMenu={(event) => event.preventDefault()}
           >
+            <button
+              onClick={() => { void handleFileContextOpenNative(); }}
+              className="block w-full rounded px-2 py-1.5 text-left text-xs text-gray-200 hover:bg-white/10"
+            >
+              {fileContextMenu.targetIsDirectory || !fileContextMenu.targetPath
+                ? 'Open Folder in Explorer'
+                : 'Open with Native App'}
+            </button>
+            {fileContextMenu.targetPath && (
+              <div className="my-1 border-t border-white/10" />
+            )}
             {fileContextMenu.targetPath && (
               <>
                 <button
@@ -6342,12 +7976,15 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               {fileClipboard ? `Paste ${fileClipboard.sourceName}` : 'Paste'}
             </button>
             {fileContextMenu.targetPath && (
-              <button
-                onClick={() => { void handleFileContextDelete(); }}
-                className="block w-full rounded px-2 py-1.5 text-left text-xs text-red-300 hover:bg-red-500/20"
-              >
-                Delete
-              </button>
+              <>
+                <div className="my-1 border-t border-white/10" />
+                <button
+                  onClick={() => { void handleFileContextDelete(); }}
+                  className="block w-full rounded px-2 py-1.5 text-left text-xs text-red-300 hover:bg-red-500/20"
+                >
+                  Delete
+                </button>
+              </>
             )}
           </div>
         )}
@@ -6484,8 +8121,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               <h3 className="font-display text-lg font-bold uppercase tracking-wider text-white">Server Chat</h3>
               <p className="text-sm text-gray-400">
                 {selectedChannel ? `${selectedChannel.channelLabel}` : 'Select a channel'}
-                {lifecycleState !== 'running' && (
-                  <span className="ml-2 text-amber-400">(server not running — showing saved logs)</span>
+                {!isCommandRuntimeReady && (
+                  <span className="ml-2 text-amber-400">
+                    {isRemoteServerProfile ? '(remote session not ready — showing saved logs)' : '(server not running — showing saved logs)'}
+                  </span>
                 )}
               </p>
             </div>
@@ -6612,9 +8251,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
             {/* Message input */}
             <div className="border-t border-white/10 bg-black/20 px-3 py-2">
-              {lifecycleState !== 'running' && (
+              {!isCommandRuntimeReady && (
                 <p className="mb-2 text-xs text-amber-400">
-                  ⚠ Server is not running. Messages will not be sent.
+                  {isRemoteServerProfile
+                    ? '⚠ Remote session is not ready. Messages will not be sent.'
+                    : '⚠ Server is not running. Messages will not be sent.'}
                 </p>
               )}
               {selectedChannel?.channelType === 'direct' && (
@@ -6637,25 +8278,26 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   placeholder={
                     !selectedChatChannelId
                       ? 'Select a channel first...'
-                      : lifecycleState !== 'running'
-                        ? 'Server not running...'
-                        : `Message ${selectedChannel?.channelLabel ?? selectedChatChannelId}...`
+                      : !isCommandRuntimeReady
+                        ? (isRemoteServerProfile ? 'Remote session not ready...' : 'Server not running...')
+                        : `Message or /command...`
                   }
-                  disabled={!selectedChatChannelId || lifecycleState !== 'running'}
+                  disabled={!selectedChatChannelId || !isCommandRuntimeReady}
                   className="flex-1 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-starmade-accent disabled:cursor-not-allowed disabled:opacity-50"
                 />
                 <button
                   onClick={() => { void handleSendChatMessage(); }}
-                  disabled={!chatInput.trim() || !selectedChatChannelId || lifecycleState !== 'running'}
+                  disabled={!chatInput.trim() || !selectedChatChannelId || !isCommandRuntimeReady}
                   className="rounded-md bg-starmade-accent px-4 py-2 text-sm font-semibold uppercase tracking-wider text-white hover:bg-starmade-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Send
                 </button>
               </div>
               <p className="mt-1.5 text-[11px] text-gray-600">
-                Messages are sent as server broadcasts using{' '}
-                <code className="text-gray-500">/server_message_broadcast plain</code>{' '}
-                (or <code className="text-gray-500">/server_message_to</code> for DMs).
+                Messages are broadcast via{' '}
+                <code className="text-gray-500">/server_message_broadcast plain</code>.
+                {' '}Input starting with <code className="text-gray-500">/</code> is sent as a raw server command.
+                {isRemoteServerProfile ? ' Remote profiles currently show command-sent chat history only.' : ''}
               </p>
             </div>
           </div>
@@ -6702,14 +8344,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             </select>
             <button
               onClick={() => { void executeDatabaseSql(databaseSqlInput, databaseSqlMode); }}
-              disabled={databaseIsExecuting || lifecycleState !== 'running'}
+              disabled={databaseIsExecuting || !isCommandRuntimeReady}
               className="rounded bg-starmade-accent px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-white hover:bg-starmade-accent/80 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {databaseIsExecuting ? 'Running…' : 'Execute'}
             </button>
             <button
               onClick={() => { void loadDatabaseEntities(); }}
-              disabled={databaseIsExecuting || lifecycleState !== 'running'}
+              disabled={databaseIsExecuting || !isCommandRuntimeReady}
               className="rounded border border-white/15 bg-black/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
             >
               Reload Entities
@@ -6733,8 +8375,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             )}
             {databaseSqlError && <p className="text-red-300">{databaseSqlError}</p>}
             {databaseClipboardMsg && <p className="text-cyan-300">{databaseClipboardMsg}</p>}
-            {lifecycleState !== 'running' && (
-              <p className="text-amber-300">⚠ Server must be running to execute SQL commands.</p>
+            {!isCommandRuntimeReady && (
+              <p className="text-amber-300">
+                {isRemoteServerProfile
+                  ? '⚠ Remote session must be Ready to execute SQL commands.'
+                  : '⚠ Server must be running to execute SQL commands.'}
+              </p>
             )}
           </div>
 
@@ -6786,18 +8432,27 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-black/20">
         <div className="border-b border-white/10 px-3 py-2">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">Entities by Loaded Sector</h3>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">Entities by Sector</h3>
             <span className="rounded border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wider text-gray-400">
               {filteredSortedDatabaseEntities.length} visible
             </span>
           </div>
           <p className="text-xs text-gray-500">
-            Grouped by sector coords. Only sectors with <code className="text-gray-400">TRANSIENT = FALSE</code> are shown.
+            Grouped by sector coords. Use the sector filter to show loaded, unloaded, or all sectors.
           </p>
         </div>
 
         {/* Filters + sort */}
         <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-3 py-2">
+          <select
+            value={databaseSectorLoadFilter}
+            onChange={(e) => setDatabaseSectorLoadFilter(e.target.value as DatabaseSectorLoadFilter)}
+            className="rounded border border-white/15 bg-black/30 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-starmade-accent"
+          >
+            <option value="all">All sectors</option>
+            <option value="loaded">Loaded sectors</option>
+            <option value="unloaded">Unloaded sectors</option>
+          </select>
           <select
             value={databaseEntityTypeFilter}
             onChange={(e) => setDatabaseEntityTypeFilter(e.target.value)}
@@ -6805,7 +8460,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           >
             <option value="all">All types</option>
             {databaseEntityTypeOptions.map((t) => (
-              <option key={t} value={t}>Type {t}</option>
+              <option key={t} value={t}>{formatDatabaseEntityType(t)}</option>
             ))}
           </select>
           <select
@@ -6826,6 +8481,31 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             <option value="name-asc">Sort: Name A→Z</option>
             <option value="name-desc">Sort: Name Z→A</option>
           </select>
+          <div className="relative min-w-[180px] flex-1">
+            <input
+              value={databaseEntitySearchTerm}
+              onChange={(e) => setDatabaseEntitySearchTerm(e.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Escape') return;
+                event.preventDefault();
+                event.stopPropagation();
+                setDatabaseEntitySearchTerm('');
+              }}
+              placeholder="Search entities..."
+              className="w-full rounded border border-white/15 bg-black/30 px-2 py-1 pr-7 text-xs text-gray-200 placeholder:text-gray-500 focus:outline-none focus:ring-1 focus:ring-starmade-accent"
+            />
+            {databaseEntitySearchTerm && (
+              <button
+                type="button"
+                onClick={() => setDatabaseEntitySearchTerm('')}
+                className="absolute right-1 top-1/2 -translate-y-1/2 rounded px-1 text-[11px] font-semibold text-gray-400 hover:bg-white/10 hover:text-gray-200"
+                aria-label="Clear entity search"
+                title="Clear search"
+              >
+                x
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Entity list */}
@@ -6838,15 +8518,30 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 ? 'No entities loaded. Click "Reload Entities" while the server is running.'
                 : 'No entities match the current filters.'}
             </div>
-          ) : (
+          ) : (() => {
+            const GROUPS_PER_PAGE = 50;
+            const totalPages = Math.ceil(databaseSectorGroups.length / GROUPS_PER_PAGE);
+            const pagedGroups = databaseSectorGroups.slice(
+              databaseEntityPage * GROUPS_PER_PAGE,
+              (databaseEntityPage + 1) * GROUPS_PER_PAGE,
+            );
+            return (
+            <>
             <div className="space-y-3">
-              {databaseSectorGroups.map((group) => (
+              {pagedGroups.map((group) => (
                 <div key={group.sector} className="rounded border border-white/10 bg-black/20">
                   <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
                     <h4 className="font-mono text-xs font-semibold text-gray-200">
                       Sector <span className="text-starmade-accent/80">{group.sector}</span>
                     </h4>
-                    <span className="text-[11px] text-gray-500">{group.entities.length} {group.entities.length === 1 ? 'entity' : 'entities'}</span>
+                    <div className="flex items-center gap-2">
+                      <span className={`rounded border px-2 py-0.5 text-[10px] uppercase tracking-wider ${group.entities[0]?.sectorLoaded
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                        : 'border-amber-500/30 bg-amber-500/10 text-amber-200'}`}>
+                        {group.entities[0]?.sectorLoaded ? 'Loaded' : 'Unloaded'}
+                      </span>
+                      <span className="text-[11px] text-gray-500">{group.entities.length} {group.entities.length === 1 ? 'entity' : 'entities'}</span>
+                    </div>
                   </div>
 
                   <div className="divide-y divide-white/5">
@@ -6861,7 +8556,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                           </p>
                           <p className="mt-0.5 font-mono text-[11px] text-gray-400">
                             ID&nbsp;<span className="text-gray-300">{entity.id}</span>
-                            &ensp;|&ensp;Type&nbsp;<span className="text-gray-300">{entity.typeValue}</span>
+                            &ensp;|&ensp;Type&nbsp;<span className="text-gray-300">{formatDatabaseEntityType(entity.typeValue)}</span>
                             &ensp;|&ensp;Faction&nbsp;<span className="text-gray-300">{entity.factionValue}</span>
                           </p>
                           <p className="mt-0.5 font-mono text-[11px] text-gray-500 truncate" title={entity.uid}>
@@ -6870,13 +8565,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                         </div>
                         <div className="flex flex-wrap items-center gap-1.5">
                           <button
-                            onClick={() => {
-                              const q = `SELECT * FROM ENTITIES WHERE ID = ${entity.id};`;
-                              setDatabaseSqlInput(q);
-                              setDatabaseSqlMode('query');
-                              void executeDatabaseSql(q, 'query');
-                            }}
-                            disabled={databaseIsExecuting || lifecycleState !== 'running'}
+                            onClick={() => setDatabaseInspectEntity(entity)}
                             className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             Inspect
@@ -6905,13 +8594,51 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 </div>
               ))}
             </div>
-          )}
+            {totalPages > 1 && (
+              <div className="mt-3 flex items-center justify-between border-t border-white/10 pt-3">
+                <button
+                  onClick={() => setDatabaseEntityPage((p) => Math.max(0, p - 1))}
+                  disabled={databaseEntityPage === 0}
+                  className="rounded border border-white/15 bg-black/30 px-3 py-1 text-xs font-semibold text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  ← Prev
+                </button>
+                <span className="text-xs text-gray-400">
+                  Page {databaseEntityPage + 1} / {totalPages}
+                  <span className="ml-2 text-gray-600">({databaseSectorGroups.length} sector groups)</span>
+                </span>
+                <button
+                  onClick={() => setDatabaseEntityPage((p) => Math.min(totalPages - 1, p + 1))}
+                  disabled={databaseEntityPage >= totalPages - 1}
+                  className="rounded border border-white/15 bg-black/30 px-3 py-1 text-xs font-semibold text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next →
+                </button>
+              </div>
+            )}
+            </>
+            );
+          })()}
         </div>
       </div>
     </div>
   );
 
   const renderActiveTab = () => {
+    const isTabUnsupported = isRemoteServerProfile && (
+      (activeTab === 'logs' && !isRemoteLogsEnabled) ||
+      (activeTab === 'configuration' && !isRemoteFileSessionEnabled) ||
+      (activeTab === 'files' && !isRemoteFileSessionEnabled)
+    );
+    if (isTabUnsupported) {
+      return renderPlaceholderTab(
+        `${tabItems.find((tab) => tab.id === activeTab)?.label ?? 'Tab'} unavailable for remote profiles`,
+        activeTab === 'logs'
+          ? 'SSH (Azure VM) connection required to view logs.'
+          : 'FTP or SFTP file access must be configured and connected.',
+      );
+    }
+
     if (activeTab === 'control') return renderControlPanel();
     if (activeTab === 'actions') return renderActionsPanel();
     if (activeTab === 'logs') return renderLogs();
@@ -6930,19 +8657,55 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       <div className="flex h-full min-h-0 flex-col">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            {tabItems.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`rounded-md border px-3 py-1.5 text-sm font-semibold transition-colors ${
-                  activeTab === tab.id
-                    ? 'border-starmade-accent bg-starmade-accent/20 text-white'
-                    : 'border-white/10 bg-black/20 text-gray-300 hover:bg-black/35'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
+            {tabItems.map((tab) => {
+              const isDisabledForRemote = isRemoteServerProfile && (
+                (tab.id === 'logs' && !isRemoteLogsEnabled) ||
+                (tab.id === 'configuration' && !isRemoteFileSessionEnabled) ||
+                (tab.id === 'files' && !isRemoteFileSessionEnabled)
+              );
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    if (isDisabledForRemote) return;
+                    setActiveTab(tab.id);
+                  }}
+                  disabled={isDisabledForRemote}
+                  title={isDisabledForRemote ? (tab.id === 'logs' ? 'SSH (Azure VM) connection required.' : 'FTP or SFTP file access must be configured and connected.') : undefined}
+                  className={`rounded-md border px-3 py-1.5 text-sm font-semibold transition-colors ${
+                    activeTab === tab.id
+                      ? 'border-starmade-accent bg-starmade-accent/20 text-white'
+                      : isDisabledForRemote
+                        ? 'border-white/5 bg-black/10 text-gray-500 cursor-not-allowed'
+                        : 'border-white/10 bg-black/20 text-gray-300 hover:bg-black/35'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">Viewing</span>
+            <select
+              value={viewingServerId ?? ''}
+              onChange={(event) => handleSwitchServer(event.target.value)}
+              disabled={servers.length === 0}
+              className="min-w-[220px] rounded-md border border-white/15 bg-black/20 px-3 py-1.5 text-sm font-semibold text-gray-200 transition-colors hover:bg-black/35 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {servers.length === 0 ? (
+                <option value="">No servers available</option>
+              ) : (
+                servers.map((server) => (
+                  <option key={server.id} value={server.id}>
+                    {server.isRemote ? '[Remote] ' : '[Local] '}
+                    {hasConnectedRemoteByServerId[server.id] ? '[Connected] ' : ''}
+                    {server.name || `Server ${server.id}`}
+                  </option>
+                ))
+              )}
+            </select>
           </div>
 
           {/*<button
@@ -6955,6 +8718,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
         <div className="min-h-0 flex-1">{renderActiveTab()}</div>
       </div>
+      {renderRemoteConnectModal()}
+      {renderDatabaseInspectModal()}
     </PageContainer>
   );
 };

@@ -358,6 +358,55 @@ export const IPC = {
    * Returns: { authenticated: boolean; expired: boolean }
    */
   AUTH_GET_STATUS: 'auth:get-status',
+
+  // ─── Remote file access ────────────────────────────────────────────────────
+  REMOTE_FILES_SET_SESSION: 'remote-files:set-session',
+  REMOTE_FILES_CLEAR_SESSION: 'remote-files:clear-session',
+  REMOTE_FILES_LIST: 'remote-files:list',
+  REMOTE_FILES_READ: 'remote-files:read',
+  REMOTE_FILES_WRITE: 'remote-files:write',
+  REMOTE_FILES_RENAME: 'remote-files:rename',
+  REMOTE_FILES_COPY: 'remote-files:copy',
+  REMOTE_FILES_MOVE: 'remote-files:move',
+  REMOTE_FILES_DELETE: 'remote-files:delete',
+  REMOTE_FILES_SERVER_CFG_LIST: 'remote-files:server-cfg-list',
+  REMOTE_FILES_SERVER_CFG_SET: 'remote-files:server-cfg-set',
+  REMOTE_FILES_CONFIG_XML_GET: 'remote-files:config-xml-get',
+  REMOTE_FILES_CONFIG_XML_SET: 'remote-files:config-xml-set',
+  REMOTE_FILES_LOG_LIST: 'remote-files:log-list',
+  REMOTE_FILES_LOG_READ: 'remote-files:log-read',
+
+  // ─── StarMote remote control ───────────────────────────────────────────────
+
+  /**
+   * Renderer → Main (invoke): open a StarMote remote TCP session for a server profile.
+   * Payload: { serverId: string; host: string; port: number; username?: string; clientVersion?: string; activeAccountId: string }
+   */
+  STARMOTE_CONNECT: 'starmote:connect',
+
+  /**
+   * Renderer → Main (invoke): close an active StarMote remote session.
+   * Payload: { serverId: string }
+   */
+  STARMOTE_DISCONNECT: 'starmote:disconnect',
+
+  /**
+   * Renderer → Main (invoke): fetch StarMote connection status for one profile or all profiles.
+   * Payload: { serverId?: string }
+   */
+  STARMOTE_STATUS: 'starmote:status',
+
+  /** Main → Renderer: StarMote connection status changed for a server profile. */
+  STARMOTE_STATUS_CHANGED: 'starmote:status-changed',
+
+  /** Main → Renderer: normalized runtime line from a StarMote remote session. */
+  STARMOTE_RUNTIME_EVENT: 'starmote:runtime-event',
+
+  /**
+   * Renderer → Main (invoke): send a versioned admin command over a protocol-ready StarMote session.
+   * Payload: { version: 1; serverId: string; command: string }
+   */
+  STARMOTE_SEND_ADMIN_COMMAND: 'starmote:send-admin-command',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

@@ -181,6 +181,46 @@ tests/
 
 ---
 
+## StarMote Troubleshooting
+
+Current scope: StarMote in this launcher now tracks transport and protocol readiness (`ready`) and routes remote admin commands through a versioned IPC command path.
+
+### Quick checks
+
+- Verify host/port and firewall rules first (client -> server TCP path).
+- Use the Server Panel status text and reason code to classify failures.
+- Enable debug tracing when needed:
+
+```bash
+STARMOTE_DEBUG=1 npm run electron:dev
+```
+
+- Disable StarMote rollout entirely (all StarMote APIs hidden in preload):
+
+```bash
+STARMOTE_ENABLED=0 npm run electron:dev
+```
+
+### Reason codes and first actions
+
+- `timeout` - server did not answer in time; verify host/port reachability and listening socket.
+- `connect_failed` - TCP connect failed immediately; verify IP/DNS, port, and server uptime.
+- `socket_error` - connection dropped after connect; inspect server logs and network stability.
+- `protocol_timeout` - TCP connect succeeded but protocol/registry handshake timed out.
+- `registry_unavailable` - protocol setup/auth stage failed after connect.
+- `not_ready` - command attempted before session reached protocol-ready state.
+- `send_failed` - command transport write failed or timed out.
+- `closed` - remote side closed a previously connected socket; check server-side disconnect cause.
+- `disconnected` - local/manual disconnect (or connect cancelled) was requested.
+- `replaced` - a new connect attempt replaced an older in-flight/active session.
+
+### Known limitation
+
+- Some protocol operations are still scaffolded/minimal and may require server-side parity work before all command families are available.
+- Planned follow-up work is tracked in `TODO.md` under section `## 2) Main-Process StarMote Protocol Layer` and section `## 3) Command Registry and Packet Handling`.
+
+---
+
 ## Links
 
 - **Official Website**: https://www.star-made.org/

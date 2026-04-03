@@ -35,6 +35,69 @@ function refreshKey(accountId: string): string {
 function expiryKey(accountId: string): string {
   return `auth_token_expiry_${accountId}`;
 }
+function usernameKey(accountId: string): string {
+  return `auth_username_${accountId}`;
+}
+
+interface CanonicalUsername {
+  username: string;
+  source: 'response' | 'token' | 'input';
+}
+
+function getNonEmptyString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  const parts = token.split('.');
+  if (parts.length < 2) return null;
+  try {
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(base64.length + (4 - (base64.length % 4 || 4)), '=');
+    const payload = Buffer.from(padded, 'base64').toString('utf8');
+    return JSON.parse(payload) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function resolveCanonicalUsername(
+  loginIdentifier: string,
+  response: Record<string, unknown>,
+  accessToken: string,
+): CanonicalUsername {
+  const responseCandidates: unknown[] = [
+    response.username,
+    response.user_name,
+    response.login,
+    response.name,
+    (response.user as Record<string, unknown> | undefined)?.username,
+    (response.user as Record<string, unknown> | undefined)?.name,
+  ];
+  for (const candidate of responseCandidates) {
+    const value = getNonEmptyString(candidate);
+    if (value) return { username: value, source: 'response' };
+  }
+
+  const jwt = decodeJwtPayload(accessToken);
+  if (jwt) {
+    const tokenCandidates: unknown[] = [
+      jwt.preferred_username,
+      jwt.username,
+      jwt.user_name,
+      jwt.login,
+      jwt.name,
+    ];
+    for (const candidate of tokenCandidates) {
+      const value = getNonEmptyString(candidate);
+      if (value) return { username: value, source: 'token' };
+    }
+  }
+
+  return { username: loginIdentifier.trim(), source: 'input' };
+}
 
 // ─── Token persistence ────────────────────────────────────────────────────────
 
@@ -142,9 +205,10 @@ export interface RegisterResult {
  */
 export async function loginWithPassword(username: string, password: string): Promise<LoginResult> {
   try {
+    const loginIdentifier = username.trim();
     const res = await httpsPost(TOKEN_URL, {
       grant_type: 'password',
-      username:   username.trim(),
+      username:   loginIdentifier,
       password,
       scope:      OAUTH_SCOPE,
     });
@@ -155,21 +219,27 @@ export async function loginWithPassword(username: string, password: string): Pro
       const accessToken  = json.access_token  as string;
       const refreshToken = json.refresh_token as string | undefined;
       const expiresIn    = typeof json.expires_in === 'number' ? json.expires_in : 3600;
+      const canonical = resolveCanonicalUsername(loginIdentifier, json, accessToken);
 
       // Derive a stable, store-friendly account id from the username
-      const accountId = `registry-${username.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_')}`;
+      const accountId = `registry-${canonical.username.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}`;
       const expiry    = Date.now() + expiresIn * 1000;
 
       storeToken(tokenKey(accountId), accessToken);
       if (refreshToken) storeToken(refreshKey(accountId), refreshToken);
       storeSet(expiryKey(accountId), expiry);
+      storeSet(usernameKey(accountId), canonical.username);
 
-      try { console.log(`[Auth] Logged in as ${username.trim()} (accountId=${accountId})`); } catch { /* EPIPE – stdout disconnected (AppImage) */ }
+      if (canonical.username.toLowerCase() !== loginIdentifier.toLowerCase()) {
+        console.warn(`[Auth] Login identifier '${loginIdentifier}' authenticated as '${canonical.username}'.`);
+      }
+
+      try { console.log(`[Auth] Logged in as ${canonical.username} (accountId=${accountId})`); } catch { /* EPIPE - stdout disconnected (AppImage) */ }
 
       return {
         success: true,
         accountId,
-        username: username.trim(),
+        username: canonical.username,
         expiresIn,
       };
     }
@@ -207,16 +277,19 @@ export async function refreshAccessToken(accountId: string): Promise<LoginResult
       const refreshToken = json.refresh_token as string | undefined;
       const expiresIn    = typeof json.expires_in === 'number' ? json.expires_in : 3600;
       const expiry       = Date.now() + expiresIn * 1000;
+      const storedUsername = storeGet(usernameKey(accountId));
+      const fallbackUsername = typeof storedUsername === 'string' && storedUsername.trim().length > 0
+        ? storedUsername
+        : accountId.replace(/^registry-/, '');
+      const canonical = resolveCanonicalUsername(fallbackUsername, json, accessToken);
 
       storeToken(tokenKey(accountId), accessToken);
       if (refreshToken) storeToken(refreshKey(accountId), refreshToken);
       storeSet(expiryKey(accountId), expiry);
+      storeSet(usernameKey(accountId), canonical.username);
 
-      // Recover username from the accountId convention
-      const username = accountId.replace(/^registry-/, '');
-
-      console.log(`[Auth] Refreshed token for ${username}`);
-      return { success: true, accountId, username, expiresIn };
+      console.log(`[Auth] Refreshed token for ${canonical.username} (accountId=${accountId})`);
+      return { success: true, accountId, username: canonical.username, expiresIn };
     }
 
     return { success: false, error: `Token refresh failed (HTTP ${res.statusCode}).` };
@@ -274,30 +347,71 @@ export async function registerAccount(
 
 /**
  * Retrieve the stored access token for `accountId`, refreshing it first if it
- * is expired and a refresh token is available.
+ * is expired or unreadable and a refresh token is available.
  *
  * Returns `null` for guest accounts (no token required for offline play).
+ *
+ * NOTE: The access token is encrypted at rest via Electron safeStorage.  If
+ * the OS key material has changed (e.g. after a Windows profile migration or
+ * an app reinstall) the stored blob may be unreadable even though the user is
+ * "logged in" according to the account list.  We therefore attempt a token
+ * refresh whenever the access token cannot be loaded — a fresh token can then
+ * be encrypted with the current key material and the game launch proceeds
+ * without requiring the user to log in again manually.
  */
-export async function getAccessTokenForLaunch(accountId: string): Promise<string | null> {
+export async function getAccessTokenForLaunch(
+  accountId: string,
+  options?: { forceRefresh?: boolean },
+): Promise<string | null> {
   // Guest accounts have no token
   if (accountId.startsWith('offline-') || accountId.startsWith('guest-')) return null;
 
-  const token = loadToken(tokenKey(accountId));
-  if (!token) return null;
+  let token = loadToken(tokenKey(accountId));
+  const tokenMissing = !token;
 
-  // Check expiry — refresh proactively if less than 5 minutes remain
+  // Refresh proactively when:
+  //   • forceRefresh is explicitly requested (e.g. StarMote connection)
+  //   • access token is missing / unreadable — try the refresh token so the
+  //     user does not have to log in again just because safeStorage key
+  //     material changed (common after OS upgrades or app reinstalls)
+  //   • expiry is unknown — could mean token is already expired
+  //   • token expires in less than 5 minutes
   const expiry = storeGet(expiryKey(accountId));
-  if (typeof expiry === 'number' && expiry - Date.now() < 5 * 60 * 1000) {
-    console.log(`[Auth] Token for ${accountId} is near expiry — refreshing…`);
+  const expiryUnknown = typeof expiry !== 'number';
+  const nearExpiry = !expiryUnknown && (expiry as number) - Date.now() < 5 * 60 * 1000;
+
+  if (options?.forceRefresh || tokenMissing || expiryUnknown || nearExpiry) {
+    const reason = options?.forceRefresh
+      ? 'forced refresh'
+      : tokenMissing
+      ? 'token missing or unreadable'
+      : expiryUnknown
+      ? 'expiry unknown'
+      : 'near expiry';
+    console.log(`[Auth] Refreshing token for ${accountId} (${reason})…`);
     const result = await refreshAccessToken(accountId);
     if (result.success) {
-      return loadToken(tokenKey(accountId));
+      token = loadToken(tokenKey(accountId));
+    } else if (!tokenMissing) {
+      // Refresh failed but we still have the original token — use it as a
+      // fallback (it may still be accepted by the server).
+      console.warn(`[Auth] Token refresh failed for ${accountId}, using stored token as fallback.`);
+    } else {
+      // Access token was missing AND refresh failed.  The user will need to
+      // log in again; log a clear warning so this shows up in the console.
+      const refreshError = 'error' in result ? result.error : 'unknown';
+      console.warn(`[Auth] Token missing and refresh failed for ${accountId}: ${refreshError}`);
     }
-    // Refresh failed — try the stored token anyway; game will reject if it's truly expired
+  }
+
+  if (!token) {
+    console.warn(`[Auth] No auth token available for account ${accountId} — game will launch without authentication.`);
+    return null;
   }
 
   return token;
 }
+
 
 // ─── Logout ───────────────────────────────────────────────────────────────────
 
@@ -305,6 +419,7 @@ export function logoutAccount(accountId: string): void {
   deleteToken(tokenKey(accountId));
   deleteToken(refreshKey(accountId));
   storeDelete(expiryKey(accountId));
+  storeDelete(usernameKey(accountId));
   console.log(`[Auth] Logged out account: ${accountId}`);
 }
 

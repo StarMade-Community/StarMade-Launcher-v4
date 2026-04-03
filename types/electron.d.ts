@@ -1,5 +1,29 @@
 import type { Version, DownloadProgress, ModRecord, ModpackManifest, SmdModResource, SmdInstalledUpdateStatus } from './index';
 
+// ─── Remote connection shared shapes ─────────────────────────────────────────
+
+type RemoteReasonCodeShape =
+  | 'connected' | 'authenticating' | 'ready'
+  | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error'
+  | 'protocol_timeout' | 'registry_unavailable'
+  | 'not_ready' | 'invalid_command' | 'send_failed'
+  | 'closed' | 'disconnected' | 'replaced'
+  | 'ssh_connect_failed' | 'ssh_command_failed';
+
+interface RemoteConnectionStatusShape {
+  serverId: string;
+  backend?: 'starmote' | 'azure-vm';
+  connected: boolean;
+  state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
+  isReady?: boolean;
+  host?: string;
+  port?: number;
+  username?: string;
+  connectedAt?: string;
+  error?: string;
+  reasonCode?: RemoteReasonCodeShape;
+}
+
 declare global {
   interface Window {
     /** IPC bridge exposed by the Electron preload script. Undefined in plain browser environments. */
@@ -250,6 +274,69 @@ declare global {
           modIds?: string[];
           timestamp: string;
         } | null>;
+      };
+
+      /**
+       * Remote connection APIs – supports multiple backends (StarMote, Azure VM, …).
+       * Present when StarMote rollout is enabled; the same API surface is used for all backends.
+       */
+      starmote?: {
+        /** Open a remote session for a server profile. Pass `backend` to select the transport. */
+        connect: (payload: {
+          serverId: string;
+          host: string;
+          port: number;
+          backend?: 'starmote' | 'azure-vm';
+          username?: string;
+          clientVersion?: string;
+          activeAccountId?: string;
+          // Azure VM / SSH
+          sshPort?: number;
+          sshKeyPath?: string;
+          sshPassword?: string;
+          screenSessionName?: string;
+          serverRootPath?: string;
+        }) => Promise<{
+          success: boolean;
+          status?: RemoteConnectionStatusShape;
+          error?: string;
+        }>;
+
+        /** Close an active remote session for a server profile. */
+        disconnect: (serverId: string) => Promise<{
+          success: boolean;
+          status?: RemoteConnectionStatusShape;
+          error?: string;
+        }>;
+
+        /** Send a versioned admin command through a ready remote session. */
+        sendAdminCommand: (payload: {
+          version: 1;
+          serverId: string;
+          command: string;
+        }) => Promise<{
+          success: boolean;
+          status?: RemoteConnectionStatusShape;
+          error?: string;
+          reasonCode?: RemoteReasonCodeShape;
+        }>;
+
+        /** Fetch remote connection status for one profile or all profiles. */
+        getStatus: (serverId?: string) => Promise<{
+          statuses: RemoteConnectionStatusShape[];
+        }>;
+
+        /** Subscribe to remote connection status changes. Returns a cleanup function. */
+        onStatusChanged: (cb: (status: RemoteConnectionStatusShape) => void) => () => void;
+
+        /** Subscribe to runtime output lines from remote sessions. Returns a cleanup function. */
+        onRuntimeEvent: (cb: (event: {
+          version: 1;
+          serverId: string;
+          line: string;
+          source: 'framed-packet' | 'text-fallback' | 'ssh-stdout' | 'ssh-stderr';
+          commandId?: number;
+        }) => void) => () => void;
       };
 
       /** Dialog APIs */
@@ -519,6 +606,63 @@ declare global {
         list: () => Promise<Array<{ name: string; path: string; date: string }>>;
         /** Restore a backup from the given path and restart the launcher. */
         restore: (backupPath: string) => Promise<{ success: boolean; error?: string }>;
+      };
+
+      /** Remote file access APIs (FTP/SFTP) */
+      remoteFiles?: {
+        setSession: (payload: {
+          serverId: string;
+          protocol: 'ftp' | 'sftp';
+          host: string;
+          port: number;
+          username: string;
+          password?: string;
+          sshKeyPath?: string;
+          rootPath: string;
+        }) => Promise<{ success: boolean; error?: string }>;
+        clearSession: (serverId: string) => Promise<void>;
+        listFiles: (serverId: string, relPath: string) => Promise<Array<{
+          name: string;
+          relativePath: string;
+          isDirectory: boolean;
+          sizeBytes: number;
+          isEditableText: boolean;
+          nonEditableReason?: string;
+        }>>;
+        readFile: (serverId: string, relPath: string, maxBytes?: number) => Promise<{
+          content: string;
+          truncated: boolean;
+          error?: string;
+        }>;
+        writeFile: (serverId: string, relPath: string, content: string) => Promise<{ success: boolean; error?: string }>;
+        renameFile: (serverId: string, oldRelPath: string, newRelPath: string) => Promise<{ success: boolean; error?: string }>;
+        copyFile: (serverId: string, srcRelPath: string, dstRelPath: string) => Promise<{ success: boolean; error?: string }>;
+        moveFile: (serverId: string, srcRelPath: string, dstRelPath: string) => Promise<{ success: boolean; error?: string }>;
+        deleteFile: (serverId: string, relPath: string) => Promise<{ success: boolean; error?: string }>;
+        listServerConfigValues: (serverId: string) => Promise<Array<{ key: string; value: string; comment: string | null }>>;
+        writeServerConfigValue: (serverId: string, key: string, value: string) => Promise<{ success: boolean; error?: string }>;
+        readConfigXml: (serverId: string) => Promise<string>;
+        writeConfigXml: (serverId: string, xmlContent: string) => Promise<{ success: boolean; error?: string }>;
+        listLogFiles: (serverId: string) => Promise<{
+          categories: Array<{
+            id: string;
+            label: string;
+            files: Array<{
+              fileName: string;
+              relativePath: string;
+              sizeBytes: number;
+              modifiedMs: number;
+              categoryId: string;
+              categoryLabel: string;
+            }>;
+          }>;
+          defaultRelativePath: string | null;
+        }>;
+        readLogFile: (serverId: string, relPath: string, maxBytes?: number) => Promise<{
+          content: string;
+          truncated: boolean;
+          error?: string;
+        }>;
       };
     };
   }

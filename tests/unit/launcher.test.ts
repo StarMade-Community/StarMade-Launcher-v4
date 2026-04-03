@@ -10,7 +10,13 @@ vi.mock('electron', () => ({
 vi.mock('adm-zip', () => ({ default: vi.fn() }));
 vi.mock('tar-stream', () => ({ default: { extract: vi.fn() } }));
 
-import { parseStarMadeLogLine, isStderrError } from '../../electron/launcher.js';
+import {
+  buildLaunchArgs,
+  isStderrError,
+  parseStarMadeLogLine,
+  redactLaunchArgs,
+} from '../../electron/launcher.js';
+import { LAUNCH_ARG_FIXTURES } from './fixtures/launcherArgs.fixtures';
 
 describe('parseStarMadeLogLine', () => {
   it('parses a well-formed INFO log line', () => {
@@ -118,3 +124,21 @@ describe('isStderrError', () => {
     expect(isStderrError('Picked up _JAVA_OPTIONS: -Xmx512m')).toBe(false);
   });
 });
+
+describe('launch argument fixtures', () => {
+  it.each(LAUNCH_ARG_FIXTURES)('builds args for %s', (fixture) => {
+    const args = buildLaunchArgs(fixture.options);
+    expect(args).toEqual(fixture.expectedArgs);
+  });
+
+  it.each(LAUNCH_ARG_FIXTURES)('redacts args for %s', (fixture) => {
+    const args = buildLaunchArgs(fixture.options);
+    const safeArgs = redactLaunchArgs(args, fixture.options.authToken);
+    expect(safeArgs).toEqual(fixture.expectedSafeArgs);
+
+    if (fixture.options.authToken) {
+      expect(safeArgs.join(' ')).not.toContain(fixture.options.authToken);
+    }
+  });
+});
+
