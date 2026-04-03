@@ -543,7 +543,7 @@ const launcherApi = {
     writeServerConfigValue: (serverId: string, key: string, value: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC.REMOTE_FILES_SERVER_CFG_SET, serverId, key, value),
 
-    readConfigXml: (serverId: string): Promise<string | null> =>
+    readConfigXml: (serverId: string): Promise<string> =>
       ipcRenderer.invoke(IPC.REMOTE_FILES_CONFIG_XML_GET, serverId),
 
     writeConfigXml: (serverId: string, xmlContent: string): Promise<{ success: boolean; error?: string }> =>

@@ -485,11 +485,13 @@ ipcMain.handle(IPC.REMOTE_FILES_SERVER_CFG_SET, async (_event, serverId: string,
 
 ipcMain.handle(IPC.REMOTE_FILES_CONFIG_XML_GET, async (_event, serverId: string) => {
   const candidates = ['GameConfig.xml', 'StarMade/GameConfig.xml'];
+  const errors: string[] = [];
   for (const candidate of candidates) {
     const result = await remoteFileBackend.readFile(serverId, candidate);
     if (!result.error && result.content) return result.content;
+    errors.push(`${candidate}: ${result.error ?? 'empty'}`);
   }
-  return null;
+  throw new Error(`GameConfig.xml not found on remote server. Tried: ${errors.join('; ')}`);
 });
 
 ipcMain.handle(IPC.REMOTE_FILES_CONFIG_XML_SET, async (_event, serverId: string, xmlContent: string) => {

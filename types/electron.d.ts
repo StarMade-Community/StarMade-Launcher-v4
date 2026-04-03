@@ -641,7 +641,7 @@ declare global {
         deleteFile: (serverId: string, relPath: string) => Promise<{ success: boolean; error?: string }>;
         listServerConfigValues: (serverId: string) => Promise<Array<{ key: string; value: string; comment: string | null }>>;
         writeServerConfigValue: (serverId: string, key: string, value: string) => Promise<{ success: boolean; error?: string }>;
-        readConfigXml: (serverId: string) => Promise<string | null>;
+        readConfigXml: (serverId: string) => Promise<string>;
         writeConfigXml: (serverId: string, xmlContent: string) => Promise<{ success: boolean; error?: string }>;
         listLogFiles: (serverId: string) => Promise<{
           categories: Array<{

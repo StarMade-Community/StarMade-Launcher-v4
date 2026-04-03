@@ -3333,25 +3333,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     const loadGameConfigXml = async () => {
       try {
-        let content: string | null;
-        if (isRemoteFileSessionEnabled && remoteFilesApi) {
-          content = await remoteFilesApi.readConfigXml(effectiveServer.id);
-        } else {
-          content = await window.launcher.game.readGameConfigXml(effectiveServer.path);
-        }
+        const content = isRemoteFileSessionEnabled && remoteFilesApi
+          ? await remoteFilesApi.readConfigXml(effectiveServer.id)
+          : await window.launcher.game.readGameConfigXml(effectiveServer.path);
         if (cancelled) return;
 
-        const next = content ?? '';
-        if (!next.trim()) {
-          setGameConfigError('GameConfig.xml not found or empty.');
-          setGameConfigFields([]);
-          setGameConfigListSections([]);
-          setGameConfigValues({});
-          setGameConfigSavedValues({});
-          setGameConfigLoadedServerId(effectiveServer.id);
-          return;
-        }
-        hydrateGameConfigState(next);
+        hydrateGameConfigState(content ?? '');
         setGameConfigLoadedServerId(effectiveServer.id);
       } catch (error) {
         if (cancelled) return;
@@ -5606,21 +5593,22 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [effectiveServer?.id, effectiveServer?.name, effectiveServerName, serverId, serverName]);
 
   const reloadGameConfigXml = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled)) return;
 
     setIsGameConfigLoading(true);
     setGameConfigError(null);
     try {
-      const content = await window.launcher.game.readGameConfigXml(effectiveServer.path);
-      const next = content ?? '';
-      hydrateGameConfigState(next);
+      const content = isRemoteFileSessionEnabled && remoteFilesApi
+        ? await remoteFilesApi.readConfigXml(effectiveServer.id)
+        : await window.launcher.game.readGameConfigXml(effectiveServer.path);
+      hydrateGameConfigState(content ?? '');
       setGameConfigLoadedServerId(effectiveServer.id);
     } catch (error) {
       setGameConfigError(`Failed to reload GameConfig.xml: ${String(error)}`);
     } finally {
       setIsGameConfigLoading(false);
     }
-  }, [effectiveServer, hasGameApi, hydrateGameConfigState]);
+  }, [effectiveServer, hasGameApi, hydrateGameConfigState, isRemoteFileSessionEnabled, remoteFilesApi]);
 
   const reloadFactionConfigXml = useCallback(async () => {
     if (!effectiveServer || !hasGameApi) return;
@@ -7753,7 +7741,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       },
       reloadLabel: 'Reload',
       onReload: reloadGameConfigXml,
-      reloadDisabled: !effectiveServer || !hasGameApi || isGameConfigLoading || !!savingGameConfigPath || !!savingGameConfigToggleId,
+      reloadDisabled: !effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled) || isGameConfigLoading || !!savingGameConfigPath || !!savingGameConfigToggleId,
       categoryExtras: toggleEntriesByCategory,
     };
 
