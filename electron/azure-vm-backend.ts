@@ -53,6 +53,9 @@ function buildSshArgs(
     '-o', 'StrictHostKeyChecking=accept-new',
     '-o', 'ConnectTimeout=10',
     '-o', 'ServerAliveInterval=30',
+    // Pin known_hosts to the home-directory path so Electron's working directory
+    // does not affect which file SSH reads/writes (avoids host-key lookup misses).
+    '-o', `UserKnownHostsFile=${process.env.HOME ?? '~'}/.ssh/known_hosts`,
     '-p', String(session.sshPort),
   ];
   if (session.sshKeyPath?.trim()) {
@@ -81,6 +84,7 @@ function buildSpawnConfig(
       '-o', 'ServerAliveInterval=30',
       '-o', 'PasswordAuthentication=yes',
       '-o', 'PubkeyAuthentication=no',
+      '-o', `UserKnownHostsFile=${process.env.HOME ?? '~'}/.ssh/known_hosts`,
       '-p', String(session.sshPort),
       `${session.username}@${session.host}`,
       command,
@@ -146,8 +150,25 @@ export class AzureVmBackend implements IRemoteBackend {
     this.sessions.set(serverId, session);
     this.onStatusChanged(this.buildStatus(session));
 
-    // Verify SSH connectivity with a quick no-op
-    const testResult = await this.runOneShotSsh(session, 'echo SM_SSH_OK', 15_000);
+    // Verify SSH connectivity with a quick no-op.  Retry up to 3 times with
+    // increasing back-off — the first attempt commonly fails because:
+    //   • the host key is being written to known_hosts (some SSH versions
+    //     exit non-zero on first contact even with StrictHostKeyChecking=accept-new)
+    //   • Azure NSG / firewall needs a moment to pass a new source IP
+    //   • the SSH daemon itself needs a brief warm-up period
+    const SSH_TEST_RETRIES = 3;
+    const SSH_TEST_DELAYS_MS = [2_000, 4_000]; // delays between attempts 1→2 and 2→3
+    let testResult = await this.runOneShotSsh(session, 'echo SM_SSH_OK', 15_000);
+
+    for (let attempt = 1; attempt < SSH_TEST_RETRIES && !testResult.ok; attempt++) {
+      const delayMs = SSH_TEST_DELAYS_MS[attempt - 1] ?? 4_000;
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      if (!this.sessions.has(serverId)) {
+        return { success: false, error: 'Connection cancelled.' };
+      }
+      testResult = await this.runOneShotSsh(session, 'echo SM_SSH_OK', 15_000);
+    }
+
     if (!testResult.ok) {
       session.state = 'error';
       session.error = testResult.error ?? 'SSH connectivity test failed.';
@@ -322,21 +343,38 @@ export class AzureVmBackend implements IRemoteBackend {
   private startLogStream(session: AzureVmSession): void {
     const { serverId } = session;
 
-    // Build a list of candidate log file paths to tail, most specific first.
-    const logCandidates: string[] = [];
-    if (session.serverRootPath) {
-      // Single-quote the path to handle spaces; escape any embedded single quotes.
-      const safePath = `'${session.serverRootPath.replace(/'/g, "'\\''")}/logs/serverlog.0.log'`;
-      logCandidates.push(`tail -F ${safePath} 2>/dev/null`);
-    }
-    // Common fallback locations
-    logCandidates.push('tail -F ~/server/logs/serverlog.0.log 2>/dev/null');
-    logCandidates.push('tail -F ~/StarMade/logs/serverlog.0.log 2>/dev/null');
-    // systemd journal as last resort (captures Java output only when the service runs Java directly)
-    logCandidates.push('sudo journalctl -fu starmade --no-pager 2>/dev/null');
-    logCandidates.push('echo "[StarMade Launcher] No log stream configured — provide the server root path in the connect settings."');
+    const sq = (s: string): string => `'${s.replace(/'/g, "'\\''")}'`;
 
-    const logCommand = logCandidates.join(' || ');
+    let logCommand: string;
+
+    if (session.screenSessionName) {
+      // tmux mode: pipe the session's stdout to a temp file (captures SQL, admin commands,
+      // and all other stdout-only output), and concurrently tail the log file for log entries.
+      // The trap ensures pipe-pane is stopped and the temp file removed when the SSH session ends.
+      const safeSession = sq(session.screenSessionName);
+      const parts: string[] = [
+        `T=$(mktemp /tmp/.sml.XXXXXX 2>/dev/null)`,
+        `tmux pipe-pane -t ${safeSession} "cat >> \\"$T\\"" 2>/dev/null`,
+        `trap "tmux pipe-pane -t ${safeSession} 2>/dev/null; rm -f \\"$T\\"" EXIT INT TERM HUP`,
+      ];
+      if (session.serverRootPath) {
+        const safeLog = sq(`${session.serverRootPath}/logs/serverlog.0.log`);
+        parts.push(`( tail -F ${safeLog} 2>/dev/null & tail -F "$T" 2>/dev/null & wait )`);
+      } else {
+        parts.push(`( sudo journalctl -fu starmade --no-pager 2>/dev/null & tail -F "$T" 2>/dev/null & wait )`);
+      }
+      logCommand = parts.join('; ');
+    } else {
+      // No tmux session name: fall back to log file tailing or journalctl.
+      const logCandidates: string[] = [];
+      if (session.serverRootPath) {
+        logCandidates.push(`tail -F ${sq(`${session.serverRootPath}/logs/serverlog.0.log`)} 2>/dev/null`);
+      }
+      logCandidates.push('tail -F ~/server/logs/serverlog.0.log 2>/dev/null');
+      logCandidates.push('sudo journalctl -fu starmade --no-pager 2>/dev/null');
+      logCandidates.push('echo "[StarMade Launcher] No log stream configured — provide the server root path and screen/tmux session name in the connect settings."');
+      logCommand = logCandidates.join(' || ');
+    }
 
     const { cmd, args, opts } = buildSpawnConfig(session, logCommand);
     const proc = spawn(cmd, args, opts);

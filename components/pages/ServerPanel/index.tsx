@@ -270,7 +270,8 @@ interface DraggedQuickAction {
   actionId: ServerActionId;
 }
 
-const LOG_BUFFER_CAP = 300000;
+const LOG_BUFFER_CAP = 5000;
+const LOG_DISPLAY_LIMIT = 500;
 const LIVE_PROCESS_LOG_PATH = '__live_process_output__';
 const DASHBOARD_STORE_KEY = 'serverPanelDashboardLayoutsV2';
 const MIN_GROUP_HEIGHT = 260;
@@ -1205,14 +1206,27 @@ const inferFactionConfigCategory = (path: string, rules: FactionConfigCategoryRu
 };
 
 const parseGameConfigXmlDocument = (xmlContent: string): Document => {
+  if (!xmlContent?.trim()) {
+    throw new Error('XML content is empty.');
+  }
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlContent, 'application/xml');
   const parseError = doc.querySelector('parsererror');
   if (parseError) {
-    throw new Error('Invalid XML content.');
+    const detail = parseError.textContent?.trim() ?? 'Unknown parse error';
+    throw new Error(`Invalid XML content: ${detail}`);
   }
   return doc;
 };
+
+/**
+ * Serialize an XML Document to a string, stripping spurious `xmlns=""`
+ * declarations that Chromium's XMLSerializer injects onto elements imported
+ * from another Document via importNode().  StarMade's XML parser rejects
+ * these null-namespace declarations even though they are technically valid XML.
+ */
+const serializeXmlDoc = (node: Node): string =>
+  new XMLSerializer().serializeToString(node).replace(/ xmlns=""/g, '');
 
 const findElementByGameConfigPath = (doc: Document, path: string): Element | null => {
   const root = doc.documentElement;
@@ -2052,9 +2066,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [databaseSectorLoadFilter, setDatabaseSectorLoadFilter] = useState<DatabaseSectorLoadFilter>('all');
   const [databaseSortKey, setDatabaseSortKey] = useState<DatabaseSortKey>('name-asc');
   const [databaseEntitySearchTerm, setDatabaseEntitySearchTerm] = useState<string>('');
+  const [databaseEntityPage, setDatabaseEntityPage] = useState(0);
   const [databaseClipboardMsg, setDatabaseClipboardMsg] = useState<string | null>(null);
   const [databaseInspectEntity, setDatabaseInspectEntity] = useState<DatabaseEntityRow | null>(null);
 
+  const liveLogFlushRef = useRef<{ pending: LogEntry[]; timer: number | null }>({ pending: [], timer: null });
   const logContainerRef = useRef<HTMLDivElement>(null);
   const groupContainerRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const pendingDbRequestRef = useRef<PendingDatabaseSqlRequest | null>(null);
@@ -2394,7 +2410,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             sshKeyPath: azureVmSshKeyPathInput.trim() || undefined,
             sshPassword: azureVmSshPasswordInput || undefined,
             screenSessionName: azureVmScreenSessionInput.trim() || undefined,
-            serverRootPath: nextRemoteFileRootPath.trim() || undefined,
+            serverRootPath: nextRemoteFileRootPath || undefined,
           }
         : {
             serverId: targetServer.id,
@@ -3011,6 +3027,10 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
   useEffect(() => {
     setLogs([]);
+    // Cancel any pending flush and discard buffered lines
+    const buf = liveLogFlushRef.current;
+    if (buf.timer !== null) { window.clearTimeout(buf.timer); buf.timer = null; }
+    buf.pending.length = 0;
     setLiveProcessLogs([]);
     setActionError(null);
     setPendingServerAction(null);
@@ -3322,6 +3342,15 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         if (cancelled) return;
 
         const next = content ?? '';
+        if (!next.trim()) {
+          setGameConfigError('GameConfig.xml not found or empty.');
+          setGameConfigFields([]);
+          setGameConfigListSections([]);
+          setGameConfigValues({});
+          setGameConfigSavedValues({});
+          setGameConfigLoadedServerId(effectiveServer.id);
+          return;
+        }
         hydrateGameConfigState(next);
         setGameConfigLoadedServerId(effectiveServer.id);
       } catch (error) {
@@ -4450,6 +4479,23 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     try {
       const command = `/server_message_to plain ${quoteServerCommandArg(playerMessageTarget)} ${quoteServerCommandArg(text)}`;
       await sendServerCommandOrThrow(command);
+      // Optimistically add the message to the chat pane under the DM channel
+      const dmChannelId = `##${playerMessageTarget}`;
+      const optimistic: ChatMessage = {
+        timestamp: new Date().toISOString().replace('T', ' - ').replace(/\.\d+Z$/, ''),
+        sender: '[SERVER]',
+        receiverType: 'DIRECT',
+        receiver: playerMessageTarget,
+        text,
+      };
+      setChatMessagesByChannel((prev) => {
+        const existing = prev[dmChannelId] ?? [];
+        return { ...prev, [dmChannelId]: [...existing, optimistic] };
+      });
+      setChatChannels((prev) => {
+        if (prev.some((c) => c.channelId === dmChannelId)) return prev;
+        return [buildLiveChannelInfo(dmChannelId, 'DIRECT'), ...prev];
+      });
       setPlayerMessageText('');
       setPlayerMessageTarget(null);
     } catch (error) {
@@ -4770,12 +4816,23 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       level: normalizeLogLevel(level),
       message,
     };
-    setLiveProcessLogs((prev) => {
-      const next = [...prev, runtimeEntry];
-      return next.length <= LOG_BUFFER_CAP
-        ? next
-        : next.slice(next.length - LOG_BUFFER_CAP);
-    });
+    // Buffer lines and flush in batches so high-throughput SSH streams (e.g.
+    // 60k SQL result rows) don't trigger a React re-render per line.
+    const buf = liveLogFlushRef.current;
+    buf.pending.push(runtimeEntry);
+    if (buf.timer === null) {
+      buf.timer = window.setTimeout(() => {
+        buf.timer = null;
+        const lines = buf.pending.splice(0);
+        if (lines.length === 0) return;
+        setLiveProcessLogs((prev) => {
+          const next = [...prev, ...lines];
+          return next.length <= LOG_BUFFER_CAP
+            ? next
+            : next.slice(next.length - LOG_BUFFER_CAP);
+        });
+      }, 100);
+    }
 
     // Strip optional syslog/journalctl prefix so pattern matching works regardless of log source.
     const line = message.replace(/^\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+\S+:\s*/, '');
@@ -4789,7 +4846,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       }
     }
 
-    const parsedChat = parseChatLogLine(message, GENERAL_CHANNEL_ID);
+    const parsedChat = parseChatLogLine(line, GENERAL_CHANNEL_ID);
     if (parsedChat) {
       const channelId = normalizeLiveChatChannelId(parsedChat.receiverType, parsedChat.receiver);
       setChatMessagesByChannel((prev) => {
@@ -4830,6 +4887,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       const lines = dbLinesByRequestRef.current.get(rid) ?? [];
       lines.push(rowMatch[2]);
       dbLinesByRequestRef.current.set(rid, lines);
+      // If BEGIN was missing or arrived before pending was set, infer requestId from the first row.
+      if (pending.awaitingRequestId) {
+        pending.awaitingRequestId = false;
+        pending.requestId = rid;
+        setDatabaseLastRequestId(rid);
+      }
       return;
     }
 
@@ -4843,20 +4906,27 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     const savedMode = pending.mode;
     clearPendingDatabaseSql();
+    setDatabaseSqlStatus('Processing results…');
 
-    setDatabaseSqlRawLines(lines);
-    const table = parseDatabaseSqlTable(lines);
-    setDatabaseSqlOutput(table);
+    // Defer the heavy parse off the synchronous event-handler call stack so the
+    // UI can repaint (showing "Processing results…") before potentially blocking
+    // for hundreds of milliseconds on a large result set.
+    setTimeout(() => {
+      setDatabaseSqlRawLines(lines);
+      const table = parseDatabaseSqlTable(lines);
+      setDatabaseSqlOutput(table);
 
-    if (savedMode === 'query') {
-      const entities = parseDatabaseEntities(table);
-      setDatabaseEntities(entities);
-      setDatabaseSqlStatus(`Query completed — ${table.rows.length} row${table.rows.length === 1 ? '' : 's'} returned.`);
-    } else if (savedMode === 'update') {
-      setDatabaseSqlStatus('Update completed. SQL_UPDATE does not return row data.');
-    } else {
-      setDatabaseSqlStatus(`Insert completed — ${table.rows.length} generated key row${table.rows.length === 1 ? '' : 's'} returned.`);
-    }
+      if (savedMode === 'query') {
+        const entities = parseDatabaseEntities(table);
+        setDatabaseEntities(entities);
+        setDatabaseEntityPage(0);
+        setDatabaseSqlStatus(`Query completed — ${table.rows.length} row${table.rows.length === 1 ? '' : 's'} returned.`);
+      } else if (savedMode === 'update') {
+        setDatabaseSqlStatus('Update completed. SQL_UPDATE does not return row data.');
+      } else {
+        setDatabaseSqlStatus(`Insert completed — ${table.rows.length} generated key row${table.rows.length === 1 ? '' : 's'} returned.`);
+      }
+    }, 0);
   }, [clearPendingDatabaseSql]);
 
   useEffect(() => {
@@ -5031,6 +5101,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     }
     return Array.from(bySector.entries()).map(([sector, entities]) => ({ sector, entities }));
   }, [filteredSortedDatabaseEntities]);
+
+  // Reset to first page whenever the filtered/grouped data changes
+  useEffect(() => {
+    setDatabaseEntityPage(0);
+  }, [databaseSectorGroups]);
 
   const toggleLogFilter = useCallback((filter: LogFilter) => {
     setActiveLogFilters((prev) => {
@@ -5419,7 +5494,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [updateQuickActions]);
 
   const handleClearLogs = useCallback(async () => {
-    if (!effectiveServer || !hasGameApi || isClearingLogFiles) return;
+    const canClearRemote = isRemoteLogsEnabled && isRemoteFileSessionEnabled && !!remoteFilesApi;
+    if (!effectiveServer || (!hasGameApi && !canClearRemote) || isClearingLogFiles) return;
 
     const confirmed = window.confirm('Are you sure you want to delete all files in this server\'s logs folder? This cannot be undone.');
     if (!confirmed) return;
@@ -5428,10 +5504,24 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     setLogLoadError(null);
 
     try {
-      const result = await window.launcher.game.clearLogFiles(effectiveServer.path);
-      if (!result.success) {
-        setLogLoadError(result.error ?? 'Failed to clear logs folder.');
-        return;
+      if (canClearRemote) {
+        const catalog = await remoteFilesApi.listLogFiles(effectiveServer.id);
+        const allFiles = catalog.categories.flatMap((cat) => cat.files);
+        const errors: string[] = [];
+        for (const file of allFiles) {
+          const result = await remoteFilesApi.deleteFile(effectiveServer.id, `logs/${file.relativePath}`);
+          if (!result.success) errors.push(file.relativePath);
+        }
+        if (errors.length > 0) {
+          setLogLoadError(`Failed to delete: ${errors.join(', ')}`);
+          return;
+        }
+      } else {
+        const result = await window.launcher.game.clearLogFiles(effectiveServer.path);
+        if (!result.success) {
+          setLogLoadError(result.error ?? 'Failed to clear logs folder.');
+          return;
+        }
       }
 
       setLogs([]);
@@ -5444,11 +5534,15 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     } finally {
       setIsClearingLogFiles(false);
     }
-  }, [effectiveServer, hasGameApi, isClearingLogFiles, reloadLogCatalog]);
+  }, [effectiveServer, hasGameApi, isClearingLogFiles, isRemoteFileSessionEnabled, isRemoteLogsEnabled, reloadLogCatalog, remoteFilesApi]);
 
   const handleClearBufferedLogs = useCallback(() => {
     if (isLiveLogSelected) {
-      setLiveProcessLogs([]);
+      // Cancel any pending flush and discard buffered lines
+    const buf = liveLogFlushRef.current;
+    if (buf.timer !== null) { window.clearTimeout(buf.timer); buf.timer = null; }
+    buf.pending.length = 0;
+    setLiveProcessLogs([]);
     } else {
       setLogs([]);
     }
@@ -5551,7 +5645,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [effectiveServer, hasGameApi, hydrateFactionConfigState, readFactionConfigXmlFromInstallation]);
 
   const setGameConfigCommentToggle = useCallback(async (entry: GameConfigCommentToggleEntry, enabled: boolean) => {
-    if (!effectiveServer || !hasGameApi || savingGameConfigPath || savingGameConfigToggleId) return;
+    if (!effectiveServer || (!hasGameApi && !isRemoteFileSessionEnabled) || savingGameConfigPath || savingGameConfigToggleId) return;
 
     setSavingGameConfigToggleId(entry.id);
     setGameConfigError(null);
@@ -5583,13 +5677,18 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           }
         }
       } else if (target) {
-        const serializedTarget = new XMLSerializer().serializeToString(target);
+        const serializedTarget = serializeXmlDoc(target);
         const replacement = doc.createComment(`\n  ${serializedTarget}\n  `);
         target.parentNode?.replaceChild(replacement, target);
       }
 
-      const serialized = new XMLSerializer().serializeToString(doc);
-      const result = await window.launcher.game.writeGameConfigXml(effectiveServer.path, serialized);
+      const serialized = serializeXmlDoc(doc);
+      let result: { success: boolean; error?: string };
+      if (isRemoteFileSessionEnabled && remoteFilesApi) {
+        result = await remoteFilesApi.writeConfigXml(effectiveServer.id, serialized);
+      } else {
+        result = await window.launcher.game.writeGameConfigXml(effectiveServer.path, serialized);
+      }
       if (!result.success) {
         setGameConfigError(result.error ?? `Failed to update ${entry.label} in GameConfig.xml.`);
         return;
@@ -5607,6 +5706,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     gameConfigXmlText,
     hasGameApi,
     hydrateGameConfigState,
+    isRemoteFileSessionEnabled,
+    remoteFilesApi,
     savingGameConfigPath,
     savingGameConfigToggleId,
   ]);
@@ -5643,7 +5744,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       }
 
       target.textContent = sanitized;
-      const serialized = new XMLSerializer().serializeToString(doc);
+      const serialized = serializeXmlDoc(doc);
       let result: { success: boolean; error?: string };
       if (isRemoteFileSessionEnabled && remoteFilesApi) {
         result = await remoteFilesApi.writeConfigXml(effectiveServer.id, serialized);
@@ -5696,7 +5797,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       }
 
       target.textContent = sanitized;
-      const serialized = new XMLSerializer().serializeToString(doc);
+      const serialized = serializeXmlDoc(doc);
       const result = await writeFactionConfigXmlToInstallation(serialized);
       if (!result.success) {
         setFactionConfigError(result.error ?? `Failed to save ${field.label} to the faction config template.`);
@@ -7456,7 +7557,12 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   {isLiveLogSelected ? 'No output from the current process yet.' : 'No log lines in this file yet.'}
                 </p>
               )}
-              {filteredLogs.map((log, index) => (
+              {filteredLogs.length > LOG_DISPLAY_LIMIT && (
+                <p className="mb-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
+                  Showing last {LOG_DISPLAY_LIMIT} of {filteredLogs.length} matching entries. Use filters or Clear Buffer to see earlier lines.
+                </p>
+              )}
+              {filteredLogs.slice(-LOG_DISPLAY_LIMIT).map((log, index) => (
                 <div
                   key={`${log.timestamp}-${index}`}
                   className={`flex gap-3 rounded px-2 py-1 hover:bg-white/5 ${isLogWrapEnabled ? '' : 'min-w-max'}`}
@@ -7473,7 +7579,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
       <div className="flex items-center justify-between gap-3 border-t border-white/10 bg-black/20 px-4 py-3">
         <p className="text-sm text-gray-400">
-          {filteredLogs.length} / {LOG_BUFFER_CAP} buffered log entries
+          {filteredLogs.length} / {LOG_BUFFER_CAP} buffered log entries (last {LOG_DISPLAY_LIMIT} shown)
           {!isLiveLogSelected && isLogFileTruncated ? ' (tail view)' : ''}
         </p>
         <div className="flex gap-2">
@@ -7486,7 +7592,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
           </button>
           <button
             onClick={() => { void handleClearLogs(); }}
-            disabled={!effectiveServer || !hasGameApi || isClearingLogFiles || isRemoteServerProfile}
+            disabled={!effectiveServer || isClearingLogFiles || (!hasGameApi && !(isRemoteLogsEnabled && isRemoteFileSessionEnabled))}
             className="rounded-md bg-slate-700 px-4 py-2 text-sm font-semibold uppercase tracking-wider hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isClearingLogFiles ? 'Clearing...' : 'Delete Log Files'}
@@ -8424,9 +8530,17 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 ? 'No entities loaded. Click "Reload Entities" while the server is running.'
                 : 'No entities match the current filters.'}
             </div>
-          ) : (
+          ) : (() => {
+            const GROUPS_PER_PAGE = 50;
+            const totalPages = Math.ceil(databaseSectorGroups.length / GROUPS_PER_PAGE);
+            const pagedGroups = databaseSectorGroups.slice(
+              databaseEntityPage * GROUPS_PER_PAGE,
+              (databaseEntityPage + 1) * GROUPS_PER_PAGE,
+            );
+            return (
+            <>
             <div className="space-y-3">
-              {databaseSectorGroups.map((group) => (
+              {pagedGroups.map((group) => (
                 <div key={group.sector} className="rounded border border-white/10 bg-black/20">
                   <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
                     <h4 className="font-mono text-xs font-semibold text-gray-200">
@@ -8492,7 +8606,31 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                 </div>
               ))}
             </div>
-          )}
+            {totalPages > 1 && (
+              <div className="mt-3 flex items-center justify-between border-t border-white/10 pt-3">
+                <button
+                  onClick={() => setDatabaseEntityPage((p) => Math.max(0, p - 1))}
+                  disabled={databaseEntityPage === 0}
+                  className="rounded border border-white/15 bg-black/30 px-3 py-1 text-xs font-semibold text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  ← Prev
+                </button>
+                <span className="text-xs text-gray-400">
+                  Page {databaseEntityPage + 1} / {totalPages}
+                  <span className="ml-2 text-gray-600">({databaseSectorGroups.length} sector groups)</span>
+                </span>
+                <button
+                  onClick={() => setDatabaseEntityPage((p) => Math.min(totalPages - 1, p + 1))}
+                  disabled={databaseEntityPage >= totalPages - 1}
+                  className="rounded border border-white/15 bg-black/30 px-3 py-1 text-xs font-semibold text-gray-200 hover:bg-black/45 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next →
+                </button>
+              </div>
+            )}
+            </>
+            );
+          })()}
         </div>
       </div>
     </div>
