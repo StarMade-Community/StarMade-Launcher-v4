@@ -14,6 +14,7 @@
 //   Password – pass sshPassword; requires sshpass(1) to be on PATH.
 
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import os from 'node:os';
 import type {
   IRemoteBackend,
   RemoteConnectOptions,
@@ -59,7 +60,8 @@ function buildSshArgs(
     '-p', String(session.sshPort),
   ];
   if (session.sshKeyPath?.trim()) {
-    args.push('-i', session.sshKeyPath.trim());
+    const keyPath = session.sshKeyPath.trim().replace(/^~(?=$|\/)/, os.homedir());
+    args.push('-o', 'IdentitiesOnly=yes', '-i', keyPath);
   }
   args.push(`${session.username}@${session.host}`);
   return args;
