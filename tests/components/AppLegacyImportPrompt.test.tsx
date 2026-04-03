@@ -114,13 +114,15 @@ describe('App first-launch legacy import prompt', () => {
     const navigate = vi.fn();
     mockUseApp.mockReturnValue({ ...baseUseAppValue, navigate });
 
-    render(<App />);
+    await act(async () => {
+      render(<App />);
+    });
 
     await act(async () => {
       onScanResult?.(['/games/StarMade-Classic']);
     });
 
-    expect(await screen.findByText('Import Old StarMade Installations')).toBeInTheDocument();
+    expect(screen.getByText('Import Old StarMade Installations')).toBeInTheDocument();
     expect(screen.getByText('/games/StarMade-Classic')).toBeInTheDocument();
 
     expect(storeSet).toHaveBeenCalledWith(
@@ -174,9 +176,11 @@ describe('App first-launch legacy import prompt', () => {
         return { imported: paths, skipped: [] };
       });
 
-    render(<App />);
+    await act(async () => {
+      render(<App />);
+    });
 
-    expect(await screen.findByText('Import Old StarMade Installations')).toBeInTheDocument();
+    expect(screen.getByText('Import Old StarMade Installations')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Retry Import/i }));
 
