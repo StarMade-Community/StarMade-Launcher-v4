@@ -61,7 +61,8 @@ function buildSshBaseArgs(session: RemoteFileSession): string[] {
     '-p', String(session.port),
   ];
   if (session.sshKeyPath?.trim()) {
-    args.push('-i', session.sshKeyPath.trim());
+    const keyPath = session.sshKeyPath.trim().replace(/^~(?=$|\/)/, os.homedir());
+    args.push('-o', 'IdentitiesOnly=yes', '-i', keyPath);
   }
   args.push(`${session.username}@${session.host}`);
   return args;
