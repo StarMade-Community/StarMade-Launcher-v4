@@ -8,6 +8,7 @@ import { createLegacyImportPromptState, LEGACY_IMPORT_PROMPT_STORE_KEY } from '.
 
 const mockUseApp = vi.fn();
 const mockUseData = vi.fn();
+const mockImportInstallations = vi.fn();
 
 vi.mock('../../contexts/AppContext', () => ({
   useApp: () => mockUseApp(),
@@ -15,6 +16,10 @@ vi.mock('../../contexts/AppContext', () => ({
 
 vi.mock('../../contexts/DataContext', () => ({
   useData: () => mockUseData(),
+}));
+
+vi.mock('../../components/hooks/useLegacyInstallImporter', () => ({
+  default: () => ({ importInstallations: mockImportInstallations }),
 }));
 
 vi.mock('../../components/layout/Header', () => ({ default: () => <div data-testid="header" /> }));
@@ -76,6 +81,9 @@ describe('App first-launch legacy import prompt', () => {
       versions: [{ id: '0.203.175', name: '0.203.175', type: 'release', requiredJavaVersion: 25 }],
       isLoaded: true,
     });
+
+    // Default: auto-import fails so the modal becomes visible after the attempt.
+    mockImportInstallations.mockRejectedValue(new Error('auto-import mock failure'));
 
     (window as unknown as Record<string, unknown>).launcher = {
       store: {
@@ -142,11 +150,35 @@ describe('App first-launch legacy import prompt', () => {
       return undefined;
     });
 
+    // First call is the silent auto-import attempt (fails so the modal stays visible).
+    // Subsequent calls are the user-triggered retry (succeeds and produces the expected side effects).
+    mockImportInstallations
+      .mockRejectedValueOnce(new Error('auto-import mock failure'))
+      .mockImplementation(async (paths: string[]) => {
+        for (const p of paths) {
+          const version = await readVersion(p);
+          addInstallation({
+            name: p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? 'legacy-install',
+            path: p,
+            version: version ?? 'unknown',
+            type: 'release',
+            icon: 'release' as const,
+            minMemory: 2048,
+            maxMemory: 2048,
+            jvmArgs: '-Dfoo=bar',
+            requiredJavaVersion: 25,
+            installed: true,
+            lastPlayed: 'Never',
+          });
+        }
+        return { imported: paths, skipped: [] };
+      });
+
     render(<App />);
 
     expect(await screen.findByText('Import Old StarMade Installations')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Import Installation/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Retry Import/i }));
 
     await waitFor(() => {
       expect(addInstallation).toHaveBeenCalledWith(expect.objectContaining({
