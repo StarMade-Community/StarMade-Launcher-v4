@@ -659,6 +659,26 @@ const parseChatLogLine = (rawLine: string, channelId: string): ChatMessage | nul
   return null;
 };
 
+/**
+ * Parse a live server log [CHANNELROUTER] line into a ChatMessage.
+ * Format: [CHANNELROUTER] RECEIVED MESSAGE ON <state>: [CHAT][sender=X][receiverType=Y][receiver=Z][message=...]
+ */
+const parseChannelRouterLine = (line: string): ChatMessage | null => {
+  if (!line.includes('[CHANNELROUTER]') || !line.includes('[CHAT]')) return null;
+  const senderMatch = line.match(/\[sender=([^\]]*)\]/);
+  const receiverTypeMatch = line.match(/\[receiverType=([^\]]*)\]/);
+  const receiverMatch = line.match(/\[receiver=(?!Type)([^\]]*)\]/);
+  const messageMatch = line.match(/\[message=([\s\S]*)\]$/);
+  if (!senderMatch || !receiverTypeMatch || !receiverMatch || !messageMatch) return null;
+  return {
+    timestamp: new Date().toISOString(),
+    sender: senderMatch[1],
+    receiverType: receiverTypeMatch[1],
+    receiver: receiverMatch[1],
+    text: messageMatch[1],
+  };
+};
+
 const formatUptime = (uptimeMs?: number): string => {
   if (!uptimeMs || uptimeMs <= 0) return '00:00:00';
   const totalSeconds = Math.floor(uptimeMs / 1000);
@@ -4833,7 +4853,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       }
     }
 
-    const parsedChat = parseChatLogLine(line, GENERAL_CHANNEL_ID);
+    const parsedChat = parseChatLogLine(line, GENERAL_CHANNEL_ID) ?? parseChannelRouterLine(line);
     if (parsedChat) {
       const channelId = normalizeLiveChatChannelId(parsedChat.receiverType, parsedChat.receiver);
       setChatMessagesByChannel((prev) => {
