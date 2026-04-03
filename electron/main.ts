@@ -2570,7 +2570,13 @@ function copyPresetsToUserData(): void {
  * Stops recursing once `depth` exceeds `maxDepth` to avoid scanning the
  * whole file system. Skips common non-game directories to keep scan time bounded.
  */
-const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', '__pycache__']);
+const SKIP_DIRS = new Set([
+  'node_modules', '.git', '.svn', '__pycache__',
+  // Large system/app-data dirs that are handled as explicit roots instead,
+  // so we avoid slow recursive scans from homeDir.
+  'Library', // macOS ~/Library – covered by explicit Application Support root
+  'AppData', // Windows ~\AppData – covered by explicit %APPDATA% / %LOCALAPPDATA% roots
+]);
 
 function getLegacyAutoDetectRoots(): Array<{ root: string; maxDepth: number }> {
   const roots = new Map<string, number>();
@@ -2584,15 +2590,45 @@ function getLegacyAutoDetectRoots(): Array<{ root: string; maxDepth: number }> {
 
   const homeDir = os.homedir();
 
-  // Keep app-local roots for source/dev installs.
-  addRoot(process.cwd(), 3);
-  addRoot(app.getAppPath(), 3);
+  // Dev-only: app-local roots are unreliable in packaged builds.
+  // process.cwd() is often '/' on macOS packaged apps; app.getAppPath() points
+  // inside the .asar bundle and is useless for finding user installs.
+  if (!app.isPackaged) {
+    addRoot(process.cwd(), 3);
+    addRoot(app.getAppPath(), 3);
+  }
 
-  // Add common user-facing locations where old launchers are usually unpacked.
+  // Common user-facing locations where old launchers are usually unpacked.
   addRoot(homeDir, 3);
   addRoot(path.join(homeDir, 'Games'), 3);
   addRoot(path.join(homeDir, 'Game Files'), 3);
   addRoot(path.join(homeDir, 'Desktop'), 3);
+
+  if (process.platform === 'win32') {
+    // Windows: Roaming/Local AppData and both Program Files variants.
+    addRoot(process.env.APPDATA, 3);
+    addRoot(process.env.LOCALAPPDATA, 3);
+    addRoot(process.env.ProgramFiles, 3);
+    addRoot(process.env['ProgramFiles(x86)'], 3);
+    // Steam default install locations (most users haven't changed these).
+    const pfx86 = process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)';
+    const pf    = process.env.ProgramFiles           ?? 'C:\\Program Files';
+    addRoot(path.join(pfx86, 'Steam', 'steamapps', 'common'), 2);
+    addRoot(path.join(pf,    'Steam', 'steamapps', 'common'), 2);
+  } else if (process.platform === 'darwin') {
+    // macOS: scan Application Support directly (covers the old v3 launcher data
+    // directory and other app-specific install folders).
+    addRoot(path.join(homeDir, 'Library', 'Application Support'), 3);
+    // Steam on macOS lives inside Application Support but needs extra depth to
+    // reach steamapps/common/<game>, so add it as its own shallower root.
+    addRoot(path.join(homeDir, 'Library', 'Application Support', 'Steam', 'steamapps', 'common'), 2);
+  } else {
+    // Linux: Steam in the several locations it gets installed to.
+    addRoot(path.join(homeDir, '.local', 'share', 'Steam', 'steamapps', 'common'), 2);
+    addRoot(path.join(homeDir, '.steam', 'steam', 'steamapps', 'common'), 2);
+    addRoot(path.join(homeDir, '.steam', 'debian-installation', 'steamapps', 'common'), 2);
+    addRoot('/opt', 3);
+  }
 
   return Array.from(roots.entries()).map(([root, maxDepth]) => ({ root, maxDepth }));
 }
@@ -2795,21 +2831,21 @@ async function runStartupLegacyScan(): Promise<void> {
     // slow scan on every subsequent launch.
     storeSet('legacyAutoScanDone', true);
 
-    if (results.length > 0) {
-      storeSet('legacyImportPromptState', {
-        status: 'pending',
-        paths: results,
-        updatedAt: new Date().toISOString(),
-      });
+    // Persist the scan outcome so that subsequent launches can restore the
+    // correct prompt state without re-running the slow scan.
+    storeSet('legacyImportPromptState', {
+      status: results.length > 0 ? 'pending' : 'not-found',
+      paths: results,
+      updatedAt: new Date().toISOString(),
+    });
 
-      // Delay so the window is fully loaded before the event is delivered.
-      // mainWindow may be null if the user closed the window very quickly;
-      // the optional-chain handles that case gracefully (identical pattern to
-      // runStartupUpdateCheck above).
-      setTimeout(() => {
-        mainWindow?.webContents.send(IPC.LEGACY_SCAN_RESULT, results);
-      }, WINDOW_READY_DELAY_MS);
-    }
+    // Always notify the renderer so it can either auto-import found installs or
+    // show the "couldn't find" prompt.  Delay so the window is fully loaded
+    // before the event is delivered.  mainWindow may be null if the user closed
+    // the window very quickly; the optional-chain handles that gracefully.
+    setTimeout(() => {
+      mainWindow?.webContents.send(IPC.LEGACY_SCAN_RESULT, results);
+    }, WINDOW_READY_DELAY_MS);
   } catch (err) {
     // Non-fatal: mark as done to avoid re-running the slow scan on every
     // subsequent launch in environments with a persistent error.

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Header from './components/layout/Header';
 import Footer from './components/layout/Footer';
 import News from './components/pages/News';
@@ -19,7 +19,6 @@ import useLegacyInstallImporter from './components/hooks/useLegacyInstallImporte
 import useRandomBackground from './components/hooks/useRandomBackground';
 import {
   LEGACY_IMPORT_PROMPT_STORE_KEY,
-  areLegacyPathListsEqual,
   createLegacyImportPromptState,
   dedupeLegacyInstallPaths,
   parseLegacyImportPromptState,
@@ -136,11 +135,15 @@ const App: React.FC = () => {
 
     const cleanup = window.launcher.legacy.onScanResult((paths) => {
       const dedupedPaths = dedupeLegacyInstallPaths(paths);
-      if (dedupedPaths.length === 0) return;
-
-      setIsLegacyPromptHidden(false);
       setLegacyImportError(null);
 
+      if (dedupedPaths.length === 0) {
+        // Scan found nothing — prompt user to locate an installation manually.
+        void persistLegacyPromptState(createLegacyImportPromptState('not-found'));
+        return;
+      }
+
+      // Installs found — store as pending; the auto-import effect will pick them up.
       const existingPromptPaths = legacyPromptState?.status === 'pending'
         ? legacyPromptState.paths
         : [];
@@ -153,23 +156,52 @@ const App: React.FC = () => {
     return cleanup;
   }, [legacyPromptState, persistLegacyPromptState]);
 
+  // Tracks whether we've already fired the one-shot auto-import for this session.
+  // Keeps the effect from re-triggering after a partial failure updates the state.
+  const autoImportAttemptedRef = useRef(false);
+
   useEffect(() => {
     if (!isDataLoaded || !isLegacyPromptStateLoaded || legacyPromptState?.status !== 'pending') return;
 
     if (pendingLegacyPromptPaths.length === 0) {
+      // All paths already present — nothing left to import.
       void persistLegacyPromptState(createLegacyImportPromptState('imported'));
       return;
     }
 
-    if (!areLegacyPathListsEqual(legacyPromptState.paths, pendingLegacyPromptPaths)) {
-      void persistLegacyPromptState(createLegacyImportPromptState('pending', pendingLegacyPromptPaths));
-    }
+    // Auto-import silently on first opportunity.  If it partially or fully fails,
+    // show the modal so the user can retry manually.
+    if (autoImportAttemptedRef.current) return;
+    autoImportAttemptedRef.current = true;
+
+    setIsLegacyPromptHidden(true);
+    setIsLegacyImporting(true);
+
+    importInstallations(pendingLegacyPromptPaths)
+      .then(({ imported }) => {
+        const remainingPaths = pendingLegacyPromptPaths.filter(p => !imported.includes(p));
+        if (remainingPaths.length === 0) {
+          void persistLegacyPromptState(createLegacyImportPromptState('imported'));
+        } else {
+          setLegacyImportError('Some installations could not be imported automatically. You can retry below or add them manually in Launcher Settings.');
+          setIsLegacyPromptHidden(false);
+          void persistLegacyPromptState(createLegacyImportPromptState('pending', remainingPaths));
+        }
+      })
+      .catch(() => {
+        setLegacyImportError('Failed to import legacy installations automatically. You can retry below or add them manually in Launcher Settings.');
+        setIsLegacyPromptHidden(false);
+      })
+      .finally(() => {
+        setIsLegacyImporting(false);
+      });
   }, [
     isDataLoaded,
     isLegacyPromptStateLoaded,
     legacyPromptState,
     pendingLegacyPromptPaths,
     persistLegacyPromptState,
+    importInstallations,
   ]);
 
   useEffect(() => {
@@ -226,9 +258,40 @@ const App: React.FC = () => {
 
   const handleDismissLegacyPrompt = useCallback(() => {
     setLegacyImportError(null);
-    setIsLegacyPromptHidden(false);
+    setIsLegacyPromptHidden(true);
     void persistLegacyPromptState(createLegacyImportPromptState('dismissed'));
   }, [persistLegacyPromptState]);
+
+  const handleBrowseForLegacyInstall = useCallback(async () => {
+    if (!window.launcher?.dialog?.openFolder || !window.launcher?.legacy?.scanFolder) return;
+
+    setLegacyImportError(null);
+    setIsLegacyImporting(true);
+
+    try {
+      const folderPath = await window.launcher.dialog.openFolder();
+      if (!folderPath) return;
+
+      const found = await window.launcher.legacy.scanFolder(folderPath);
+      const deduped = dedupeLegacyInstallPaths(found ?? []);
+
+      if (deduped.length === 0) {
+        setLegacyImportError('No StarMade installation found in that folder. Select the folder that contains StarMade.jar.');
+        return;
+      }
+
+      const { imported } = await importInstallations(deduped);
+      if (imported.length > 0) {
+        await persistLegacyPromptState(createLegacyImportPromptState('imported'));
+      } else {
+        setLegacyImportError('Could not import the installation. You can add it manually in Launcher Settings.');
+      }
+    } catch {
+      setLegacyImportError('Failed to browse for installations.');
+    } finally {
+      setIsLegacyImporting(false);
+    }
+  }, [importInstallations, persistLegacyPromptState]);
 
   const handleOpenLegacyImportSettings = useCallback(() => {
     setLegacyImportError(null);
@@ -247,7 +310,7 @@ const App: React.FC = () => {
       const remainingPaths = pendingLegacyPromptPaths.filter(path => !imported.includes(path));
 
       if (remainingPaths.length === 0) {
-        setIsLegacyPromptHidden(false);
+        setIsLegacyPromptHidden(true);
         await persistLegacyPromptState(createLegacyImportPromptState('imported'));
       } else {
         await persistLegacyPromptState(createLegacyImportPromptState('pending', remainingPaths));
@@ -310,11 +373,13 @@ const App: React.FC = () => {
       />
 
       <LegacyImportPromptModal
-        isOpen={isDataLoaded && isLegacyPromptStateLoaded && pendingLegacyPromptPaths.length > 0 && !isLegacyPromptHidden}
+        isOpen={isDataLoaded && isLegacyPromptStateLoaded && (pendingLegacyPromptPaths.length > 0 || legacyPromptState?.status === 'not-found') && !isLegacyPromptHidden}
+        notFound={legacyPromptState?.status === 'not-found'}
         installPaths={pendingLegacyPromptPaths}
         isImporting={isLegacyImporting}
         errorMessage={legacyImportError}
         onImportAll={() => { void handleImportLegacyInstallations(); }}
+        onBrowse={() => { void handleBrowseForLegacyInstall(); }}
         onOpenSettings={handleOpenLegacyImportSettings}
         onDismiss={handleDismissLegacyPrompt}
       />

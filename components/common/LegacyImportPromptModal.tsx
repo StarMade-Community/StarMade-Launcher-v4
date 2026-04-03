@@ -3,24 +3,28 @@ import { CloseIcon, FolderIcon } from './icons';
 
 interface LegacyImportPromptModalProps {
   isOpen: boolean;
+  notFound?: boolean;
   installPaths: string[];
   isImporting: boolean;
   errorMessage?: string | null;
   onImportAll: () => void;
+  onBrowse: () => void;
   onOpenSettings: () => void;
   onDismiss: () => void;
 }
 
 const LegacyImportPromptModal: React.FC<LegacyImportPromptModalProps> = ({
   isOpen,
+  notFound,
   installPaths,
   isImporting,
   errorMessage,
   onImportAll,
+  onBrowse,
   onOpenSettings,
   onDismiss,
 }) => {
-  if (!isOpen || installPaths.length === 0) return null;
+  if (!isOpen || (!notFound && installPaths.length === 0)) return null;
 
   const installLabel = installPaths.length === 1 ? 'installation' : 'installations';
 
@@ -54,23 +58,37 @@ const LegacyImportPromptModal: React.FC<LegacyImportPromptModalProps> = ({
             >
               Import Old StarMade Installations
             </h2>
-            <p className="mt-2 text-sm text-gray-300 leading-relaxed">
-              We found {installPaths.length} legacy {installLabel} from an older launcher. You can import them now,
-              or review the detected folders in Launcher Settings.
-            </p>
-            <p className="mt-2 text-xs text-gray-400">
-              Legacy installs are detected by finding folders that contain <span className="font-mono text-gray-300">StarMade.jar</span>.
-            </p>
+            {notFound ? (
+              <>
+                <p className="mt-2 text-sm text-gray-300 leading-relaxed">
+                  We couldn&apos;t automatically find any legacy StarMade installations on your system. If you have one, you can browse to its folder now.
+                </p>
+                <p className="mt-2 text-xs text-gray-400">
+                  Select the folder that contains <span className="font-mono text-gray-300">StarMade.jar</span>.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="mt-2 text-sm text-gray-300 leading-relaxed">
+                  We found {installPaths.length} legacy {installLabel} from an older launcher that could not be imported automatically. You can retry now or review them in Launcher Settings.
+                </p>
+                <p className="mt-2 text-xs text-gray-400">
+                  Legacy installs are detected by finding folders that contain <span className="font-mono text-gray-300">StarMade.jar</span>.
+                </p>
+              </>
+            )}
           </div>
         </div>
 
-        <div className="mt-6 max-h-64 overflow-y-auto rounded-lg border border-white/10 bg-black/20 divide-y divide-white/5">
-          {installPaths.map((installPath) => (
-            <div key={installPath} className="px-4 py-3">
-              <span className="block text-xs text-gray-300 font-mono break-all">{installPath}</span>
-            </div>
-          ))}
-        </div>
+        {!notFound && installPaths.length > 0 && (
+          <div className="mt-6 max-h-64 overflow-y-auto rounded-lg border border-white/10 bg-black/20 divide-y divide-white/5">
+            {installPaths.map((installPath) => (
+              <div key={installPath} className="px-4 py-3">
+                <span className="block text-xs text-gray-300 font-mono break-all">{installPath}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {errorMessage && (
           <div className="mt-4 rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
@@ -84,22 +102,34 @@ const LegacyImportPromptModal: React.FC<LegacyImportPromptModalProps> = ({
             disabled={isImporting}
             className="px-4 py-2 rounded-md border border-white/10 text-sm font-semibold uppercase tracking-wider text-gray-400 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            Not Now
+            {notFound ? 'Skip' : 'Not Now'}
           </button>
-          <button
-            onClick={onOpenSettings}
-            disabled={isImporting}
-            className="px-4 py-2 rounded-md bg-slate-700 hover:bg-slate-600 text-sm font-semibold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            Review in Settings
-          </button>
-          <button
-            onClick={onImportAll}
-            disabled={isImporting}
-            className="px-4 py-2 rounded-md bg-starmade-accent hover:bg-starmade-accent/80 text-sm font-bold uppercase tracking-wider disabled:bg-starmade-accent/50 disabled:cursor-not-allowed transition-colors"
-          >
-            {isImporting ? 'Importing…' : `Import ${installPaths.length === 1 ? 'Installation' : 'All'}`}
-          </button>
+          {notFound ? (
+            <button
+              onClick={onBrowse}
+              disabled={isImporting}
+              className="px-4 py-2 rounded-md bg-starmade-accent hover:bg-starmade-accent/80 text-sm font-bold uppercase tracking-wider disabled:bg-starmade-accent/50 disabled:cursor-not-allowed transition-colors"
+            >
+              {isImporting ? 'Importing…' : 'Browse for Installation'}
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={onOpenSettings}
+                disabled={isImporting}
+                className="px-4 py-2 rounded-md bg-slate-700 hover:bg-slate-600 text-sm font-semibold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                Review in Settings
+              </button>
+              <button
+                onClick={onImportAll}
+                disabled={isImporting}
+                className="px-4 py-2 rounded-md bg-starmade-accent hover:bg-starmade-accent/80 text-sm font-bold uppercase tracking-wider disabled:bg-starmade-accent/50 disabled:cursor-not-allowed transition-colors"
+              >
+                {isImporting ? 'Importing…' : `Retry Import`}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -107,4 +137,3 @@ const LegacyImportPromptModal: React.FC<LegacyImportPromptModalProps> = ({
 };
 
 export default LegacyImportPromptModal;
-

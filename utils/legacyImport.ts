@@ -2,7 +2,7 @@ import type { ManagedItem, Version } from '@/types';
 
 export const LEGACY_IMPORT_PROMPT_STORE_KEY = 'legacyImportPromptState';
 
-export type LegacyImportPromptStatus = 'pending' | 'dismissed' | 'imported';
+export type LegacyImportPromptStatus = 'pending' | 'not-found' | 'dismissed' | 'imported';
 
 export interface LegacyImportPromptState {
   status: LegacyImportPromptStatus;
@@ -45,7 +45,7 @@ export function parseLegacyImportPromptState(value: unknown): LegacyImportPrompt
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
 
   const candidate = value as Partial<LegacyImportPromptState>;
-  if (candidate.status !== 'pending' && candidate.status !== 'dismissed' && candidate.status !== 'imported') {
+  if (candidate.status !== 'pending' && candidate.status !== 'not-found' && candidate.status !== 'dismissed' && candidate.status !== 'imported') {
     return null;
   }
 
