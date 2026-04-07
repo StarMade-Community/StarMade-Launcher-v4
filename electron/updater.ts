@@ -308,6 +308,10 @@ export async function downloadUpdate(
     res.on('error', reject);
   });
 
+  // Strip the Mark-of-the-Web ADS so Windows SmartScreen/UAC doesn't
+  // block the installer before the PowerShell update script runs.
+  try { fs.unlinkSync(destPath + ':Zone.Identifier'); } catch { /* not present or non-Windows */ }
+
   return destPath;
 }
 
@@ -401,7 +405,9 @@ export async function installUpdate(installerPath: string): Promise<void> {
         ``,
         `  # Copy new exe to original path; restore backup if this fails`,
         `  try {`,
+        `    Unblock-File -Path $src -ErrorAction SilentlyContinue`,
         `    Copy-Item -Force $src $dst -ErrorAction Stop`,
+        `    Unblock-File -Path $dst -ErrorAction SilentlyContinue`,
         `  } catch {`,
         `    if ((Test-Path $backup) -and -not (Test-Path $dst)) {`,
         `      Move-Item -Path $backup -Destination $dst -Force -ErrorAction SilentlyContinue`,
