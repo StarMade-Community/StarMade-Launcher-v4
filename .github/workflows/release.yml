@@ -4,9 +4,11 @@ on:
   # Allow manual triggering from the Actions tab
   workflow_dispatch:
 
-# Required for creating releases
+# Required for creating releases and SignPath OIDC verification
 permissions:
   contents: write
+  id-token: write  # SignPath uses the GitHub OIDC token to verify workflow integrity
+  actions: read    # SignPath needs to read the artifact from this workflow run
 
 jobs:
   # ─── Run tests first ──────────────────────────────────────────────────────
@@ -19,6 +21,8 @@ jobs:
     name: Build Windows
     needs: test
     runs-on: windows-latest
+    outputs:
+      artifact-id: ${{ steps.upload-windows.outputs.artifact-id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,6 +43,7 @@ jobs:
           SMD_API_KEY: ${{ secrets.SMD_API_KEY }}
 
       - name: Upload Windows artifacts
+        id: upload-windows
         uses: actions/upload-artifact@v4
         with:
           name: windows-builds
@@ -68,11 +73,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SMD_API_KEY: ${{ secrets.SMD_API_KEY }}
-          # Uncomment if you have Apple Developer credentials for code signing:
+          # Apple Developer credentials required for code signing + notarization.
+          # Without these, macOS users must manually approve the app in
+          # System Settings > Privacy & Security on first launch.
           # CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
           # CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
           # APPLE_ID: ${{ secrets.APPLE_ID }}
-          # APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Upload macOS ARM artifacts
         uses: actions/upload-artifact@v4
@@ -106,11 +114,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SMD_API_KEY: ${{ secrets.SMD_API_KEY }}
-          # Uncomment if you have Apple Developer credentials for code signing:
+          # Apple Developer credentials required for code signing + notarization.
+          # Without these, macOS users must manually approve the app in
+          # System Settings > Privacy & Security on first launch.
           # CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
           # CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
           # APPLE_ID: ${{ secrets.APPLE_ID }}
-          # APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Upload macOS Intel artifacts
         uses: actions/upload-artifact@v4
@@ -152,10 +163,28 @@ jobs:
           path: release/StarMade-Launcher.AppImage
           retention-days: 7
 
+  # ─── Sign Windows build via SignPath ─────────────────────────────────────
+  sign-windows:
+    name: Sign Windows (SignPath)
+    needs: build-windows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Submit signing request
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: starmade-launcher
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: default
+          github-artifact-id: ${{ needs.build-windows.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-name: windows-builds-signed
+
   # ─── Create Draft Release ─────────────────────────────────────────────────
   create-release:
     name: Create Draft Release
-    needs: [build-windows, build-macos-arm, build-macos-intel, build-linux]
+    needs: [sign-windows, build-macos-arm, build-macos-intel, build-linux]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -164,7 +193,7 @@ jobs:
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4
         with:
-          name: windows-builds
+          name: windows-builds-signed
           path: artifacts/windows
 
       - name: Download macOS ARM artifacts
