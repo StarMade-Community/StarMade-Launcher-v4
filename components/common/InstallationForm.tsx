@@ -222,7 +222,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
   // Versions filtered to the currently selected branch
   const filteredVersions: Version[] = allVersions.filter(v => v.type === type);
   const versionOptions = filteredVersions.length > 0
-    ? filteredVersions.map(v => ({ value: v.id, label: v.id }))
+    ? filteredVersions.map((v, i) => ({ value: v.id, label: i === 0 ? `${v.id} (latest)` : v.id }))
     : [{ value: version, label: version }]; // fallback while loading
 
   // Load default settings from store when creating a new installation/server
