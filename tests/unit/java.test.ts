@@ -23,7 +23,7 @@ import {
   parseJavaVersion,
   JAVA_25_ARGS,
   JAVA_8_ARGS,
-} from '../../electron/java.js';
+} from '@/electron/java.ts';
 
 describe('getRequiredJavaVersion', () => {
   describe('legacy versions → Java 8', () => {
@@ -86,7 +86,9 @@ describe('getRequiredJavaVersion', () => {
 describe('getJvmArgsForJava', () => {
   it('returns JAVA_25_ARGS for Java 25', () => {
     expect(getJvmArgsForJava(25)).toEqual(JAVA_25_ARGS);
-    expect(getJvmArgsForJava(25)).toContain('--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED');
+    expect(getJvmArgsForJava(25)).toContain('--add-opens=java.base/java.lang=ALL-UNNAMED');
+    expect(getJvmArgsForJava(25)).toContain('--add-opens=java.base/java.util=ALL-UNNAMED');
+    expect(getJvmArgsForJava(25)).toContain('--add-opens=java.base/java.io=ALL-UNNAMED');
   });
 
   it('returns JAVA_8_ARGS (empty array) for Java 8', () => {
