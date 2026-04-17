@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+/* ─── Self-hosted fonts ──────────────────────────────────────────────────── */
+
+@font-face {
+  font-family: 'Exo 2';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./fonts/exo2-700.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/inter-400.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./fonts/inter-500.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('./fonts/inter-600.ttf') format('truetype');
+}
+
+/* ─── Tailwind v4 theme configuration ────────────────────────────────────── */
+
+@theme {
+  --color-starmade-bg: #0D0D1B;
+  --color-starmade-accent: #227b86;
+  --color-starmade-accent-hover: #449675;
+  --color-starmade-text-accent: #449675;
+  --color-starmade-accent-dark: #1A8C3F;
+  --color-starmade-accent-border: #13672E;
+  --color-starmade-danger: #C73E3A;
+  --color-starmade-danger-hover: #A0322F;
+  --color-starmade-danger-light: #E57373;
+  --color-starmade-danger-dark: #4F1614;
+
+  --font-sans: 'Inter', sans-serif;
+  --font-display: 'Exo 2', sans-serif;
+
+  --animate-fade-in-scale: fadeInScale 0.2s ease-out forwards;
+
+  --shadow-danger: 0 0 8px 0px rgba(199, 62, 58, 0.3);
+  --shadow-danger-hover: 0 0 12px 2px rgba(199, 62, 58, 0.4);
+}
+
+@keyframes fadeInScale {
+  0% { opacity: 0; transform: scale(0.95); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* ─── Custom scrollbar styling ───────────────────────────────────────────── */
+
+/* Webkit-based browsers (Chrome, Safari, Edge) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #227b86;
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #2a96a5;
+}
+
+/* Firefox */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: #227b86 rgba(0, 0, 0, 0.2);
+  background: transparent;
+}
+
+body, #root {
+  background: transparent;
+  height: 100%;
+}
+
+@media (max-height: 719px) {
+  body {
+    overflow-y: auto !important;
+  }
+}

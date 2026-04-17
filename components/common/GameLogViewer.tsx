@@ -16,7 +16,7 @@ interface LogEntry {
   message: string;
 }
 
-const CRASH_CONTEXT_RADIUS = 50;
+const CRASH_CONTEXT_RADIUS = 100;
 
 const CRASH_MARKERS: Array<{ label: string; pattern: RegExp }> = [
   { label: 'exiting normal', pattern: /exiting normal/i },

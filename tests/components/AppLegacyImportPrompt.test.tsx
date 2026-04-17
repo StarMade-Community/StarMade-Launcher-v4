@@ -208,5 +208,54 @@ describe('App first-launch legacy import prompt', () => {
       }),
     );
   });
+
+  it('does not reopen the prompt after the user dismisses it', async () => {
+    await act(async () => {
+      render(<App />);
+    });
+
+    // Simulate startup scan finding an installation.
+    await act(async () => {
+      onScanResult?.(['/games/StarMade-Classic']);
+    });
+
+    expect(screen.getByText('Import Old StarMade Installations')).toBeInTheDocument();
+
+    // User dismisses the prompt.
+    fireEvent.click(screen.getByRole('button', { name: /Not Now/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Import Old StarMade Installations')).not.toBeInTheDocument();
+    });
+
+    expect(storeSet).toHaveBeenCalledWith(
+      LEGACY_IMPORT_PROMPT_STORE_KEY,
+      expect.objectContaining({ status: 'dismissed' }),
+    );
+
+    // A late scan result arrives — it must NOT overwrite the dismiss.
+    await act(async () => {
+      onScanResult?.(['/games/StarMade-Classic']);
+    });
+
+    expect(screen.queryByText('Import Old StarMade Installations')).not.toBeInTheDocument();
+  });
+
+  it('does not reopen the prompt on next launch after dismissal', async () => {
+    // Simulate a subsequent launch where the store already has 'dismissed'.
+    storeGet.mockImplementation(async (key: string) => {
+      if (key === LEGACY_IMPORT_PROMPT_STORE_KEY) {
+        return createLegacyImportPromptState('dismissed');
+      }
+      return undefined;
+    });
+
+    await act(async () => {
+      render(<App />);
+    });
+
+    // The modal should not appear.
+    expect(screen.queryByText('Import Old StarMade Installations')).not.toBeInTheDocument();
+  });
 });
 

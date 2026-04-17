@@ -134,6 +134,9 @@ const App: React.FC = () => {
     if (typeof window === 'undefined' || !window.launcher?.legacy?.onScanResult) return;
 
     const cleanup = window.launcher.legacy.onScanResult((paths) => {
+      // Don't overwrite a user's dismiss decision or a completed import.
+      if (legacyPromptState?.status === 'dismissed' || legacyPromptState?.status === 'imported') return;
+
       const dedupedPaths = dedupeLegacyInstallPaths(paths);
       setLegacyImportError(null);
 

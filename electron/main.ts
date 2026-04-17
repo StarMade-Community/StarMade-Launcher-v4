@@ -2832,12 +2832,17 @@ async function runStartupLegacyScan(): Promise<void> {
     storeSet('legacyAutoScanDone', true);
 
     // Persist the scan outcome so that subsequent launches can restore the
-    // correct prompt state without re-running the slow scan.
-    storeSet('legacyImportPromptState', {
-      status: results.length > 0 ? 'pending' : 'not-found',
-      paths: results,
-      updatedAt: new Date().toISOString(),
-    });
+    // correct prompt state without re-running the slow scan.  Don't overwrite
+    // a user's dismiss decision or a completed import (e.g. if legacyAutoScanDone
+    // was lost but the prompt state was preserved).
+    const existingPromptState = storeGet('legacyImportPromptState') as { status?: string } | undefined;
+    if (existingPromptState?.status !== 'dismissed' && existingPromptState?.status !== 'imported') {
+      storeSet('legacyImportPromptState', {
+        status: results.length > 0 ? 'pending' : 'not-found',
+        paths: results,
+        updatedAt: new Date().toISOString(),
+      });
+    }
 
     // Always notify the renderer so it can either auto-import found installs or
     // show the "couldn't find" prompt.  Delay so the window is fully loaded

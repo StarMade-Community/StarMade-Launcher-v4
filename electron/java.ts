@@ -18,7 +18,10 @@
 export const JAVA_25_ARGS = [
 	'--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED',
 	'--add-opens=java.base/jdk.internal.ref=ALL-UNNAMED',
-	'--add-opens java.base/java.nio=ALL-UNNAMED'
+	'--add-opens=java.base/java.nio=ALL-UNNAMED',
+	'--add-opens=java.base/java.lang=ALL-UNNAMED',
+	'--add-opens=java.base/java.util=ALL-UNNAMED',
+	'--add-opens=java.base/java.io=ALL-UNNAMED',
 ];
 
 /** Java 8 requires no additional JVM arguments. */

@@ -75,20 +75,20 @@ describe('GameLogViewer crash detection', () => {
     });
 
     const reportText = document.querySelector('pre')?.textContent ?? '';
-    expect(reportText).toContain('CRASH LOG (50 entries above/below "critical gl error")');
+    expect(reportText).toContain('CRASH LOG (100 entries above/below "critical gl error")');
     expect(reportText).toContain('CRITICAL GL ERROR: failed to initialize pipeline');
   });
 
-  it('captures a centered +/-50 context around the crash marker', async () => {
+  it('captures a centered +/-100 context around the crash marker', { timeout: 30_000 }, async () => {
     renderViewer();
 
-    for (let i = 0; i < 60; i += 1) {
+    for (let i = 0; i < 110; i += 1) {
       await emitLog(`before-${i}`);
     }
 
     await emitLog('critical gl error happened here', 'ERROR');
 
-    for (let i = 0; i < 60; i += 1) {
+    for (let i = 0; i < 110; i += 1) {
       await emitLog(`after-${i}`);
     }
 
@@ -102,8 +102,8 @@ describe('GameLogViewer crash detection', () => {
 
     expect(reportText).toContain('before-10');
     expect(reportText).not.toContain('before-9');
-    expect(reportText).toContain('after-49');
-    expect(reportText).not.toContain('after-50');
+    expect(reportText).toContain('after-99');
+    expect(reportText).not.toContain('after-100');
   });
 
   it('falls back to process exit code detection when markers are absent', async () => {
