@@ -100,10 +100,12 @@ describe('GameLogViewer crash detection', () => {
 
     const reportText = document.querySelector('pre')?.textContent ?? '';
 
+    // With 110 entries before the marker and a radius of 100, entries 0-9
+    // should be excluded and entries 10-109 should be included.
     expect(reportText).toContain('before-10');
-    expect(reportText).not.toContain('before-9');
+    expect(reportText).not.toMatch(/\bbefore-9\b/);
     expect(reportText).toContain('after-99');
-    expect(reportText).not.toContain('after-100');
+    expect(reportText).not.toMatch(/\bafter-100\b/);
   });
 
   it('falls back to process exit code detection when markers are absent', async () => {
