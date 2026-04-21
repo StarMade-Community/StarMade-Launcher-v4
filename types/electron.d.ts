@@ -114,12 +114,12 @@ declare global {
           bundled: Array<{ version: string; path: string; source: string }>;
           system: Array<{ version: string; path: string; source: string }>;
         }>;
-        /** Download and install a Java runtime (8 or 25). */
-        download: (version: 8 | 25) => Promise<{ success: boolean; path?: string; error?: string }>;
+        /** Download and install a Java runtime (8 or 21). */
+        download: (version: 8 | 21) => Promise<{ success: boolean; path?: string; error?: string }>;
         /** Scan for system-installed Java versions. */
         detect: () => Promise<Array<{ version: string; path: string; source: string }>>;
-        /** Get default Java paths for jre8 and jre25. */
-        getDefaultPaths: () => Promise<{ jre8Path: string; jre25Path: string }>;
+        /** Get default Java paths for jre8 and jre21. */
+        getDefaultPaths: () => Promise<{ jre8Path: string; jre21Path: string }>;
         /** Find the java executable inside a given folder (JRE/JDK root). */
         findExecutable: (folderPath: string) => Promise<string>;
       };

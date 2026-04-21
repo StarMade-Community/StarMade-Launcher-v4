@@ -21,7 +21,7 @@ import {
   getRequiredJavaVersion,
   getJvmArgsForJava,
   parseJavaVersion,
-  JAVA_25_ARGS,
+  JAVA_21_ARGS,
   JAVA_8_ARGS,
 } from '@/electron/java.ts';
 
@@ -56,39 +56,39 @@ describe('getRequiredJavaVersion', () => {
     });
   });
 
-  describe('new-era versions → Java 25', () => {
-    it('returns 25 for version 0.300.0 (first version requiring Java 25)', () => {
-      expect(getRequiredJavaVersion('0.300.0')).toBe(25);
+  describe('new-era versions → Java 21', () => {
+    it('returns 21 for version 0.300.0 (first version requiring Java 21)', () => {
+      expect(getRequiredJavaVersion('0.300.0')).toBe(21);
     });
 
-    it('returns 25 for version 0.302.101', () => {
-      expect(getRequiredJavaVersion('0.302.101')).toBe(25);
+    it('returns 21 for version 0.302.101', () => {
+      expect(getRequiredJavaVersion('0.302.101')).toBe(21);
     });
 
-    it('returns 25 for version 0.399.0', () => {
-      expect(getRequiredJavaVersion('0.399.0')).toBe(25);
+    it('returns 21 for version 0.399.0', () => {
+      expect(getRequiredJavaVersion('0.399.0')).toBe(21);
     });
 
-    it('returns 25 for version 1.0.0 (major >= 1)', () => {
-      expect(getRequiredJavaVersion('1.0.0')).toBe(25);
+    it('returns 21 for version 1.0.0 (major >= 1)', () => {
+      expect(getRequiredJavaVersion('1.0.0')).toBe(21);
     });
 
-    it('returns 25 for version 1.5.3', () => {
-      expect(getRequiredJavaVersion('1.5.3')).toBe(25);
+    it('returns 21 for version 1.5.3', () => {
+      expect(getRequiredJavaVersion('1.5.3')).toBe(21);
     });
 
-    it('returns 25 for version 2.0.0', () => {
-      expect(getRequiredJavaVersion('2.0.0')).toBe(25);
+    it('returns 21 for version 2.0.0', () => {
+      expect(getRequiredJavaVersion('2.0.0')).toBe(21);
     });
   });
 });
 
 describe('getJvmArgsForJava', () => {
-  it('returns JAVA_25_ARGS for Java 25', () => {
-    expect(getJvmArgsForJava(25)).toEqual(JAVA_25_ARGS);
-    expect(getJvmArgsForJava(25)).toContain('--add-opens=java.base/java.lang=ALL-UNNAMED');
-    expect(getJvmArgsForJava(25)).toContain('--add-opens=java.base/java.util=ALL-UNNAMED');
-    expect(getJvmArgsForJava(25)).toContain('--add-opens=java.base/java.io=ALL-UNNAMED');
+  it('returns JAVA_21_ARGS for Java 21', () => {
+    expect(getJvmArgsForJava(21)).toEqual(JAVA_21_ARGS);
+    expect(getJvmArgsForJava(21)).toContain('--add-opens=java.base/java.lang=ALL-UNNAMED');
+    expect(getJvmArgsForJava(21)).toContain('--add-opens=java.base/java.util=ALL-UNNAMED');
+    expect(getJvmArgsForJava(21)).toContain('--add-opens=java.base/java.io=ALL-UNNAMED');
   });
 
   it('returns JAVA_8_ARGS (empty array) for Java 8', () => {
@@ -110,8 +110,8 @@ describe('parseJavaVersion', () => {
     expect(parseJavaVersion('java version "17.0.6"')).toBe(17);
   });
 
-  it('parses Java 25 version string', () => {
-    expect(parseJavaVersion('openjdk version "25.0.0"')).toBe(25);
+  it('parses Java 21 version string', () => {
+    expect(parseJavaVersion('openjdk version "21.0.0"')).toBe(21);
   });
 
   it('returns null for a string without a quoted version', () => {

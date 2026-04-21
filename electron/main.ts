@@ -660,11 +660,11 @@ ipcMain.handle(IPC.JAVA_LIST, async () => {
     }
   }
 
-  const jre25Dir = path.join(launcherDir, 'jre25');
-  if (fs.existsSync(jre25Dir)) {
-    const jre25Path = findJavaExecutableInDir(jre25Dir);
-    if (jre25Path) {
-      bundled.push({ version: '25', path: jre25Path, source: 'bundled' });
+  const jre21Dir = path.join(launcherDir, 'jre21');
+  if (fs.existsSync(jre21Dir)) {
+    const jre21Path = findJavaExecutableInDir(jre21Dir);
+    if (jre21Path) {
+      bundled.push({ version: '21', path: jre21Path, source: 'bundled' });
     }
   }
   
@@ -674,7 +674,7 @@ ipcMain.handle(IPC.JAVA_LIST, async () => {
   return { bundled, system: system.map(j => ({ ...j, source: 'system' })) };
 });
 
-ipcMain.handle(IPC.JAVA_DOWNLOAD, async (_event, version: 8 | 25) => {
+ipcMain.handle(IPC.JAVA_DOWNLOAD, async (_event, version: 8 | 21) => {
   try {
     const launcherDir = getLauncherDir();
     const javaPath = await downloadJava(version, launcherDir);

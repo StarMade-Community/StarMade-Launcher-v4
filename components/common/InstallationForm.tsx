@@ -164,9 +164,9 @@ const IconPickerModal: React.FC<IconPickerModalProps> = ({ onSelect, onClose }) 
  */
 async function resolveJavaPaths(
   itemTypeName: string,
-): Promise<{ javaPath8: string; javaPath25: string }> {
+): Promise<{ javaPath8: string; javaPath21: string }> {
   if (typeof window === 'undefined' || !window.launcher?.store) {
-    return { javaPath8: '', javaPath25: '' };
+    return { javaPath8: '', javaPath21: '' };
   }
 
   const storeKey = itemTypeName === 'Server' ? 'defaultServerSettings' : 'defaultInstallationSettings';
@@ -174,21 +174,21 @@ async function resolveJavaPaths(
   const stored = await window.launcher.store.get(storeKey).catch(() => null);
   const defaults = (stored && typeof stored === 'object') ? stored as {
     javaPath8?: string;
-    javaPath25?: string;
+    javaPath21?: string;
   } : {};
 
   // For servers, fall back to installation defaults when server-specific paths are empty
-  let installDefaults: { javaPath8?: string; javaPath25?: string } = {};
-  if (itemTypeName === 'Server' && !defaults.javaPath8 && !defaults.javaPath25) {
+  let installDefaults: { javaPath8?: string; javaPath21?: string } = {};
+  if (itemTypeName === 'Server' && !defaults.javaPath8 && !defaults.javaPath21) {
     const instStored = await window.launcher.store.get('defaultInstallationSettings').catch(() => null);
     if (instStored && typeof instStored === 'object') {
-      installDefaults = instStored as { javaPath8?: string; javaPath25?: string };
+      installDefaults = instStored as { javaPath8?: string; javaPath21?: string };
     }
   }
 
   return {
     javaPath8:  defaults.javaPath8  || installDefaults.javaPath8  || '',
-    javaPath25: defaults.javaPath25 || installDefaults.javaPath25 || '',
+    javaPath21: defaults.javaPath21 || installDefaults.javaPath21 || '',
   };
 }
 
@@ -209,7 +209,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
   const [type, setType] = useState<ItemType>(item.type === 'latest' ? 'release' : item.type);
   const [version, setVersion] = useState(item.version);
   const [buildPath, setBuildPath] = useState(item.buildPath ?? '');
-  const [requiredJavaVersion, setRequiredJavaVersion] = useState<8 | 25 | undefined>(item.requiredJavaVersion);
+  const [requiredJavaVersion, setRequiredJavaVersion] = useState<8 | 21 | undefined>(item.requiredJavaVersion);
   const [gameDir, setGameDir] = useState(item.path);
   const [javaMemory, setJavaMemory] = useState(item.maxMemory ?? 8192);
   const [javaPath, setJavaPath] = useState(item.customJavaPath ?? '');
@@ -244,7 +244,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         javaMemory?: number;
         jvmArgs?: string;
         javaPath8?: string;
-        javaPath25?: string;
+        javaPath21?: string;
       } : {};
 
       if (defaults.gameDir) setGameDir(defaults.gameDir);
@@ -255,9 +255,9 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
       if (defaults.jvmArgs) setJvmArgs(defaults.jvmArgs);
 
       // Resolve Java paths (with installation-defaults fallback for servers)
-      const { javaPath8, javaPath25 } = await resolveJavaPaths(itemTypeName);
-      if (requiredJavaVersion === 25 && javaPath25) {
-        setJavaPath(javaPath25);
+      const { javaPath8, javaPath21 } = await resolveJavaPaths(itemTypeName);
+      if (requiredJavaVersion === 21 && javaPath21) {
+        setJavaPath(javaPath21);
       } else if (javaPath8) {
         setJavaPath(javaPath8);
       }
@@ -304,9 +304,9 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
       return;
     }
 
-    resolveJavaPaths(itemTypeName).then(({ javaPath8, javaPath25 }) => {
-      if (requiredJavaVersion === 25 && javaPath25) {
-        setJavaPath(javaPath25);
+    resolveJavaPaths(itemTypeName).then(({ javaPath8, javaPath21 }) => {
+      if (requiredJavaVersion === 21 && javaPath21) {
+        setJavaPath(javaPath21);
       } else if (javaPath8) {
         setJavaPath(javaPath8);
       }
@@ -577,7 +577,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
               <div className="col-span-2 -mt-2">
                 <p className="text-xs text-gray-400">
                   <span className="font-semibold">Requires Java {requiredJavaVersion}</span>
-                  {requiredJavaVersion === 25}
+                  {requiredJavaVersion === 21}
                 </p>
               </div>
             )}

@@ -93,10 +93,10 @@ describe('parseBuildIndex', () => {
     expect(parseBuildIndex(text, 'release')).toEqual([]);
   });
 
-  it('assigns requiredJavaVersion 25 for modern versions (>= 0.300.x)', () => {
+  it('assigns requiredJavaVersion 21 for modern versions (>= 0.300.x)', () => {
     const text = '0.302.101#20240115_090000 ./build/starmade-build_20240115_090000';
     const results = parseBuildIndex(text, 'release');
-    expect(results[0].requiredJavaVersion).toBe(25);
+    expect(results[0].requiredJavaVersion).toBe(21);
   });
 
   it('assigns requiredJavaVersion 8 for legacy versions (< 0.300.x)', () => {

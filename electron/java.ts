@@ -2,20 +2,20 @@
  * Java runtime detection and management.
  *
  * StarMade version requirements:
- *   - Versions >= 0.3.x   require Java 25  (with --add-opens arg)
+ *   - Versions >= 0.3.x   require Java 21  (with --add-opens arg)
  *   - Versions <  0.3.x   require Java 8   (no extra args)
  *
  * Phase 4 TODO:
- *   - Auto-download Adoptium/Temurin Java 8 and Java 25 to launcher directory
- *   - Store in `jre8/` and `jre25/` subdirectories
+ *   - Auto-download Adoptium/Temurin Java 8 and Java 21 to launcher directory
+ *   - Store in `jre8/` and `jre21/` subdirectories
  *   - Detect system-installed Java versions as fallback
  *   - Expose IPC: java:detect, java:list, java:download
  */
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-/** JVM arguments required for Java 25 when launching StarMade >= 0.3.x */
-export const JAVA_25_ARGS = [
+/** JVM arguments required for Java 21 when launching StarMade >= 0.3.x */
+export const JAVA_21_ARGS = [
 	'--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED',
 	'--add-opens=java.base/jdk.internal.ref=ALL-UNNAMED',
 	'--add-opens=java.base/java.nio=ALL-UNNAMED',
@@ -31,9 +31,9 @@ export const JAVA_8_ARGS: string[] = [];
 
 /**
  * Determine which Java major version is required for a given StarMade version.
- * @returns 25 for versions >= 0.3.x, otherwise 8.
+ * @returns 21 for versions >= 0.3.x, otherwise 8.
  */
-export function getRequiredJavaVersion(starMadeVersion: string): 8 | 25 {
+export function getRequiredJavaVersion(starMadeVersion: string): 8 | 21 {
 	// Parse version string (format: "0.203.175" or "0.302.101" or "1.0")
 	const parts = starMadeVersion.split('.').map(p => parseInt(p, 10));
 	if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1])) {
@@ -43,13 +43,13 @@ export function getRequiredJavaVersion(starMadeVersion: string): 8 | 25 {
 
 	const [major, minor] = parts;
 
-	// StarMade 1.x and above require Java 25
-	if (major >= 1) return 25;
+	// StarMade 1.x and above require Java 21
+	if (major >= 1) return 21;
 
 	// StarMade uses a 3-component minor number: 0.3xx.yyy = "0.3.x" era.
-	// Versions 0.300.x and above require Java 25.
+	// Versions 0.300.x and above require Java 21.
 	// Legacy versions (0.200.x – 0.205.x, etc.) use Java 8.
-	if (major === 0 && minor >= 300) return 25;
+	if (major === 0 && minor >= 300) return 21;
 
 	return 8;
 }
@@ -57,8 +57,8 @@ export function getRequiredJavaVersion(starMadeVersion: string): 8 | 25 {
 /**
  * Get the required JVM arguments for a given Java version.
  */
-export function getJvmArgsForJava(javaVersion: 8 | 25): string[] {
-	return javaVersion === 25 ? JAVA_25_ARGS : JAVA_8_ARGS;
+export function getJvmArgsForJava(javaVersion: 8 | 21): string[] {
+	return javaVersion === 21 ? JAVA_21_ARGS : JAVA_8_ARGS;
 }
 
 // ─── Java download & detection (Phase 4) ─────────────────────────────────────
@@ -77,7 +77,7 @@ const execFileAsync = promisify(execFile);
 /**
  * Build the Adoptium download URL for the specified Java version.
  */
-function getAdoptiumUrl(version: 8 | 25): string {
+function getAdoptiumUrl(version: 8 | 21): string {
 	const platform = process.platform === 'win32' ? 'windows'
 		: process.platform === 'darwin' ? 'mac'
 			: 'linux';
@@ -197,10 +197,10 @@ async function extractTarGz(archivePath: string, targetDir: string): Promise<voi
 }
 
 /**
- * Download the specified Java runtime (Adoptium/Temurin) to the launcher's jre8/ or jre25/ directory.
+ * Download the specified Java runtime (Adoptium/Temurin) to the launcher's jre8/ or jre21/ directory.
  */
 export async function downloadJava(
-	version: 8 | 25,
+	version: 8 | 21,
 	launcherDir: string,
 	onProgress?: (percent: number) => void
 ): Promise<string> {
@@ -302,14 +302,14 @@ export function findJavaExecutableInDir(dir: string): string | null {
 
 /**
  * Parse Java version from `java -version` output.
- * Returns the major version number (e.g. 8, 11, 17, 25).
+ * Returns the major version number (e.g. 8, 11, 17, 21).
  */
 export function parseJavaVersion(versionOutput: string): number | null {
 	// Example outputs:
 	// openjdk version "1.8.0_362"
 	// openjdk version "11.0.18"
 	// java version "17.0.6"
-	// openjdk version "25.0.0"
+	// openjdk version "21.0.0"
 
 	const match = versionOutput.match(/version "([^"]+)"/);
 	if (!match) return null;
@@ -322,7 +322,7 @@ export function parseJavaVersion(versionOutput: string): number | null {
 		return parseInt(parts[1], 10);
 	}
 
-	// Handle 11.x, 17.x, 25.x format
+	// Handle 11.x, 17.x, 21.x format
 	return parseInt(parts[0], 10);
 }
 
@@ -444,11 +444,11 @@ export async function detectSystemJava(): Promise<Array<{ version: string; path:
 /**
  * Resolve the Java executable path for the given required version.
  * Priority order:
- *   1. Launcher-bundled JRE (jre8/ or jre25/)
+ *   1. Launcher-bundled JRE (jre8/ or jre21/)
  *   2. System-installed Java matching the required version
  *   3. Returns null if not found (caller should trigger download)
  */
-export async function resolveJavaPath(requiredVersion: 8 | 25, launcherDir: string): Promise<string | null> {
+export async function resolveJavaPath(requiredVersion: 8 | 21, launcherDir: string): Promise<string | null> {
 	// 1. Check bundled JRE.
 	// Adoptium/Temurin archives extract into a versioned subdirectory inside
 	// jreDir (e.g. jre8/jdk8u362-b09-jre/bin/java), so we must search
@@ -481,19 +481,19 @@ export async function resolveJavaPath(requiredVersion: 8 | 25, launcherDir: stri
 }
 
 /**
- * Get the default Java executable paths for jre8 and jre25 from the launcher directory.
+ * Get the default Java executable paths for jre8 and jre21 from the launcher directory.
  * These paths may not exist yet if the JREs haven't been downloaded.
- * @returns Object with jre8Path and jre25Path strings.
+ * @returns Object with jre8Path and jre21Path strings.
  */
-export function getDefaultJavaPaths(launcherDir: string): { jre8Path: string; jre25Path: string } {
+export function getDefaultJavaPaths(launcherDir: string): { jre8Path: string; jre21Path: string } {
 	const jre8Path = process.platform === 'win32'
 		? path.join(launcherDir, 'jre8', 'bin', 'javaw.exe')
 		: path.join(launcherDir, 'jre8', 'bin', 'java');
 
-	const jre25Path = process.platform === 'win32'
-		? path.join(launcherDir, 'jre25', 'bin', 'javaw.exe')
-		: path.join(launcherDir, 'jre25', 'bin', 'java');
+	const jre21Path = process.platform === 'win32'
+		? path.join(launcherDir, 'jre21', 'bin', 'javaw.exe')
+		: path.join(launcherDir, 'jre21', 'bin', 'java');
 
-	return { jre8Path, jre25Path };
+	return { jre8Path, jre21Path };
 }
 

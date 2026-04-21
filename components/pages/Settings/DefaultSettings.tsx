@@ -14,7 +14,7 @@ interface DefaultSettingsData {
     javaMemory: number;
     jvmArgs: string;
     javaPath8: string;
-    javaPath25: string;
+    javaPath21: string;
 }
 
 /**
@@ -39,7 +39,7 @@ const DEFAULT_INSTALLATION_SETTINGS: DefaultSettingsData = {
     javaMemory: 8192,
     jvmArgs:    '-Xms8G -Xmx8G',
     javaPath8:  '',
-    javaPath25: '',
+    javaPath21: '',
 };
 
 const DEFAULT_SERVER_SETTINGS: DefaultSettingsData = {
@@ -49,7 +49,7 @@ const DEFAULT_SERVER_SETTINGS: DefaultSettingsData = {
     javaMemory: 8192,
     jvmArgs:    '-Xms8G -Xmx8G',
     javaPath8:  '',
-    javaPath25: '',
+    javaPath21: '',
 };
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
@@ -114,14 +114,14 @@ const DefaultSettingsForm: React.FC<{ isServer: boolean }> = ({ isServer }) => {
             return;
         }
         window.launcher.java.list().then((runtimes) => {
-            // r.version is always the major version number as a string (e.g. '8', '25')
+            // r.version is always the major version number as a string (e.g. '8', '21')
             // because parseJavaVersion normalises '1.8.0_xxx' to 8 before storage.
             const bundled8  = runtimes.bundled.find(r => { const v = parseInt(r.version, 10); return v >= 8 && v < 9; });
-            const bundled25 = runtimes.bundled.find(r => parseInt(r.version, 10) >= 25);
+            const bundled21 = runtimes.bundled.find(r => { const v = parseInt(r.version, 10); return v >= 21 && v < 22; });
             setSettings(prev => ({
                 ...prev,
                 javaPath8:  prev.javaPath8  || bundled8?.path  || '',
-                javaPath25: prev.javaPath25 || bundled25?.path || '',
+                javaPath21: prev.javaPath21 || bundled21?.path || '',
             }));
         }).catch((error) => {
             console.error('Failed to list Java runtimes for default paths:', error);
@@ -178,7 +178,7 @@ const DefaultSettingsForm: React.FC<{ isServer: boolean }> = ({ isServer }) => {
         }
     };
 
-   const handleJavaFolderPicker = async (key: 'javaPath8' | 'javaPath25') => {
+   const handleJavaFolderPicker = async (key: 'javaPath8' | 'javaPath21') => {
         if (typeof window === 'undefined' || !window.launcher?.dialog) return;
 
         const currentPath = settings[key] || undefined;
@@ -245,10 +245,10 @@ const DefaultSettingsForm: React.FC<{ isServer: boolean }> = ({ isServer }) => {
                 </div>
             </SettingRow>
 
-            <SettingRow title="Java 25 Executable Path" description="Path to Java 25 (for StarMade versions >= 0.3.x). Defaults to bundled jre25.">
+            <SettingRow title="Java 21 Executable Path" description="Path to Java 21 (for StarMade versions >= 0.3.x). Defaults to bundled jre21.">
                  <div className="flex w-full">
-                  <input type="text" value={settings.javaPath25} onChange={e => update('javaPath25', e.target.value)} className="flex-1 bg-slate-900/80 border border-slate-700 rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
-                  <button onClick={() => handleJavaFolderPicker('javaPath25')} className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80 transition-colors"><FolderIcon className="w-5 h-5 text-gray-400" /></button>
+                  <input type="text" value={settings.javaPath21} onChange={e => update('javaPath21', e.target.value)} className="flex-1 bg-slate-900/80 border border-slate-700 rounded-l-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-starmade-accent" />
+                  <button onClick={() => handleJavaFolderPicker('javaPath21')} className="bg-slate-800/80 border-t border-b border-r border-slate-700 px-4 rounded-r-md hover:bg-slate-700/80 transition-colors"><FolderIcon className="w-5 h-5 text-gray-400" /></button>
                 </div>
             </SettingRow>
         </div>

@@ -178,7 +178,7 @@ const LauncherSettings: React.FC = () => {
         }
     };
 
-    const handleDownloadJava = async (version: 8 | 25) => {
+    const handleDownloadJava = async (version: 8 | 21) => {
         if (typeof window === 'undefined' || !window.launcher?.java) {
             return;
         }
@@ -513,7 +513,7 @@ const LauncherSettings: React.FC = () => {
                     <div className="space-y-2 mb-4">
                         {javaRuntimes.bundled.length === 0 && javaRuntimes.system.length === 0 && (
                             <div className="text-gray-400 text-sm italic p-3 bg-black/20 rounded-md">
-                                No Java runtimes detected. Download Java 8 or Java 25 below.
+                                No Java runtimes detected. Download Java 8 or Java 21 below.
                             </div>
                         )}
                         
@@ -556,17 +556,17 @@ const LauncherSettings: React.FC = () => {
                             {javaDownloadProgress[8] || 'Download Java 8'}
                         </button>
                         
-                        <button 
-                            onClick={() => handleDownloadJava(25)} 
-                            disabled={!!javaDownloadProgress[25]}
+                        <button
+                            onClick={() => handleDownloadJava(21)}
+                            disabled={!!javaDownloadProgress[21]}
                             className="px-4 py-2 bg-starmade-accent hover:bg-starmade-accent/80 disabled:bg-starmade-accent/50 rounded-md text-sm font-semibold uppercase tracking-wider transition-colors"
                         >
-                            {javaDownloadProgress[25] || 'Download Java 25'}
+                            {javaDownloadProgress[21] || 'Download Java 21'}
                         </button>
                     </div>
-                    
+
                     <p className="text-xs text-gray-400 mt-3">
-                        StarMade versions &lt; 0.3.x require Java 8. Versions ≥ 0.3.x require Java 25.
+                        StarMade versions &lt; 0.3.x require Java 8. Versions ≥ 0.3.x require Java 21.
                     </p>
                 </div>
 

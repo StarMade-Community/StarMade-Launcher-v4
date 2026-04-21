@@ -141,7 +141,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 const allRuntimes = [...runtimes.bundled, ...runtimes.system];
                 const hasJava = allRuntimes.some(j => {
                     const v = parseInt(j.version, 10);
-                    return requiredJava === 8 ? (v >= 8 && v < 9) : (v >= requiredJava);
+                    return requiredJava === 8
+                        ? (v >= 8 && v < 9)
+                        : (v >= requiredJava && v < requiredJava + 1);
                 });
 
                 if (!hasJava) {

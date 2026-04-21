@@ -83,8 +83,8 @@ export interface ManagedItem {
   buildPath?: string;
   /** True once the game files have been downloaded and verified. Undefined for legacy/mock items (treated as installed). */
   installed?: boolean;
-  /** Which Java major version this installation requires (8 for < 0.3.x, 25 for >= 0.3.x). */
-  requiredJavaVersion?: 8 | 25;
+  /** Which Java major version this installation requires (8 for < 0.3.x, 21 for >= 0.3.x). */
+  requiredJavaVersion?: 8 | 21;
   // ── Per-installation launch settings ──────────────────────────────────────
   /** Minimum JVM heap in MB (passed as -Xms). */
   minMemory?: number;
@@ -131,8 +131,8 @@ export interface Version {
   build?: string;
   /** Server-side build path (e.g. `./build/starmade-build_20231020_123456`). */
   buildPath?: string;
-  /** Which Java major version this StarMade version requires (8 for < 0.3.x, 25 for >= 0.3.x). */
-  requiredJavaVersion?: 8 | 25;
+  /** Which Java major version this StarMade version requires (8 for < 0.3.x, 21 for >= 0.3.x). */
+  requiredJavaVersion?: 8 | 21;
 }
 
 // ─── Download types ───────────────────────────────────────────────────────────

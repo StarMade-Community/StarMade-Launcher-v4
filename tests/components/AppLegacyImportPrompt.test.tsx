@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 
 import App from '../../App';
@@ -54,11 +54,11 @@ const baseUseAppValue = {
 
 describe('App first-launch legacy import prompt', () => {
   let onScanResult: ((paths: string[]) => void) | null = null;
-  let storeGet: ReturnType<typeof vi.fn>;
-  let storeSet: ReturnType<typeof vi.fn>;
-  let storeDelete: ReturnType<typeof vi.fn>;
-  let addInstallation: ReturnType<typeof vi.fn>;
-  let readVersion: ReturnType<typeof vi.fn>;
+  let storeGet: Mock<(key: string) => Promise<unknown>>;
+  let storeSet: Mock<(key: string, value: unknown) => Promise<void>>;
+  let storeDelete: Mock<(key: string) => Promise<void>>;
+  let addInstallation: Mock<(installation: unknown) => void>;
+  let readVersion: Mock<(path: string) => Promise<string | null>>;
 
   beforeEach(() => {
     onScanResult = null;
@@ -78,7 +78,7 @@ describe('App first-launch legacy import prompt', () => {
     mockUseData.mockReturnValue({
       installations: [],
       addInstallation,
-      versions: [{ id: '0.203.175', name: '0.203.175', type: 'release', requiredJavaVersion: 25 }],
+      versions: [{ id: '0.203.175', name: '0.203.175', type: 'release', requiredJavaVersion: 21 }],
       isLoaded: true,
     });
 
@@ -168,7 +168,7 @@ describe('App first-launch legacy import prompt', () => {
             minMemory: 2048,
             maxMemory: 2048,
             jvmArgs: '-Dfoo=bar',
-            requiredJavaVersion: 25,
+            requiredJavaVersion: 21,
             installed: true,
             lastPlayed: 'Never',
           });
@@ -194,7 +194,7 @@ describe('App first-launch legacy import prompt', () => {
         minMemory: 2048,
         maxMemory: 2048,
         jvmArgs: '-Dfoo=bar',
-        requiredJavaVersion: 25,
+        requiredJavaVersion: 21,
         installed: true,
       }));
     });

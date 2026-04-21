@@ -31,7 +31,7 @@ export interface FetchedVersion {
   type: 'release' | 'dev' | 'pre' | 'archive';
   build: string;
   buildPath: string;
-  requiredJavaVersion: 8 | 25;
+  requiredJavaVersion: 8 | 21;
 }
 
 // ─── Cache ────────────────────────────────────────────────────────────────────
