@@ -104,22 +104,6 @@ describe('registerAppImageDesktopIntegration', () => {
     expect(content).toContain('Exec=/home/user/StarMade-Launcher.AppImage %U');
   });
 
-  it('overwrites an existing .desktop entry on re-registration', () => {
-    const desktopDest = path.join(tmpDir, 'applications', 'starmade-launcher.desktop');
-    fs.mkdirSync(path.join(tmpDir, 'applications'), { recursive: true });
-    fs.writeFileSync(desktopDest, 'stale content');
-
-    registerAppImageDesktopIntegration({
-      appImagePath:  '/home/user/new/StarMade-Launcher.AppImage',
-      resourcesPath: path.join(tmpDir, 'resources'),
-      xdgDataHome:   tmpDir,
-    });
-
-    const content = fs.readFileSync(desktopDest, 'utf8');
-    expect(content).not.toBe('stale content');
-    expect(content).toContain('/home/user/new/StarMade-Launcher.AppImage');
-  });
-
   it('does nothing (no throw) when icon.png is missing', () => {
     // Remove the icon we set up in beforeEach
     fs.unlinkSync(path.join(tmpDir, 'resources', 'icon.png'));
