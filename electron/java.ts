@@ -16,6 +16,7 @@
 
 /** JVM arguments required for Java 21 when launching StarMade >= 0.3.x */
 export const JAVA_21_ARGS = [
+	'-javaagent:StarMade.jar',
 	'--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED',
 	'--add-opens=java.base/jdk.internal.ref=ALL-UNNAMED',
 	'--add-opens=java.base/java.nio=ALL-UNNAMED',
