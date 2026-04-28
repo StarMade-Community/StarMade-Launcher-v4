@@ -278,15 +278,37 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
       setVersion(first.id);
       setBuildPath(first.buildPath ?? '');
       setRequiredJavaVersion(first.requiredJavaVersion);
+
+      // Auto-switch Java path to match the new branch's version requirement
+      if (first.requiredJavaVersion) {
+        resolveJavaPaths(itemTypeName).then(({ javaPath8, javaPath21 }) => {
+          if (first.requiredJavaVersion === 21 && javaPath21) {
+            setJavaPath(javaPath21);
+          } else if (javaPath8) {
+            setJavaPath(javaPath8);
+          }
+        }).catch(() => {});
+      }
     }
   };
 
-  // When version changes, also carry the buildPath forward
+  // When version changes, also carry the buildPath and Java path forward
   const handleVersionChange = (newVersionId: string) => {
     setVersion(newVersionId);
     const entry = filteredVersions.find(v => v.id === newVersionId);
     setBuildPath(entry?.buildPath ?? '');
     setRequiredJavaVersion(entry?.requiredJavaVersion);
+
+    // Auto-switch Java path to match the new version's requirement
+    if (entry?.requiredJavaVersion) {
+      resolveJavaPaths(itemTypeName).then(({ javaPath8, javaPath21 }) => {
+        if (entry.requiredJavaVersion === 21 && javaPath21) {
+          setJavaPath(javaPath21);
+        } else if (javaPath8) {
+          setJavaPath(javaPath8);
+        }
+      }).catch(() => {});
+    }
   };
 
   // When live versions arrive (or change), sync the buildPath for the current selection
