@@ -186,10 +186,33 @@ async function resolveJavaPaths(
     }
   }
 
-  return {
-    javaPath8:  defaults.javaPath8  || installDefaults.javaPath8  || '',
-    javaPath21: defaults.javaPath21 || installDefaults.javaPath21 || '',
-  };
+  let javaPath8  = defaults.javaPath8  || installDefaults.javaPath8  || '';
+  let javaPath21 = defaults.javaPath21 || installDefaults.javaPath21 || '';
+
+  // Fall back to detecting bundled JREs when store defaults are missing
+  if ((!javaPath8 || !javaPath21) && window.launcher.java) {
+    try {
+      const runtimes = await window.launcher.java.list();
+      if (!javaPath8) {
+        const bundled8 = runtimes.bundled.find(r => {
+          const v = parseInt(r.version, 10);
+          return v >= 8 && v < 9;
+        });
+        javaPath8 = bundled8?.path || '';
+      }
+      if (!javaPath21) {
+        const bundled21 = runtimes.bundled.find(r => {
+          const v = parseInt(r.version, 10);
+          return v >= 21 && v < 22;
+        });
+        javaPath21 = bundled21?.path || '';
+      }
+    } catch {
+      // Ignore detection errors
+    }
+  }
+
+  return { javaPath8, javaPath21 };
 }
 
 const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave, onCancel, onRepairInstall, itemTypeName }) => {
@@ -258,7 +281,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
       const { javaPath8, javaPath21 } = await resolveJavaPaths(itemTypeName);
       if (requiredJavaVersion === 21 && javaPath21) {
         setJavaPath(javaPath21);
-      } else if (javaPath8) {
+      } else if (requiredJavaVersion === 8 && javaPath8) {
         setJavaPath(javaPath8);
       }
 
@@ -284,7 +307,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         resolveJavaPaths(itemTypeName).then(({ javaPath8, javaPath21 }) => {
           if (first.requiredJavaVersion === 21 && javaPath21) {
             setJavaPath(javaPath21);
-          } else if (javaPath8) {
+          } else if (first.requiredJavaVersion === 8 && javaPath8) {
             setJavaPath(javaPath8);
           }
         }).catch(() => {});
@@ -304,7 +327,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
       resolveJavaPaths(itemTypeName).then(({ javaPath8, javaPath21 }) => {
         if (entry.requiredJavaVersion === 21 && javaPath21) {
           setJavaPath(javaPath21);
-        } else if (javaPath8) {
+        } else if (entry.requiredJavaVersion === 8 && javaPath8) {
           setJavaPath(javaPath8);
         }
       }).catch(() => {});
@@ -329,7 +352,7 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
     resolveJavaPaths(itemTypeName).then(({ javaPath8, javaPath21 }) => {
       if (requiredJavaVersion === 21 && javaPath21) {
         setJavaPath(javaPath21);
-      } else if (javaPath8) {
+      } else if (requiredJavaVersion === 8 && javaPath8) {
         setJavaPath(javaPath8);
       }
     }).catch((error) => {
