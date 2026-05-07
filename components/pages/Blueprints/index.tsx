@@ -275,7 +275,7 @@ const Blueprints: React.FC = () => {
       <div className="flex flex-col h-full min-h-0">
         {/* ── Header ───────────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between mb-4 flex-shrink-0">
-          <h1 className="font-display text-3xl font-bold uppercase text-white tracking-wider">Blueprints</h1>
+          <h1 className="font-display text-3xl font-bold uppercase text-white tracking-wider">Catalog</h1>
           <div className="flex items-center gap-3">
             {/* Installation selector */}
             {instances.length > 0 && (

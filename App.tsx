@@ -347,7 +347,7 @@ const App: React.FC = () => {
         return <Screenshots />;
       case 'Mods':
         return <Mods />;
-      case 'Blueprints':
+      case 'Catalog':
         return <Blueprints />;
       case 'Settings': {
         const settingsProps = 'initialSection' in pageProps ? pageProps : {};
