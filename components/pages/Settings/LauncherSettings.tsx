@@ -368,20 +368,20 @@ const LauncherSettings: React.FC = () => {
                     className="fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center"
                     aria-modal="true"
                     role="dialog"
-                    aria-labelledby="clear-data-confirm-title"
+                    aria-labelledby="reset-launcher-confirm-title"
                 >
                     <div className="relative bg-starmade-bg/90 border border-red-500/40 rounded-xl shadow-2xl w-full max-w-md p-8">
                         <h2
-                            id="clear-data-confirm-title"
+                            id="reset-launcher-confirm-title"
                             className="font-display text-xl font-bold uppercase text-red-400 tracking-wider mb-3"
                         >
-                            Clear All Data?
+                            Reset Launcher?
                         </h2>
                         <p className="text-sm text-gray-300 mb-2">
-                            This will permanently delete <span className="text-white font-semibold">all</span> launcher data — accounts, installations, sessions, settings, and pinned items.
+                            This will reset all launcher settings, accounts, sessions, and pinned items. <span className="text-white font-semibold">Installed game files on disk will not be deleted</span> and can be reimported.
                         </p>
                         <p className="text-sm text-gray-400 mb-6">
-                            The launcher will restart with a clean slate. <span className="text-white font-semibold">This cannot be undone.</span>
+                            The launcher will restart with a fresh configuration.
                         </p>
                         <div className="flex flex-col gap-3">
                             <button
@@ -389,7 +389,7 @@ const LauncherSettings: React.FC = () => {
                                 disabled={isClearingData}
                                 className="w-full px-4 py-2 rounded-md bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-bold uppercase tracking-wider"
                             >
-                                {isClearingData ? 'Clearing…' : 'Yes, Clear Everything & Restart'}
+                                {isClearingData ? 'Resetting…' : 'Yes, Reset & Restart'}
                             </button>
                             <button
                                 onClick={() => setClearDataConfirmOpen(false)}
@@ -730,14 +730,14 @@ const LauncherSettings: React.FC = () => {
                     </h2>
                     <div className="space-y-4">
                         <SettingRow
-                            title="Reset All Data"
-                            description="Permanently wipe all accounts, installations, sessions, and settings, then restart the launcher."
+                            title="Reset Launcher"
+                            description="Reset all launcher settings, accounts, and sessions, then restart. Installed game files on disk are kept and can be reimported."
                         >
                             <button
                                 onClick={() => setClearDataConfirmOpen(true)}
                                 className="px-4 py-2 rounded-md bg-red-700/60 hover:bg-red-600/80 border border-red-500/40 text-red-200 transition-colors text-sm font-semibold uppercase tracking-wider"
                             >
-                                Clear All Data
+                                Reset Launcher
                             </button>
                         </SettingRow>
                     </div>
