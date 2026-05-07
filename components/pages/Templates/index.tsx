@@ -21,13 +21,6 @@ type CatalogItemRef = { kind: 'template'; fileName: string };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-const formatBytes = (v: number): string => {
-  if (v < 1024) return `${v} B`;
-  const kb = v / 1024;
-  if (kb < 1024) return `${kb.toFixed(1)} KB`;
-  return `${(kb / 1024).toFixed(2)} MB`;
-};
-
 const STORE_KEY = 'templatesCatalogPath';
 
 // ─── Component ──────────────────────────────────────────────────────────────
@@ -74,12 +67,12 @@ const Templates: React.FC = () => {
     [instances, selectedInstanceId],
   );
 
-  // ── Data loading ──────────────────────────────────────────────────────────
-  const loadCatalog = useCallback(async () => {
+  // ── Data loading (uses backend cache; Refresh buttons pass invalidate=true) ─
+  const loadCatalog = useCallback(async (invalidate = false) => {
     if (!catalogPath) return;
     setIsLoadingCatalog(true);
     try {
-      const data = await launcher.catalog.list(catalogPath);
+      const data = await launcher.catalog.list(catalogPath, invalidate);
       setCatalogData(data);
       if (data.error) setError(data.error);
     } catch (err) {
@@ -89,11 +82,11 @@ const Templates: React.FC = () => {
     }
   }, [launcher, catalogPath]);
 
-  const loadInstall = useCallback(async () => {
+  const loadInstall = useCallback(async (invalidate = false) => {
     if (!selectedInstance?.path) { setInstallData(null); return; }
     setIsLoadingInstall(true);
     try {
-      const data = await launcher.catalog.listInstallation(selectedInstance.path);
+      const data = await launcher.catalog.listInstallation(selectedInstance.path, invalidate);
       setInstallData(data);
     } catch (err) {
       setError(`Failed to load installation templates: ${String(err)}`);
@@ -309,7 +302,7 @@ const Templates: React.FC = () => {
                   <button onClick={handleDeleteSelected} disabled={isBusy || catalogSelection.size === 0} className="p-1.5 rounded-md hover:bg-red-500/20 transition-colors text-gray-400 hover:text-red-400 disabled:opacity-40" title="Delete selected">
                     <TrashIcon className="w-4 h-4" />
                   </button>
-                  <button onClick={() => void loadCatalog()} disabled={isLoadingCatalog} className="px-2 py-1 text-xs rounded bg-white/5 hover:bg-white/10 transition-colors text-gray-400">
+                  <button onClick={() => void loadCatalog(true)} disabled={isLoadingCatalog} className="px-2 py-1 text-xs rounded bg-white/5 hover:bg-white/10 transition-colors text-gray-400">
                     {isLoadingCatalog ? 'Loading...' : 'Refresh'}
                   </button>
                 </div>
@@ -319,7 +312,7 @@ const Templates: React.FC = () => {
                 {!isLoadingCatalog && catalogTemplates.length === 0 && (
                   <p className="text-gray-500 text-sm p-4 text-center">{searchQuery ? 'No matches.' : 'Catalog is empty. Import templates from an installation.'}</p>
                 )}
-                {catalogTemplates.map((tpl) => { const key = `tpl:${tpl.fileName}`; return <FileRow key={key} fileName={tpl.fileName} sizeBytes={tpl.sizeBytes} selected={catalogSelection.has(key)} onToggle={() => toggleCatalogItem(key)} onDragStart={(e) => handleDragStart(e, key, 'catalog')} />; })}
+                {catalogTemplates.map((tpl) => { const key = `tpl:${tpl.fileName}`; return <FileRow key={key} fileName={tpl.fileName} selected={catalogSelection.has(key)} onToggle={() => toggleCatalogItem(key)} onDragStart={(e) => handleDragStart(e, key, 'catalog')} />; })}
               </div>
             </div>
 
@@ -352,7 +345,7 @@ const Templates: React.FC = () => {
                   <button onClick={installSelection.size === allInstallKeys.length ? deselectAllInstall : selectAllInstall} className="px-2 py-1 text-xs rounded bg-white/5 hover:bg-white/10 transition-colors text-gray-400">
                     <CheckIcon className="w-3 h-3 inline mr-1" />{installSelection.size === allInstallKeys.length ? 'None' : 'All'}
                   </button>
-                  <button onClick={() => void loadInstall()} disabled={isLoadingInstall} className="px-2 py-1 text-xs rounded bg-white/5 hover:bg-white/10 transition-colors text-gray-400">
+                  <button onClick={() => void loadInstall(true)} disabled={isLoadingInstall} className="px-2 py-1 text-xs rounded bg-white/5 hover:bg-white/10 transition-colors text-gray-400">
                     {isLoadingInstall ? 'Loading...' : 'Refresh'}
                   </button>
                 </div>
@@ -363,7 +356,7 @@ const Templates: React.FC = () => {
                 {selectedInstance && !isLoadingInstall && installTemplates.length === 0 && (
                   <p className="text-gray-500 text-sm p-4 text-center">{searchQuery ? 'No matches.' : 'No templates in this installation.'}</p>
                 )}
-                {installTemplates.map((tpl) => { const key = `tpl:${tpl.fileName}`; return <FileRow key={key} fileName={tpl.fileName} sizeBytes={tpl.sizeBytes} selected={installSelection.has(key)} onToggle={() => toggleInstallItem(key)} onDragStart={(e) => handleDragStart(e, key, 'install')} />; })}
+                {installTemplates.map((tpl) => { const key = `tpl:${tpl.fileName}`; return <FileRow key={key} fileName={tpl.fileName} selected={installSelection.has(key)} onToggle={() => toggleInstallItem(key)} onDragStart={(e) => handleDragStart(e, key, 'install')} />; })}
               </div>
             </div>
           </div>
@@ -375,11 +368,10 @@ const Templates: React.FC = () => {
 
 // ─── Row sub-component ──────────────────────────────────────────────────────
 
-const FileRow: React.FC<{ fileName: string; sizeBytes: number; selected: boolean; onToggle: () => void; onDragStart?: (e: React.DragEvent) => void }> = ({ fileName, sizeBytes, selected, onToggle, onDragStart }) => (
+const FileRow: React.FC<{ fileName: string; selected: boolean; onToggle: () => void; onDragStart?: (e: React.DragEvent) => void }> = ({ fileName, selected, onToggle, onDragStart }) => (
   <button draggable onDragStart={onDragStart} onClick={onToggle} className={`w-full text-left px-3 py-1.5 rounded-lg border transition-colors flex items-center gap-3 cursor-grab active:cursor-grabbing ${selected ? 'bg-starmade-accent/15 border-starmade-accent/40' : 'bg-black/20 border-white/5 hover:bg-white/5'}`}>
     <input type="checkbox" checked={selected} onChange={onToggle} onClick={(e) => e.stopPropagation()} className="rounded border-gray-600 bg-gray-800 text-starmade-accent focus:ring-starmade-accent/50 flex-shrink-0" />
     <span className="text-sm text-gray-300 truncate flex-1">{fileName}</span>
-    <span className="text-xs text-gray-500 flex-shrink-0">{formatBytes(sizeBytes)}</span>
   </button>
 );
 

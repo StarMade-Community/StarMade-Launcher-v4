@@ -35,24 +35,17 @@ type CatalogItemRef =
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-const formatBytes = (v: number): string => {
-  if (v < 1024) return `${v} B`;
-  const kb = v / 1024;
-  if (kb < 1024) return `${kb.toFixed(1)} KB`;
-  return `${(kb / 1024).toFixed(2)} MB`;
-};
-
 const TYPE_COLORS: Record<string, string> = {
   SHIP: 'bg-blue-500/20 text-blue-300 border-blue-500/30',
   SPACE_STATION: 'bg-purple-500/20 text-purple-300 border-purple-500/30',
-  SHOP: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30',
+  /*SHOP: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30',
   ASTEROID: 'bg-gray-500/20 text-gray-300 border-gray-500/30',
   MANAGED_ASTEROID: 'bg-gray-500/20 text-gray-300 border-gray-500/30',
-  PLANET: 'bg-green-500/20 text-green-300 border-green-500/30',
+  PLANET: 'bg-green-500/20 text-green-300 border-green-500/30',*/ //users cant actaully save these in game anyways
   UNKNOWN: 'bg-slate-500/20 text-slate-300 border-slate-500/30',
 };
 
-const ALL_TYPES = ['SHIP', 'SPACE_STATION', 'SHOP', 'ASTEROID', 'MANAGED_ASTEROID', 'PLANET', 'UNKNOWN'];
+const ALL_TYPES = ['SHIP', 'SPACE_STATION', /*'SHOP', 'ASTEROID', 'MANAGED_ASTEROID', 'PLANET',*/ 'UNKNOWN'];
 const typeLabel = (t: string) => t.replace(/_/g, ' ');
 
 const STORE_KEY = 'blueprintsCatalogPath';
@@ -104,12 +97,12 @@ const Blueprints: React.FC = () => {
     [instances, selectedInstanceId],
   );
 
-  // ── Data loading ──────────────────────────────────────────────────────────
-  const loadCatalog = useCallback(async () => {
+  // ── Data loading (uses backend cache; Refresh buttons pass invalidate=true) ─
+  const loadCatalog = useCallback(async (invalidate = false) => {
     if (!catalogPath) return;
     setIsLoadingCatalog(true);
     try {
-      const data = await launcher.catalog.list(catalogPath);
+      const data = await launcher.catalog.list(catalogPath, invalidate);
       setCatalogData(data);
       if (data.error) setError(data.error);
     } catch (err) {
@@ -119,11 +112,11 @@ const Blueprints: React.FC = () => {
     }
   }, [launcher, catalogPath]);
 
-  const loadInstall = useCallback(async () => {
+  const loadInstall = useCallback(async (invalidate = false) => {
     if (!selectedInstance?.path) { setInstallData(null); return; }
     setIsLoadingInstall(true);
     try {
-      const data = await launcher.catalog.listInstallation(selectedInstance.path);
+      const data = await launcher.catalog.listInstallation(selectedInstance.path, invalidate);
       setInstallData(data);
     } catch (err) {
       setError(`Failed to load installation blueprints: ${String(err)}`);
@@ -395,7 +388,7 @@ const Blueprints: React.FC = () => {
                   <button onClick={handleDeleteSelected} disabled={isBusy || catalogSelection.size === 0} className="p-1.5 rounded-md hover:bg-red-500/20 transition-colors text-gray-400 hover:text-red-400 disabled:opacity-40" title="Delete selected">
                     <TrashIcon className="w-4 h-4" />
                   </button>
-                  <button onClick={() => void loadCatalog()} disabled={isLoadingCatalog} className="px-2 py-1 text-xs rounded bg-white/5 hover:bg-white/10 transition-colors text-gray-400">
+                  <button onClick={() => void loadCatalog(true)} disabled={isLoadingCatalog} className="px-2 py-1 text-xs rounded bg-white/5 hover:bg-white/10 transition-colors text-gray-400">
                     {isLoadingCatalog ? 'Loading...' : 'Refresh'}
                   </button>
                 </div>
@@ -409,7 +402,7 @@ const Blueprints: React.FC = () => {
                 {catalogExported.length > 0 && (
                   <div className="pt-2">
                     <p className="text-xs text-gray-500 uppercase tracking-wider mb-1 px-2">Exported (.sment)</p>
-                    {catalogExported.map((exp) => { const key = `exp:${exp.fileName}`; return <FileRow key={key} fileName={exp.fileName} sizeBytes={exp.sizeBytes} selected={catalogSelection.has(key)} onToggle={() => toggleCatalogItem(key)} onDragStart={(e) => handleDragStart(e, key, 'catalog')} />; })}
+                    {catalogExported.map((exp) => { const key = `exp:${exp.fileName}`; return <FileRow key={key} fileName={exp.fileName} selected={catalogSelection.has(key)} onToggle={() => toggleCatalogItem(key)} onDragStart={(e) => handleDragStart(e, key, 'catalog')} />; })}
                   </div>
                 )}
               </div>
@@ -444,7 +437,7 @@ const Blueprints: React.FC = () => {
                   <button onClick={installSelection.size === allInstallKeys.length ? deselectAllInstall : selectAllInstall} className="px-2 py-1 text-xs rounded bg-white/5 hover:bg-white/10 transition-colors text-gray-400" title={installSelection.size === allInstallKeys.length ? 'Deselect all' : 'Select all'}>
                     <CheckIcon className="w-3 h-3 inline mr-1" />{installSelection.size === allInstallKeys.length ? 'None' : 'All'}
                   </button>
-                  <button onClick={() => void loadInstall()} disabled={isLoadingInstall} className="px-2 py-1 text-xs rounded bg-white/5 hover:bg-white/10 transition-colors text-gray-400">
+                  <button onClick={() => void loadInstall(true)} disabled={isLoadingInstall} className="px-2 py-1 text-xs rounded bg-white/5 hover:bg-white/10 transition-colors text-gray-400">
                     {isLoadingInstall ? 'Loading...' : 'Refresh'}
                   </button>
                 </div>
@@ -459,7 +452,7 @@ const Blueprints: React.FC = () => {
                 {installExported.length > 0 && (
                   <div className="pt-2">
                     <p className="text-xs text-gray-500 uppercase tracking-wider mb-1 px-2">Exported (.sment)</p>
-                    {installExported.map((exp) => { const key = `exp:${exp.fileName}`; return <FileRow key={key} fileName={exp.fileName} sizeBytes={exp.sizeBytes} selected={installSelection.has(key)} onToggle={() => toggleInstallItem(key)} onDragStart={(e) => handleDragStart(e, key, 'install')} />; })}
+                    {installExported.map((exp) => { const key = `exp:${exp.fileName}`; return <FileRow key={key} fileName={exp.fileName} selected={installSelection.has(key)} onToggle={() => toggleInstallItem(key)} onDragStart={(e) => handleDragStart(e, key, 'install')} />; })}
                   </div>
                 )}
               </div>
@@ -485,7 +478,6 @@ const BlueprintRow: React.FC<{ bp: BlueprintMeta; selected: boolean; onToggle: (
           {bp.classification && <span className="text-[10px] uppercase tracking-wider text-gray-400">{bp.classification.replace(/_/g, ' ')}</span>}
         </div>
         <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-500">
-          <span>{formatBytes(bp.sizeBytes)}</span>
           {bp.elementCount != null && <span>{bp.elementCount.toLocaleString()} blocks</span>}
           {bp.dockedCount > 0 && <span>{bp.dockedCount} docked</span>}
         </div>
@@ -494,11 +486,10 @@ const BlueprintRow: React.FC<{ bp: BlueprintMeta; selected: boolean; onToggle: (
   );
 };
 
-const FileRow: React.FC<{ fileName: string; sizeBytes: number; selected: boolean; onToggle: () => void; onDragStart?: (e: React.DragEvent) => void }> = ({ fileName, sizeBytes, selected, onToggle, onDragStart }) => (
+const FileRow: React.FC<{ fileName: string; selected: boolean; onToggle: () => void; onDragStart?: (e: React.DragEvent) => void }> = ({ fileName, selected, onToggle, onDragStart }) => (
   <button draggable onDragStart={onDragStart} onClick={onToggle} className={`w-full text-left px-3 py-1.5 rounded-lg border transition-colors flex items-center gap-3 cursor-grab active:cursor-grabbing ${selected ? 'bg-starmade-accent/15 border-starmade-accent/40' : 'bg-black/20 border-white/5 hover:bg-white/5'}`}>
     <input type="checkbox" checked={selected} onChange={onToggle} onClick={(e) => e.stopPropagation()} className="rounded border-gray-600 bg-gray-800 text-starmade-accent focus:ring-starmade-accent/50 flex-shrink-0" />
     <span className="text-sm text-gray-300 truncate flex-1">{fileName}</span>
-    <span className="text-xs text-gray-500 flex-shrink-0">{formatBytes(sizeBytes)}</span>
   </button>
 );
 

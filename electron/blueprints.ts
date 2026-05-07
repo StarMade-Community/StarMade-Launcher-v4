@@ -1,4 +1,5 @@
 import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
 import AdmZip from 'adm-zip';
 
@@ -159,145 +160,155 @@ function parseBlueprintHeader(headerPath: string): {
   return result;
 }
 
-// ─── Directory Size ──────────────────────────────────────────────────────────
-
-function dirSizeBytes(dirPath: string): number {
-  let total = 0;
-  try {
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-    for (const entry of entries) {
-      const full = path.join(dirPath, entry.name);
-      if (entry.isDirectory()) {
-        total += dirSizeBytes(full);
-      } else {
-        try { total += fs.statSync(full).size; } catch { /* skip */ }
-      }
-    }
-  } catch { /* skip */ }
-  return total;
-}
-
 // ─── Ensure Subdirectories ───────────────────────────────────────────────────
 
-function ensureCatalogDirs(catalogPath: string): void {
-  fs.mkdirSync(path.join(catalogPath, BLUEPRINTS_DIR), { recursive: true });
-  fs.mkdirSync(path.join(catalogPath, EXPORTED_DIR), { recursive: true });
-  fs.mkdirSync(path.join(catalogPath, TEMPLATES_DIR), { recursive: true });
+async function ensureCatalogDirs(catalogPath: string): Promise<void> {
+  await fsp.mkdir(path.join(catalogPath, BLUEPRINTS_DIR), { recursive: true });
+  await fsp.mkdir(path.join(catalogPath, EXPORTED_DIR), { recursive: true });
+  await fsp.mkdir(path.join(catalogPath, TEMPLATES_DIR), { recursive: true });
 }
 
-// ─── List ────────────────────────────────────────────────────────────────────
+// ─── Cache ───────────────────────────────────────────────────────────────────
+// In-memory cache keyed by directory path. Invalidated after mutations or when
+// the caller passes `invalidate: true`.
 
-function scanBlueprints(rootPath: string): BlueprintMeta[] {
-  const bpDir = path.join(rootPath, BLUEPRINTS_DIR);
-  if (!fs.existsSync(bpDir)) return [];
+interface CachedListing { listing: CatalogListing; cachedAt: number; }
+const listingCache = new Map<string, CachedListing>();
+const CACHE_TTL_MS = 30_000; // 30 seconds
 
-  const results: BlueprintMeta[] = [];
-  let entries: fs.Dirent[];
-  try { entries = fs.readdirSync(bpDir, { withFileTypes: true }); } catch { return []; }
+export function invalidateCatalogCache(dirPath?: string): void {
+  if (dirPath) { listingCache.delete(dirPath); } else { listingCache.clear(); }
+}
 
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    // skip the exported/ and DATA/ subdirectories
-    if (entry.name === 'exported' || entry.name === 'DATA') continue;
+// ─── Async scanning ─────────────────────────────────────────────────────────
 
-    const bpPath = path.join(bpDir, entry.name);
-    const headerPath = path.join(bpPath, HEADER_FILE);
+async function scanBlueprintEntry(bpPath: string, name: string): Promise<BlueprintMeta> {
+  const headerPath = path.join(bpPath, HEADER_FILE);
 
-    let modifiedMs = 0;
-    try { modifiedMs = fs.statSync(headerPath).mtimeMs; } catch {
-      try { modifiedMs = fs.statSync(bpPath).mtimeMs; } catch { /* skip */ }
-    }
-
-    // Count ATTACHED_* child directories
-    let dockedCount = 0;
-    try {
-      const children = fs.readdirSync(bpPath, { withFileTypes: true });
-      for (const child of children) {
-        if (child.isDirectory() && child.name.startsWith('ATTACHED_')) {
-          dockedCount++;
-        }
-      }
-    } catch { /* skip */ }
-
-    const header = fs.existsSync(headerPath)
-      ? parseBlueprintHeader(headerPath)
-      : { type: 'UNKNOWN' as BlueprintEntityType };
-
-    results.push({
-      name: entry.name,
-      type: header.type,
-      classification: header.classification,
-      boundingBox: header.boundingBox,
-      elementCount: header.elementCount,
-      sizeBytes: dirSizeBytes(bpPath),
-      modifiedMs,
-      dockedCount,
-    });
+  // Stat header (or directory) for modifiedMs — skip expensive recursive size calc
+  let modifiedMs = 0;
+  let sizeBytes = 0;
+  try {
+    const st = await fsp.stat(headerPath);
+    modifiedMs = st.mtimeMs;
+    sizeBytes = st.size;
+  } catch {
+    try { modifiedMs = (await fsp.stat(bpPath)).mtimeMs; } catch { /* skip */ }
   }
+
+  // Count ATTACHED_* child directories
+  let dockedCount = 0;
+  try {
+    const children = await fsp.readdir(bpPath, { withFileTypes: true });
+    for (const child of children) {
+      if (child.isDirectory() && child.name.startsWith('ATTACHED_')) dockedCount++;
+    }
+  } catch { /* skip */ }
+
+  // Parse header (sync but only reads first ~100 bytes — cheap)
+  let header: ReturnType<typeof parseBlueprintHeader> = { type: 'UNKNOWN' };
+  try {
+    await fsp.access(headerPath);
+    header = parseBlueprintHeader(headerPath);
+  } catch { /* no header */ }
+
+  return {
+    name,
+    type: header.type,
+    classification: header.classification,
+    boundingBox: header.boundingBox,
+    elementCount: header.elementCount,
+    sizeBytes,
+    modifiedMs,
+    dockedCount,
+  };
+}
+
+async function scanBlueprints(rootPath: string): Promise<BlueprintMeta[]> {
+  const bpDir = path.join(rootPath, BLUEPRINTS_DIR);
+  let entries: fs.Dirent[];
+  try { entries = await fsp.readdir(bpDir, { withFileTypes: true }); } catch { return []; }
+
+  const dirs = entries.filter(
+    (e) => e.isDirectory() && e.name !== 'exported' && e.name !== 'DATA' && !e.name.startsWith('._'),
+  );
+
+  // Parse all blueprints in parallel (I/O bound, not CPU bound)
+  const results = await Promise.all(
+    dirs.map((d) => scanBlueprintEntry(path.join(bpDir, d.name), d.name)),
+  );
 
   results.sort((a, b) => a.name.localeCompare(b.name));
   return results;
 }
 
-function scanExported(rootPath: string): ExportedBlueprintMeta[] {
+async function scanExported(rootPath: string): Promise<ExportedBlueprintMeta[]> {
   const expDir = path.join(rootPath, EXPORTED_DIR);
-  if (!fs.existsSync(expDir)) return [];
+  let files: string[];
+  try { files = await fsp.readdir(expDir); } catch { return []; }
 
   const results: ExportedBlueprintMeta[] = [];
-  try {
-    const files = fs.readdirSync(expDir);
-    for (const file of files) {
-      if (!file.endsWith('.sment')) continue;
-      try {
-        const stat = fs.statSync(path.join(expDir, file));
-        results.push({ fileName: file, sizeBytes: stat.size, modifiedMs: stat.mtimeMs });
-      } catch { /* skip */ }
-    }
-  } catch { /* skip */ }
+  await Promise.all(files.filter((f) => f.endsWith('.sment') && !f.startsWith('._')).map(async (file) => {
+    try {
+      const stat = await fsp.stat(path.join(expDir, file));
+      results.push({ fileName: file, sizeBytes: stat.size, modifiedMs: stat.mtimeMs });
+    } catch { /* skip */ }
+  }));
 
   results.sort((a, b) => a.fileName.localeCompare(b.fileName));
   return results;
 }
 
-function scanTemplates(rootPath: string): TemplateMeta[] {
+async function scanTemplates(rootPath: string): Promise<TemplateMeta[]> {
   const tplDir = path.join(rootPath, TEMPLATES_DIR);
-  if (!fs.existsSync(tplDir)) return [];
+  let files: string[];
+  try { files = await fsp.readdir(tplDir); } catch { return []; }
 
   const results: TemplateMeta[] = [];
-  try {
-    const files = fs.readdirSync(tplDir);
-    for (const file of files) {
-      if (!file.endsWith('.smtpl')) continue;
-      try {
-        const stat = fs.statSync(path.join(tplDir, file));
-        results.push({ fileName: file, sizeBytes: stat.size, modifiedMs: stat.mtimeMs });
-      } catch { /* skip */ }
-    }
-  } catch { /* skip */ }
+  await Promise.all(files.filter((f) => f.endsWith('.smtpl') && !f.startsWith('._')).map(async (file) => {
+    try {
+      const stat = await fsp.stat(path.join(tplDir, file));
+      results.push({ fileName: file, sizeBytes: stat.size, modifiedMs: stat.mtimeMs });
+    } catch { /* skip */ }
+  }));
 
   results.sort((a, b) => a.fileName.localeCompare(b.fileName));
   return results;
 }
 
-/** List all items in the central catalog directory. */
-export function listCatalog(catalogPath: string): CatalogListing {
-  ensureCatalogDirs(catalogPath);
-  return {
-    catalogPath,
-    blueprints: scanBlueprints(catalogPath),
-    exported: scanExported(catalogPath),
-    templates: scanTemplates(catalogPath),
-  };
+/** List all items in a catalog directory (cached). */
+export async function listCatalog(catalogPath: string, invalidate = false): Promise<CatalogListing> {
+  if (!invalidate) {
+    const cached = listingCache.get(catalogPath);
+    if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return cached.listing;
+  }
+
+  await ensureCatalogDirs(catalogPath);
+  const [blueprints, exported, templates] = await Promise.all([
+    scanBlueprints(catalogPath),
+    scanExported(catalogPath),
+    scanTemplates(catalogPath),
+  ]);
+  const listing: CatalogListing = { catalogPath, blueprints, exported, templates };
+  listingCache.set(catalogPath, { listing, cachedAt: Date.now() });
+  return listing;
 }
 
-/** List blueprints/templates in a specific installation directory. */
-export function listInstallationBlueprints(installPath: string): CatalogListing {
-  return {
-    catalogPath: installPath,
-    blueprints: scanBlueprints(installPath),
-    exported: scanExported(installPath),
-    templates: scanTemplates(installPath),
-  };
+/** List blueprints/templates in a specific installation directory (cached). */
+export async function listInstallationBlueprints(installPath: string, invalidate = false): Promise<CatalogListing> {
+  if (!invalidate) {
+    const cached = listingCache.get(installPath);
+    if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return cached.listing;
+  }
+
+  const [blueprints, exported, templates] = await Promise.all([
+    scanBlueprints(installPath),
+    scanExported(installPath),
+    scanTemplates(installPath),
+  ]);
+  const listing: CatalogListing = { catalogPath: installPath, blueprints, exported, templates };
+  listingCache.set(installPath, { listing, cachedAt: Date.now() });
+  return listing;
 }
 
 // ─── Deploy (Catalog → Installation) ────────────────────────────────────────
@@ -332,6 +343,7 @@ export function deployToInstallations(
         errors.push(`Failed to deploy ${itemLabel(item)} to ${target}: ${String(err)}`);
       }
     }
+    invalidateCatalogCache(target);
   }
 
   return { success: errors.length === 0, copiedCount, skippedCount, errors: errors.length ? errors : undefined };
@@ -345,7 +357,9 @@ export function importToCatalog(
   catalogPath: string,
   overwrite: boolean,
 ): CatalogCopyResult {
-  ensureCatalogDirs(catalogPath);
+  fs.mkdirSync(path.join(catalogPath, BLUEPRINTS_DIR), { recursive: true });
+  fs.mkdirSync(path.join(catalogPath, EXPORTED_DIR), { recursive: true });
+  fs.mkdirSync(path.join(catalogPath, TEMPLATES_DIR), { recursive: true });
   let copiedCount = 0;
   let skippedCount = 0;
   const errors: string[] = [];
@@ -370,6 +384,7 @@ export function importToCatalog(
     }
   }
 
+  invalidateCatalogCache(catalogPath);
   return { success: errors.length === 0, copiedCount, skippedCount, errors: errors.length ? errors : undefined };
 }
 
@@ -381,12 +396,13 @@ export function deleteCatalogItem(
 ): { success: boolean; error?: string } {
   try {
     const itemPath = resolveItemSingle(catalogPath, item);
-    if (!fs.existsSync(itemPath)) return { success: true }; // already gone
+    if (!fs.existsSync(itemPath)) return { success: true };
     if (item.kind === 'blueprint') {
       fs.rmSync(itemPath, { recursive: true, force: true });
     } else {
       fs.unlinkSync(itemPath);
     }
+    invalidateCatalogCache(catalogPath);
     return { success: true };
   } catch (err) {
     return { success: false, error: String(err) };
@@ -399,7 +415,8 @@ export function importSmentToCatalog(
   catalogPath: string,
   smentFilePath: string,
 ): CatalogCopyResult {
-  ensureCatalogDirs(catalogPath);
+  fs.mkdirSync(path.join(catalogPath, BLUEPRINTS_DIR), { recursive: true });
+  fs.mkdirSync(path.join(catalogPath, EXPORTED_DIR), { recursive: true });
   const errors: string[] = [];
   let copiedCount = 0;
 
@@ -407,7 +424,6 @@ export function importSmentToCatalog(
   const bpDest = path.join(catalogPath, BLUEPRINTS_DIR, baseName);
   const expDest = path.join(catalogPath, EXPORTED_DIR, path.basename(smentFilePath));
 
-  // Extract the .sment (ZIP) into blueprints/<name>/
   try {
     fs.mkdirSync(bpDest, { recursive: true });
     const zip = new AdmZip(smentFilePath);
@@ -417,7 +433,6 @@ export function importSmentToCatalog(
     errors.push(`Failed to extract ${smentFilePath}: ${String(err)}`);
   }
 
-  // Copy the .sment archive to exported/
   try {
     fs.copyFileSync(smentFilePath, expDest);
     copiedCount++;
@@ -425,6 +440,7 @@ export function importSmentToCatalog(
     errors.push(`Failed to copy .sment to exported/: ${String(err)}`);
   }
 
+  invalidateCatalogCache(catalogPath);
   return { success: errors.length === 0, copiedCount, errors: errors.length ? errors : undefined };
 }
 
@@ -487,16 +503,17 @@ export interface SyncDiff {
  * Compare a catalog directory against an installation directory and return
  * which items are new, modified (catalog is newer), or already up-to-date.
  */
-export function computeSyncDiff(
+export async function computeSyncDiff(
   catalogPath: string,
   installPath: string,
   kinds: Array<'blueprint' | 'exported' | 'template'>,
-): SyncDiff {
+): Promise<SyncDiff> {
   const items: SyncDiffItem[] = [];
 
   if (kinds.includes('blueprint')) {
-    const catBlueprints = scanBlueprints(catalogPath);
-    const instBlueprints = scanBlueprints(installPath);
+    const [catBlueprints, instBlueprints] = await Promise.all([
+      scanBlueprints(catalogPath), scanBlueprints(installPath),
+    ]);
     const instMap = new Map(instBlueprints.map((b) => [b.name, b]));
     for (const bp of catBlueprints) {
       const inst = instMap.get(bp.name);
@@ -512,8 +529,9 @@ export function computeSyncDiff(
   }
 
   if (kinds.includes('exported')) {
-    const catExp = scanExported(catalogPath);
-    const instExp = scanExported(installPath);
+    const [catExp, instExp] = await Promise.all([
+      scanExported(catalogPath), scanExported(installPath),
+    ]);
     const instMap = new Map(instExp.map((e) => [e.fileName, e]));
     for (const exp of catExp) {
       const inst = instMap.get(exp.fileName);
@@ -529,8 +547,9 @@ export function computeSyncDiff(
   }
 
   if (kinds.includes('template')) {
-    const catTpl = scanTemplates(catalogPath);
-    const instTpl = scanTemplates(installPath);
+    const [catTpl, instTpl] = await Promise.all([
+      scanTemplates(catalogPath), scanTemplates(installPath),
+    ]);
     const instMap = new Map(instTpl.map((t) => [t.fileName, t]));
     for (const tpl of catTpl) {
       const inst = instMap.get(tpl.fileName);

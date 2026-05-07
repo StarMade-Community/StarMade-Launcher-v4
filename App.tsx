@@ -346,12 +346,12 @@ const App: React.FC = () => {
         return <News />;
       case 'Screenshots':
         return <Screenshots />;
-      case 'Mods':
-        return <Mods />;
       case 'Blueprints':
         return <Blueprints />;
       case 'Templates':
         return <Templates />;
+      case 'Mods':
+        return <Mods />;
       case 'Settings': {
         const settingsProps = 'initialSection' in pageProps ? pageProps : {};
         return <Settings {...settingsProps} />;

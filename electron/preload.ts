@@ -804,8 +804,8 @@ const launcherApi = {
   /** Blueprint / Template Catalog APIs — all accept an explicit catalogPath so the
    *  same surface serves both the Blueprints page and the Templates page. */
   catalog: {
-    /** List all items in a catalog directory. */
-    list: (catalogPath: string): Promise<{
+    /** List all items in a catalog directory. Cached for 30s; pass invalidate=true to force refresh. */
+    list: (catalogPath: string, invalidate?: boolean): Promise<{
       catalogPath: string;
       blueprints: Array<{
         name: string;
@@ -820,10 +820,10 @@ const launcherApi = {
       exported: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
       templates: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
       error?: string;
-    }> => ipcRenderer.invoke(IPC.CATALOG_LIST, catalogPath),
+    }> => ipcRenderer.invoke(IPC.CATALOG_LIST, catalogPath, invalidate),
 
-    /** List blueprints/templates in a specific installation. */
-    listInstallation: (installationPath: string): Promise<{
+    /** List blueprints/templates in a specific installation. Cached for 30s; pass invalidate=true to force refresh. */
+    listInstallation: (installationPath: string, invalidate?: boolean): Promise<{
       catalogPath: string;
       blueprints: Array<{
         name: string;
@@ -838,7 +838,7 @@ const launcherApi = {
       exported: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
       templates: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
       error?: string;
-    }> => ipcRenderer.invoke(IPC.CATALOG_LIST_INSTALLATION, installationPath),
+    }> => ipcRenderer.invoke(IPC.CATALOG_LIST_INSTALLATION, installationPath, invalidate),
 
     /** Deploy items from a catalog directory to one or more installations. */
     deploy: (

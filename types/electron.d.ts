@@ -480,7 +480,7 @@ declare global {
 
       /** Blueprint / Template Catalog APIs — all accept an explicit catalogPath. */
       catalog: {
-        list: (catalogPath: string) => Promise<{
+        list: (catalogPath: string, invalidate?: boolean) => Promise<{
           catalogPath: string;
           blueprints: Array<{
             name: string;
@@ -496,7 +496,7 @@ declare global {
           templates: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
           error?: string;
         }>;
-        listInstallation: (installationPath: string) => Promise<{
+        listInstallation: (installationPath: string, invalidate?: boolean) => Promise<{
           catalogPath: string;
           blueprints: Array<{
             name: string;

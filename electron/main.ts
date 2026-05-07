@@ -216,7 +216,7 @@ function loadRendererRoute(
 function createWindow(): void {
   const { height: workAreaHeight } = screen.getPrimaryDisplay().workAreaSize;
   const useShortScreenSizing = workAreaHeight < 720;
-  const initialHeight = useShortScreenSizing ? workAreaHeight : 900;
+  const initialHeight = useShortScreenSizing ? workAreaHeight : 1024;
   const minHeight = useShortScreenSizing ? Math.min(600, workAreaHeight) : 600;
 
   // Resolve the icon path: in packaged builds the icon is copied to
@@ -226,9 +226,9 @@ function createWindow(): void {
   const iconPath = getWindowIconPath();
 
   mainWindow = new BrowserWindow({
-    width: 1280,
+    width: 1460,
     height: initialHeight,
-    minWidth: 960,
+    minWidth: 1024,
     minHeight,
     resizable: true,
     thickFrame: true,
@@ -2509,18 +2509,18 @@ ipcMain.handle(IPC.MODS_IMPORT_MODPACK, async (_event, installationPath: string,
 // IPC surface serves both the Blueprints page (blueprintsCatalogPath) and the
 // Templates page (templatesCatalogPath).
 
-ipcMain.handle(IPC.CATALOG_LIST, (_event, catalogPath: string) => {
+ipcMain.handle(IPC.CATALOG_LIST, async (_event, catalogPath: string, invalidate?: boolean) => {
   if (!catalogPath) return { catalogPath: '', blueprints: [], exported: [], templates: [] };
   try {
-    return listCatalog(catalogPath);
+    return await listCatalog(catalogPath, invalidate);
   } catch (error) {
     return { catalogPath, blueprints: [], exported: [], templates: [], error: String(error) };
   }
 });
 
-ipcMain.handle(IPC.CATALOG_LIST_INSTALLATION, (_event, installationPath: string) => {
+ipcMain.handle(IPC.CATALOG_LIST_INSTALLATION, async (_event, installationPath: string, invalidate?: boolean) => {
   try {
-    return listInstallationBlueprints(installationPath);
+    return await listInstallationBlueprints(installationPath, invalidate);
   } catch (error) {
     return { catalogPath: installationPath, blueprints: [], exported: [], templates: [], error: String(error) };
   }
@@ -2570,10 +2570,10 @@ ipcMain.handle(IPC.CATALOG_IMPORT_SMENT, (_event, catalogPath: string, smentPath
 
 ipcMain.handle(
   IPC.CATALOG_SYNC_DIFF,
-  (_event, catalogPath: string, installationPath: string, kinds: Array<'blueprint' | 'exported' | 'template'>) => {
+  async (_event, catalogPath: string, installationPath: string, kinds: Array<'blueprint' | 'exported' | 'template'>) => {
     if (!catalogPath) return { items: [], newCount: 0, modifiedCount: 0, upToDateCount: 0 };
     try {
-      return computeSyncDiff(catalogPath, installationPath, kinds);
+      return await computeSyncDiff(catalogPath, installationPath, kinds);
     } catch (error) {
       return { items: [], newCount: 0, modifiedCount: 0, upToDateCount: 0, error: String(error) };
     }
