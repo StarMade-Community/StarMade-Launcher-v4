@@ -478,6 +478,51 @@ declare global {
         }>;
       };
 
+      /** Blueprint / Template Catalog APIs — all accept an explicit catalogPath. */
+      catalog: {
+        list: (catalogPath: string, invalidate?: boolean) => Promise<{
+          catalogPath: string;
+          blueprints: Array<{
+            name: string;
+            type: string;
+            classification?: string;
+            boundingBox?: { min: [number, number, number]; max: [number, number, number] };
+            elementCount?: number;
+            sizeBytes: number;
+            modifiedMs: number;
+            dockedCount: number;
+          }>;
+          exported: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
+          templates: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
+          error?: string;
+        }>;
+        listInstallation: (installationPath: string, invalidate?: boolean) => Promise<{
+          catalogPath: string;
+          blueprints: Array<{
+            name: string;
+            type: string;
+            classification?: string;
+            boundingBox?: { min: [number, number, number]; max: [number, number, number] };
+            elementCount?: number;
+            sizeBytes: number;
+            modifiedMs: number;
+            dockedCount: number;
+          }>;
+          exported: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
+          templates: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
+          error?: string;
+        }>;
+        deploy: (catalogPath: string, items: Array<{ kind: string; name?: string; fileName?: string }>, targetPaths: string[], overwrite?: boolean) => Promise<{ success: boolean; copiedCount?: number; skippedCount?: number; errors?: string[] }>;
+        import: (catalogPath: string, installationPath: string, items: Array<{ kind: string; name?: string; fileName?: string }>, overwrite?: boolean) => Promise<{ success: boolean; copiedCount?: number; skippedCount?: number; errors?: string[] }>;
+        delete: (catalogPath: string, item: { kind: string; name?: string; fileName?: string }) => Promise<{ success: boolean; error?: string }>;
+        importSment: (catalogPath: string, smentPath: string) => Promise<{ success: boolean; copiedCount?: number; errors?: string[] }>;
+        syncDiff: (catalogPath: string, installationPath: string, kinds: Array<'blueprint' | 'exported' | 'template'>) => Promise<{
+          items: Array<{ ref: { kind: string; name?: string; fileName?: string }; label: string; status: 'new' | 'modified' | 'up-to-date'; catalogModifiedMs: number; installModifiedMs: number }>;
+          newCount: number; modifiedCount: number; upToDateCount: number; error?: string;
+        }>;
+        syncApply: (catalogPath: string, items: Array<{ kind: string; name?: string; fileName?: string }>, targetPath: string, overwrite?: boolean) => Promise<{ success: boolean; copiedCount?: number; skippedCount?: number; errors?: string[] }>;
+      };
+
       /** Icon image APIs */
       icons: {
         /** List available icon image paths (file:// URLs). */

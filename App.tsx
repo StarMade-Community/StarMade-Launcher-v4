@@ -4,6 +4,8 @@ import Footer from './components/layout/Footer';
 import News from './components/pages/News';
 import Screenshots from './components/pages/Screenshots';
 import Mods from './components/pages/Mods';
+import Blueprints from './components/pages/Blueprints';
+import Templates from './components/pages/Templates';
 import Installations from './components/pages/Installations';
 import Play from './components/pages/Play';
 import Settings from './components/pages/Settings';
@@ -344,6 +346,10 @@ const App: React.FC = () => {
         return <News />;
       case 'Screenshots':
         return <Screenshots />;
+      case 'Blueprints':
+        return <Blueprints />;
+      case 'Templates':
+        return <Templates />;
       case 'Mods':
         return <Mods />;
       case 'Settings': {

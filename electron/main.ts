@@ -38,6 +38,16 @@ import { isRunningOnWayland } from './wayland-detect.js';
 import { isRunningAsAppImage } from './appimage-detect.js';
 import { registerAppImageDesktopIntegration } from './desktop-integration.js';
 import { parseVersionTxt } from './legacy.js';
+import {
+  listCatalog,
+  listInstallationBlueprints,
+  deployToInstallations,
+  importToCatalog,
+  deleteCatalogItem,
+  importSmentToCatalog,
+  computeSyncDiff,
+} from './blueprints.js';
+import type { CatalogItemRef } from './blueprints.js';
 import { getManagedPathCandidates } from './install-paths.js';
 import { registerRemoteIpcHandlers } from './starmote-ipc.js';
 import { isStarmoteRolloutEnabled } from './starmote-feature-flag.js';
@@ -206,7 +216,7 @@ function loadRendererRoute(
 function createWindow(): void {
   const { height: workAreaHeight } = screen.getPrimaryDisplay().workAreaSize;
   const useShortScreenSizing = workAreaHeight < 720;
-  const initialHeight = useShortScreenSizing ? workAreaHeight : 900;
+  const initialHeight = useShortScreenSizing ? workAreaHeight : 1024;
   const minHeight = useShortScreenSizing ? Math.min(600, workAreaHeight) : 600;
 
   // Resolve the icon path: in packaged builds the icon is copied to
@@ -216,9 +226,9 @@ function createWindow(): void {
   const iconPath = getWindowIconPath();
 
   mainWindow = new BrowserWindow({
-    width: 1280,
+    width: 1460,
     height: initialHeight,
-    minWidth: 960,
+    minWidth: 1024,
     minHeight,
     resizable: true,
     thickFrame: true,
@@ -2493,6 +2503,94 @@ ipcMain.handle(IPC.MODS_IMPORT_MODPACK, async (_event, installationPath: string,
     return { success: false, error: String(error) };
   }
 });
+
+// ─── Blueprint / Template Catalog handlers ──────────────────────────────────
+// All handlers accept an explicit catalogPath from the renderer so the same
+// IPC surface serves both the Blueprints page (blueprintsCatalogPath) and the
+// Templates page (templatesCatalogPath).
+
+ipcMain.handle(IPC.CATALOG_LIST, async (_event, catalogPath: string, invalidate?: boolean) => {
+  if (!catalogPath) return { catalogPath: '', blueprints: [], exported: [], templates: [] };
+  try {
+    return await listCatalog(catalogPath, invalidate);
+  } catch (error) {
+    return { catalogPath, blueprints: [], exported: [], templates: [], error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.CATALOG_LIST_INSTALLATION, async (_event, installationPath: string, invalidate?: boolean) => {
+  try {
+    return await listInstallationBlueprints(installationPath, invalidate);
+  } catch (error) {
+    return { catalogPath: installationPath, blueprints: [], exported: [], templates: [], error: String(error) };
+  }
+});
+
+ipcMain.handle(
+  IPC.CATALOG_DEPLOY,
+  (_event, catalogPath: string, items: CatalogItemRef[], targetPaths: string[], overwrite?: boolean) => {
+    if (!catalogPath) return { success: false, errors: ['No catalog path configured.'] };
+    try {
+      return deployToInstallations(catalogPath, items, targetPaths, overwrite ?? false);
+    } catch (error) {
+      return { success: false, errors: [String(error)] };
+    }
+  },
+);
+
+ipcMain.handle(
+  IPC.CATALOG_IMPORT,
+  (_event, catalogPath: string, installationPath: string, items: CatalogItemRef[], overwrite?: boolean) => {
+    if (!catalogPath) return { success: false, errors: ['No catalog path configured.'] };
+    try {
+      return importToCatalog(installationPath, items, catalogPath, overwrite ?? false);
+    } catch (error) {
+      return { success: false, errors: [String(error)] };
+    }
+  },
+);
+
+ipcMain.handle(IPC.CATALOG_DELETE, (_event, catalogPath: string, item: CatalogItemRef) => {
+  if (!catalogPath) return { success: false, error: 'No catalog path configured.' };
+  try {
+    return deleteCatalogItem(catalogPath, item);
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.CATALOG_IMPORT_SMENT, (_event, catalogPath: string, smentPath: string) => {
+  if (!catalogPath) return { success: false, errors: ['No catalog path configured.'] };
+  try {
+    return importSmentToCatalog(catalogPath, smentPath);
+  } catch (error) {
+    return { success: false, errors: [String(error)] };
+  }
+});
+
+ipcMain.handle(
+  IPC.CATALOG_SYNC_DIFF,
+  async (_event, catalogPath: string, installationPath: string, kinds: Array<'blueprint' | 'exported' | 'template'>) => {
+    if (!catalogPath) return { items: [], newCount: 0, modifiedCount: 0, upToDateCount: 0 };
+    try {
+      return await computeSyncDiff(catalogPath, installationPath, kinds);
+    } catch (error) {
+      return { items: [], newCount: 0, modifiedCount: 0, upToDateCount: 0, error: String(error) };
+    }
+  },
+);
+
+ipcMain.handle(
+  IPC.CATALOG_SYNC_APPLY,
+  (_event, catalogPath: string, items: CatalogItemRef[], targetPath: string, overwrite?: boolean) => {
+    if (!catalogPath) return { success: false, errors: ['No catalog path configured.'] };
+    try {
+      return deployToInstallations(catalogPath, items, [targetPath], overwrite ?? false);
+    } catch (error) {
+      return { success: false, errors: [String(error)] };
+    }
+  },
+);
 
 // ─── Preset assets initialisation ───────────────────────────────────────────
 

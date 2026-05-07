@@ -228,6 +228,52 @@ export type ServerLogLevel = 'INFO' | 'WARNING' | 'ERROR' | 'FATAL' | 'DEBUG' | 
 
 export type LauncherCloseBehavior = 'Close launcher' | 'Hide launcher' | 'Keep the launcher open';
 
+// ─── Blueprint Catalog Types ──────────────────────────────────────────────────
+
+export type BlueprintEntityType = 'SHIP' | 'SPACE_STATION' | 'SHOP' | 'ASTEROID' | 'PLANET' | 'MANAGED_ASTEROID' | 'UNKNOWN';
+
+export interface BlueprintMeta {
+  name: string;
+  type: BlueprintEntityType;
+  classification?: string;
+  boundingBox?: { min: [number, number, number]; max: [number, number, number] };
+  elementCount?: number;
+  sizeBytes: number;
+  modifiedMs: number;
+  dockedCount: number;
+}
+
+export interface ExportedBlueprintMeta {
+  fileName: string;
+  sizeBytes: number;
+  modifiedMs: number;
+}
+
+export interface TemplateMeta {
+  fileName: string;
+  sizeBytes: number;
+  modifiedMs: number;
+}
+
+export interface CatalogListing {
+  catalogPath: string;
+  blueprints: BlueprintMeta[];
+  exported: ExportedBlueprintMeta[];
+  templates: TemplateMeta[];
+}
+
+export type CatalogItemRef =
+  | { kind: 'blueprint'; name: string }
+  | { kind: 'exported'; fileName: string }
+  | { kind: 'template'; fileName: string };
+
+export interface CatalogCopyResult {
+  success: boolean;
+  copiedCount?: number;
+  skippedCount?: number;
+  errors?: string[];
+}
+
 export interface LauncherSettingsData {
   checkForUpdates: boolean;
   useBetaChannel: boolean;
@@ -236,7 +282,7 @@ export interface LauncherSettingsData {
   closeBehavior: LauncherCloseBehavior;
 }
 
-export type Page = 'Play' | 'Installations' | 'News' | 'Screenshots' | 'Mods' | 'Settings' | 'ServerPanel';
+export type Page = 'Play' | 'Installations' | 'News' | 'Screenshots' | 'Mods' | 'Blueprints' | 'Templates' | 'Settings' | 'ServerPanel';
 export type SettingsSection = 'launcher' | 'accounts' | 'about' | 'defaults';
 export type InstallationsTab = 'installations' | 'servers';
 
