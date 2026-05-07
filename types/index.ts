@@ -282,7 +282,7 @@ export interface LauncherSettingsData {
   closeBehavior: LauncherCloseBehavior;
 }
 
-export type Page = 'Play' | 'Installations' | 'News' | 'Screenshots' | 'Mods' | 'Catalog' | 'Settings' | 'ServerPanel';
+export type Page = 'Play' | 'Installations' | 'News' | 'Screenshots' | 'Mods' | 'Blueprints' | 'Templates' | 'Settings' | 'ServerPanel';
 export type SettingsSection = 'launcher' | 'accounts' | 'about' | 'defaults';
 export type InstallationsTab = 'installations' | 'servers';
 

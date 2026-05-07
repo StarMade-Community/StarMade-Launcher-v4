@@ -478,10 +478,9 @@ declare global {
         }>;
       };
 
-      /** Blueprint Catalog APIs */
+      /** Blueprint / Template Catalog APIs — all accept an explicit catalogPath. */
       catalog: {
-        /** List all items in the central blueprint catalog. */
-        list: () => Promise<{
+        list: (catalogPath: string) => Promise<{
           catalogPath: string;
           blueprints: Array<{
             name: string;
@@ -497,7 +496,6 @@ declare global {
           templates: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
           error?: string;
         }>;
-        /** List blueprints/templates in a specific installation. */
         listInstallation: (installationPath: string) => Promise<{
           catalogPath: string;
           blueprints: Array<{
@@ -514,26 +512,15 @@ declare global {
           templates: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
           error?: string;
         }>;
-        /** Deploy items from catalog to one or more installations. */
-        deploy: (
-          items: Array<{ kind: string; name?: string; fileName?: string }>,
-          targetPaths: string[],
-          overwrite?: boolean,
-        ) => Promise<{ success: boolean; copiedCount?: number; skippedCount?: number; errors?: string[] }>;
-        /** Import items from an installation into the catalog. */
-        import: (
-          installationPath: string,
-          items: Array<{ kind: string; name?: string; fileName?: string }>,
-          overwrite?: boolean,
-        ) => Promise<{ success: boolean; copiedCount?: number; skippedCount?: number; errors?: string[] }>;
-        /** Delete an item from the catalog. */
-        delete: (
-          item: { kind: string; name?: string; fileName?: string },
-        ) => Promise<{ success: boolean; error?: string }>;
-        /** Import a .sment file into the catalog (extracts + copies). */
-        importSment: (smentPath: string) => Promise<{
-          success: boolean; copiedCount?: number; errors?: string[];
+        deploy: (catalogPath: string, items: Array<{ kind: string; name?: string; fileName?: string }>, targetPaths: string[], overwrite?: boolean) => Promise<{ success: boolean; copiedCount?: number; skippedCount?: number; errors?: string[] }>;
+        import: (catalogPath: string, installationPath: string, items: Array<{ kind: string; name?: string; fileName?: string }>, overwrite?: boolean) => Promise<{ success: boolean; copiedCount?: number; skippedCount?: number; errors?: string[] }>;
+        delete: (catalogPath: string, item: { kind: string; name?: string; fileName?: string }) => Promise<{ success: boolean; error?: string }>;
+        importSment: (catalogPath: string, smentPath: string) => Promise<{ success: boolean; copiedCount?: number; errors?: string[] }>;
+        syncDiff: (catalogPath: string, installationPath: string, kinds: Array<'blueprint' | 'exported' | 'template'>) => Promise<{
+          items: Array<{ ref: { kind: string; name?: string; fileName?: string }; label: string; status: 'new' | 'modified' | 'up-to-date'; catalogModifiedMs: number; installModifiedMs: number }>;
+          newCount: number; modifiedCount: number; upToDateCount: number; error?: string;
         }>;
+        syncApply: (catalogPath: string, items: Array<{ kind: string; name?: string; fileName?: string }>, targetPath: string, overwrite?: boolean) => Promise<{ success: boolean; copiedCount?: number; skippedCount?: number; errors?: string[] }>;
       };
 
       /** Icon image APIs */

@@ -256,20 +256,24 @@ export const IPC = {
   /** Renderer → Main (invoke): import modpack manifest and download listed mods. */
   MODS_IMPORT_MODPACK: 'mods:import-modpack',
 
-  // ─── Blueprint Catalog ──────────────────────────────────────────────────────
+  // ─── Blueprint / Template Catalog ───────────────────────────────────────────
 
-  /** Renderer → Main (invoke): list all blueprints, exported archives, and templates in the catalog directory. */
+  /** Renderer → Main (invoke): list blueprints, exported archives, and templates in the given catalog directory. */
   CATALOG_LIST: 'catalog:list',
   /** Renderer → Main (invoke): list blueprints/templates in a specific installation's directory. */
   CATALOG_LIST_INSTALLATION: 'catalog:list-installation',
-  /** Renderer → Main (invoke): copy items from catalog to one or more installations. */
+  /** Renderer → Main (invoke): copy items from a catalog directory to one or more installations. */
   CATALOG_DEPLOY: 'catalog:deploy',
-  /** Renderer → Main (invoke): import items from an installation into the catalog. */
+  /** Renderer → Main (invoke): import items from an installation into a catalog directory. */
   CATALOG_IMPORT: 'catalog:import',
-  /** Renderer → Main (invoke): delete a blueprint, exported archive, or template from the catalog. */
+  /** Renderer → Main (invoke): delete a blueprint, exported archive, or template from a catalog directory. */
   CATALOG_DELETE: 'catalog:delete',
-  /** Renderer → Main (invoke): import a .sment file into the catalog (extracts ZIP + copies archive). */
+  /** Renderer → Main (invoke): import a .sment file into the blueprints catalog (extracts ZIP + copies archive). */
   CATALOG_IMPORT_SMENT: 'catalog:import-sment',
+  /** Renderer → Main (invoke): compute sync diff between catalog and installation (items added/removed/modified). */
+  CATALOG_SYNC_DIFF: 'catalog:sync-diff',
+  /** Renderer → Main (invoke): apply a sync from catalog to installation (deploy all, skip conflicts unless overwrite). */
+  CATALOG_SYNC_APPLY: 'catalog:sync-apply',
 
   // ─── Legacy installation detection ──────────────────────────────────────────
 

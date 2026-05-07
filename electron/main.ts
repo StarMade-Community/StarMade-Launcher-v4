@@ -45,6 +45,7 @@ import {
   importToCatalog,
   deleteCatalogItem,
   importSmentToCatalog,
+  computeSyncDiff,
 } from './blueprints.js';
 import type { CatalogItemRef } from './blueprints.js';
 import { getManagedPathCandidates } from './install-paths.js';
@@ -2503,10 +2504,12 @@ ipcMain.handle(IPC.MODS_IMPORT_MODPACK, async (_event, installationPath: string,
   }
 });
 
-// ─── Blueprint Catalog handlers ─────────────────────────────────────────────
+// ─── Blueprint / Template Catalog handlers ──────────────────────────────────
+// All handlers accept an explicit catalogPath from the renderer so the same
+// IPC surface serves both the Blueprints page (blueprintsCatalogPath) and the
+// Templates page (templatesCatalogPath).
 
-ipcMain.handle(IPC.CATALOG_LIST, () => {
-  const catalogPath = storeGet('catalogPath') as string | undefined;
+ipcMain.handle(IPC.CATALOG_LIST, (_event, catalogPath: string) => {
   if (!catalogPath) return { catalogPath: '', blueprints: [], exported: [], templates: [] };
   try {
     return listCatalog(catalogPath);
@@ -2525,8 +2528,7 @@ ipcMain.handle(IPC.CATALOG_LIST_INSTALLATION, (_event, installationPath: string)
 
 ipcMain.handle(
   IPC.CATALOG_DEPLOY,
-  (_event, items: CatalogItemRef[], targetPaths: string[], overwrite?: boolean) => {
-    const catalogPath = storeGet('catalogPath') as string | undefined;
+  (_event, catalogPath: string, items: CatalogItemRef[], targetPaths: string[], overwrite?: boolean) => {
     if (!catalogPath) return { success: false, errors: ['No catalog path configured.'] };
     try {
       return deployToInstallations(catalogPath, items, targetPaths, overwrite ?? false);
@@ -2538,8 +2540,7 @@ ipcMain.handle(
 
 ipcMain.handle(
   IPC.CATALOG_IMPORT,
-  (_event, installationPath: string, items: CatalogItemRef[], overwrite?: boolean) => {
-    const catalogPath = storeGet('catalogPath') as string | undefined;
+  (_event, catalogPath: string, installationPath: string, items: CatalogItemRef[], overwrite?: boolean) => {
     if (!catalogPath) return { success: false, errors: ['No catalog path configured.'] };
     try {
       return importToCatalog(installationPath, items, catalogPath, overwrite ?? false);
@@ -2549,8 +2550,7 @@ ipcMain.handle(
   },
 );
 
-ipcMain.handle(IPC.CATALOG_DELETE, (_event, item: CatalogItemRef) => {
-  const catalogPath = storeGet('catalogPath') as string | undefined;
+ipcMain.handle(IPC.CATALOG_DELETE, (_event, catalogPath: string, item: CatalogItemRef) => {
   if (!catalogPath) return { success: false, error: 'No catalog path configured.' };
   try {
     return deleteCatalogItem(catalogPath, item);
@@ -2559,8 +2559,7 @@ ipcMain.handle(IPC.CATALOG_DELETE, (_event, item: CatalogItemRef) => {
   }
 });
 
-ipcMain.handle(IPC.CATALOG_IMPORT_SMENT, (_event, smentPath: string) => {
-  const catalogPath = storeGet('catalogPath') as string | undefined;
+ipcMain.handle(IPC.CATALOG_IMPORT_SMENT, (_event, catalogPath: string, smentPath: string) => {
   if (!catalogPath) return { success: false, errors: ['No catalog path configured.'] };
   try {
     return importSmentToCatalog(catalogPath, smentPath);
@@ -2568,6 +2567,30 @@ ipcMain.handle(IPC.CATALOG_IMPORT_SMENT, (_event, smentPath: string) => {
     return { success: false, errors: [String(error)] };
   }
 });
+
+ipcMain.handle(
+  IPC.CATALOG_SYNC_DIFF,
+  (_event, catalogPath: string, installationPath: string, kinds: Array<'blueprint' | 'exported' | 'template'>) => {
+    if (!catalogPath) return { items: [], newCount: 0, modifiedCount: 0, upToDateCount: 0 };
+    try {
+      return computeSyncDiff(catalogPath, installationPath, kinds);
+    } catch (error) {
+      return { items: [], newCount: 0, modifiedCount: 0, upToDateCount: 0, error: String(error) };
+    }
+  },
+);
+
+ipcMain.handle(
+  IPC.CATALOG_SYNC_APPLY,
+  (_event, catalogPath: string, items: CatalogItemRef[], targetPath: string, overwrite?: boolean) => {
+    if (!catalogPath) return { success: false, errors: ['No catalog path configured.'] };
+    try {
+      return deployToInstallations(catalogPath, items, [targetPath], overwrite ?? false);
+    } catch (error) {
+      return { success: false, errors: [String(error)] };
+    }
+  },
+);
 
 // ─── Preset assets initialisation ───────────────────────────────────────────
 

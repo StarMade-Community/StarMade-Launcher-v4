@@ -801,10 +801,11 @@ const launcherApi = {
     }> => ipcRenderer.invoke(IPC.MODS_IMPORT_MODPACK, installationPath, manifestPath),
   },
 
-  /** Blueprint Catalog APIs */
+  /** Blueprint / Template Catalog APIs — all accept an explicit catalogPath so the
+   *  same surface serves both the Blueprints page and the Templates page. */
   catalog: {
-    /** List all items in the central blueprint catalog. */
-    list: (): Promise<{
+    /** List all items in a catalog directory. */
+    list: (catalogPath: string): Promise<{
       catalogPath: string;
       blueprints: Array<{
         name: string;
@@ -819,7 +820,7 @@ const launcherApi = {
       exported: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
       templates: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
       error?: string;
-    }> => ipcRenderer.invoke(IPC.CATALOG_LIST),
+    }> => ipcRenderer.invoke(IPC.CATALOG_LIST, catalogPath),
 
     /** List blueprints/templates in a specific installation. */
     listInstallation: (installationPath: string): Promise<{
@@ -839,32 +840,63 @@ const launcherApi = {
       error?: string;
     }> => ipcRenderer.invoke(IPC.CATALOG_LIST_INSTALLATION, installationPath),
 
-    /** Deploy items from catalog to one or more installations. */
+    /** Deploy items from a catalog directory to one or more installations. */
     deploy: (
+      catalogPath: string,
       items: Array<{ kind: string; name?: string; fileName?: string }>,
       targetPaths: string[],
       overwrite?: boolean,
     ): Promise<{ success: boolean; copiedCount?: number; skippedCount?: number; errors?: string[] }> =>
-      ipcRenderer.invoke(IPC.CATALOG_DEPLOY, items, targetPaths, overwrite),
+      ipcRenderer.invoke(IPC.CATALOG_DEPLOY, catalogPath, items, targetPaths, overwrite),
 
-    /** Import items from an installation into the catalog. */
+    /** Import items from an installation into a catalog directory. */
     import: (
+      catalogPath: string,
       installationPath: string,
       items: Array<{ kind: string; name?: string; fileName?: string }>,
       overwrite?: boolean,
     ): Promise<{ success: boolean; copiedCount?: number; skippedCount?: number; errors?: string[] }> =>
-      ipcRenderer.invoke(IPC.CATALOG_IMPORT, installationPath, items, overwrite),
+      ipcRenderer.invoke(IPC.CATALOG_IMPORT, catalogPath, installationPath, items, overwrite),
 
-    /** Delete an item from the catalog. */
+    /** Delete an item from a catalog directory. */
     delete: (
+      catalogPath: string,
       item: { kind: string; name?: string; fileName?: string },
     ): Promise<{ success: boolean; error?: string }> =>
-      ipcRenderer.invoke(IPC.CATALOG_DELETE, item),
+      ipcRenderer.invoke(IPC.CATALOG_DELETE, catalogPath, item),
 
-    /** Import a .sment file into the catalog (extracts + copies). */
-    importSment: (smentPath: string): Promise<{
+    /** Import a .sment file into a catalog directory (extracts + copies). */
+    importSment: (catalogPath: string, smentPath: string): Promise<{
       success: boolean; copiedCount?: number; errors?: string[];
-    }> => ipcRenderer.invoke(IPC.CATALOG_IMPORT_SMENT, smentPath),
+    }> => ipcRenderer.invoke(IPC.CATALOG_IMPORT_SMENT, catalogPath, smentPath),
+
+    /** Compute sync diff between catalog and installation. */
+    syncDiff: (
+      catalogPath: string,
+      installationPath: string,
+      kinds: Array<'blueprint' | 'exported' | 'template'>,
+    ): Promise<{
+      items: Array<{
+        ref: { kind: string; name?: string; fileName?: string };
+        label: string;
+        status: 'new' | 'modified' | 'up-to-date';
+        catalogModifiedMs: number;
+        installModifiedMs: number;
+      }>;
+      newCount: number;
+      modifiedCount: number;
+      upToDateCount: number;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.CATALOG_SYNC_DIFF, catalogPath, installationPath, kinds),
+
+    /** Apply sync: deploy items from catalog to installation. */
+    syncApply: (
+      catalogPath: string,
+      items: Array<{ kind: string; name?: string; fileName?: string }>,
+      targetPath: string,
+      overwrite?: boolean,
+    ): Promise<{ success: boolean; copiedCount?: number; skippedCount?: number; errors?: string[] }> =>
+      ipcRenderer.invoke(IPC.CATALOG_SYNC_APPLY, catalogPath, items, targetPath, overwrite),
   },
 
   /** Legacy installation detection APIs */

@@ -5,6 +5,7 @@ import News from './components/pages/News';
 import Screenshots from './components/pages/Screenshots';
 import Mods from './components/pages/Mods';
 import Blueprints from './components/pages/Blueprints';
+import Templates from './components/pages/Templates';
 import Installations from './components/pages/Installations';
 import Play from './components/pages/Play';
 import Settings from './components/pages/Settings';
@@ -347,8 +348,10 @@ const App: React.FC = () => {
         return <Screenshots />;
       case 'Mods':
         return <Mods />;
-      case 'Catalog':
+      case 'Blueprints':
         return <Blueprints />;
+      case 'Templates':
+        return <Templates />;
       case 'Settings': {
         const settingsProps = 'initialSection' in pageProps ? pageProps : {};
         return <Settings {...settingsProps} />;

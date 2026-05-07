@@ -465,3 +465,90 @@ function resolveItemSingle(root: string, item: CatalogItemRef): string {
 function itemLabel(item: CatalogItemRef): string {
   return item.kind === 'blueprint' ? item.name : ('fileName' in item ? item.fileName : '');
 }
+
+// ─── Sync Diff ───────────────────────────────────────────────────────────────
+
+export interface SyncDiffItem {
+  ref: CatalogItemRef;
+  label: string;
+  status: 'new' | 'modified' | 'up-to-date';
+  catalogModifiedMs: number;
+  installModifiedMs: number;
+}
+
+export interface SyncDiff {
+  items: SyncDiffItem[];
+  newCount: number;
+  modifiedCount: number;
+  upToDateCount: number;
+}
+
+/**
+ * Compare a catalog directory against an installation directory and return
+ * which items are new, modified (catalog is newer), or already up-to-date.
+ */
+export function computeSyncDiff(
+  catalogPath: string,
+  installPath: string,
+  kinds: Array<'blueprint' | 'exported' | 'template'>,
+): SyncDiff {
+  const items: SyncDiffItem[] = [];
+
+  if (kinds.includes('blueprint')) {
+    const catBlueprints = scanBlueprints(catalogPath);
+    const instBlueprints = scanBlueprints(installPath);
+    const instMap = new Map(instBlueprints.map((b) => [b.name, b]));
+    for (const bp of catBlueprints) {
+      const inst = instMap.get(bp.name);
+      const ref: CatalogItemRef = { kind: 'blueprint', name: bp.name };
+      if (!inst) {
+        items.push({ ref, label: bp.name, status: 'new', catalogModifiedMs: bp.modifiedMs, installModifiedMs: 0 });
+      } else if (bp.modifiedMs > inst.modifiedMs) {
+        items.push({ ref, label: bp.name, status: 'modified', catalogModifiedMs: bp.modifiedMs, installModifiedMs: inst.modifiedMs });
+      } else {
+        items.push({ ref, label: bp.name, status: 'up-to-date', catalogModifiedMs: bp.modifiedMs, installModifiedMs: inst.modifiedMs });
+      }
+    }
+  }
+
+  if (kinds.includes('exported')) {
+    const catExp = scanExported(catalogPath);
+    const instExp = scanExported(installPath);
+    const instMap = new Map(instExp.map((e) => [e.fileName, e]));
+    for (const exp of catExp) {
+      const inst = instMap.get(exp.fileName);
+      const ref: CatalogItemRef = { kind: 'exported', fileName: exp.fileName };
+      if (!inst) {
+        items.push({ ref, label: exp.fileName, status: 'new', catalogModifiedMs: exp.modifiedMs, installModifiedMs: 0 });
+      } else if (exp.modifiedMs > inst.modifiedMs) {
+        items.push({ ref, label: exp.fileName, status: 'modified', catalogModifiedMs: exp.modifiedMs, installModifiedMs: inst.modifiedMs });
+      } else {
+        items.push({ ref, label: exp.fileName, status: 'up-to-date', catalogModifiedMs: exp.modifiedMs, installModifiedMs: inst.modifiedMs });
+      }
+    }
+  }
+
+  if (kinds.includes('template')) {
+    const catTpl = scanTemplates(catalogPath);
+    const instTpl = scanTemplates(installPath);
+    const instMap = new Map(instTpl.map((t) => [t.fileName, t]));
+    for (const tpl of catTpl) {
+      const inst = instMap.get(tpl.fileName);
+      const ref: CatalogItemRef = { kind: 'template', fileName: tpl.fileName };
+      if (!inst) {
+        items.push({ ref, label: tpl.fileName, status: 'new', catalogModifiedMs: tpl.modifiedMs, installModifiedMs: 0 });
+      } else if (tpl.modifiedMs > inst.modifiedMs) {
+        items.push({ ref, label: tpl.fileName, status: 'modified', catalogModifiedMs: tpl.modifiedMs, installModifiedMs: inst.modifiedMs });
+      } else {
+        items.push({ ref, label: tpl.fileName, status: 'up-to-date', catalogModifiedMs: tpl.modifiedMs, installModifiedMs: inst.modifiedMs });
+      }
+    }
+  }
+
+  return {
+    items,
+    newCount: items.filter((i) => i.status === 'new').length,
+    modifiedCount: items.filter((i) => i.status === 'modified').length,
+    upToDateCount: items.filter((i) => i.status === 'up-to-date').length,
+  };
+}

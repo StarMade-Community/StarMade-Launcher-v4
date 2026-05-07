@@ -95,8 +95,11 @@ const LauncherSettings: React.FC = () => {
     const [isLoadingBackups, setIsLoadingBackups] = useState(false);
     const [isRestoringBackup, setIsRestoringBackup] = useState(false);
 
-    // ── Blueprint catalog path ──────────────────────────────────────────────
-    const [catalogPath, setCatalogPath] = useState<string>('');
+    // ── Blueprint / Template catalog paths ─────────────────────────────────
+    const [blueprintsCatalogPath, setBlueprintsCatalogPath] = useState<string>('');
+    const [templatesCatalogPath, setTemplatesCatalogPath] = useState<string>('');
+    const [autoSyncBlueprints, setAutoSyncBlueprints] = useState(false);
+    const [autoSyncTemplates, setAutoSyncTemplates] = useState(false);
 
     const languageOptions = [
         { value: 'English', label: 'English' }, //Todo: Support other languages, and maybe have this set the game's language if possible
@@ -138,9 +141,18 @@ const LauncherSettings: React.FC = () => {
                 .catch(() => {});
         }
         
-        // Load catalog path
-        window.launcher.store.get('catalogPath').then((val) => {
-            if (typeof val === 'string') setCatalogPath(val);
+        // Load catalog paths and sync settings
+        window.launcher.store.get('blueprintsCatalogPath').then((val) => {
+            if (typeof val === 'string') setBlueprintsCatalogPath(val);
+        }).catch(() => {});
+        window.launcher.store.get('templatesCatalogPath').then((val) => {
+            if (typeof val === 'string') setTemplatesCatalogPath(val);
+        }).catch(() => {});
+        window.launcher.store.get('autoSyncBlueprints').then((val) => {
+            if (typeof val === 'boolean') setAutoSyncBlueprints(val);
+        }).catch(() => {});
+        window.launcher.store.get('autoSyncTemplates').then((val) => {
+            if (typeof val === 'boolean') setAutoSyncTemplates(val);
         }).catch(() => {});
 
         // Load Java runtimes
@@ -734,17 +746,17 @@ const LauncherSettings: React.FC = () => {
 
                 <div className="mt-8">
                     <h2 className="font-display text-xl font-bold uppercase tracking-wider text-starmade-text-accent mb-4 pb-2 border-b-2 border-starmade-accent/30">
-                        Blueprint Catalog
+                        Blueprints &amp; Templates
                     </h2>
                     <div className="space-y-4">
                         <SettingRow
-                            title="Catalog Directory"
-                            description="Central directory for storing and sharing blueprints and templates across installations."
+                            title="Blueprints Catalog Directory"
+                            description="Central directory for storing and sharing blueprints across installations."
                         >
                             <div className="flex items-center gap-2">
-                                {catalogPath && (
+                                {blueprintsCatalogPath && (
                                     <button
-                                        onClick={() => window.launcher?.shell?.openPath(catalogPath)}
+                                        onClick={() => window.launcher?.shell?.openPath(blueprintsCatalogPath)}
                                         className="px-3 py-2 rounded-md bg-slate-700 hover:bg-slate-600 text-sm transition-colors"
                                         title="Open in file manager"
                                     >
@@ -753,10 +765,10 @@ const LauncherSettings: React.FC = () => {
                                 )}
                                 <button
                                     onClick={async () => {
-                                        const selected = await window.launcher?.dialog?.openFolder(catalogPath || undefined);
+                                        const selected = await window.launcher?.dialog?.openFolder(blueprintsCatalogPath || undefined);
                                         if (selected) {
-                                            setCatalogPath(selected);
-                                            await window.launcher?.store?.set('catalogPath', selected);
+                                            setBlueprintsCatalogPath(selected);
+                                            await window.launcher?.store?.set('blueprintsCatalogPath', selected);
                                         }
                                     }}
                                     className="px-4 py-2 rounded-md bg-starmade-accent hover:bg-starmade-accent/80 transition-colors text-sm font-semibold uppercase tracking-wider"
@@ -765,12 +777,70 @@ const LauncherSettings: React.FC = () => {
                                 </button>
                             </div>
                         </SettingRow>
-                        {catalogPath && (
+                        {blueprintsCatalogPath && (
                             <div className="bg-black/20 p-3 rounded-lg border border-white/10">
-                                <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Current Path</p>
-                                <p className="text-sm text-gray-200 font-mono break-all">{catalogPath}</p>
+                                <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Blueprints Path</p>
+                                <p className="text-sm text-gray-200 font-mono break-all">{blueprintsCatalogPath}</p>
                             </div>
                         )}
+                        <SettingRow
+                            title="Templates Catalog Directory"
+                            description="Central directory for storing and sharing templates across installations."
+                        >
+                            <div className="flex items-center gap-2">
+                                {templatesCatalogPath && (
+                                    <button
+                                        onClick={() => window.launcher?.shell?.openPath(templatesCatalogPath)}
+                                        className="px-3 py-2 rounded-md bg-slate-700 hover:bg-slate-600 text-sm transition-colors"
+                                        title="Open in file manager"
+                                    >
+                                        <FolderIcon className="w-4 h-4" />
+                                    </button>
+                                )}
+                                <button
+                                    onClick={async () => {
+                                        const selected = await window.launcher?.dialog?.openFolder(templatesCatalogPath || undefined);
+                                        if (selected) {
+                                            setTemplatesCatalogPath(selected);
+                                            await window.launcher?.store?.set('templatesCatalogPath', selected);
+                                        }
+                                    }}
+                                    className="px-4 py-2 rounded-md bg-starmade-accent hover:bg-starmade-accent/80 transition-colors text-sm font-semibold uppercase tracking-wider"
+                                >
+                                    Browse
+                                </button>
+                            </div>
+                        </SettingRow>
+                        {templatesCatalogPath && (
+                            <div className="bg-black/20 p-3 rounded-lg border border-white/10">
+                                <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Templates Path</p>
+                                <p className="text-sm text-gray-200 font-mono break-all">{templatesCatalogPath}</p>
+                            </div>
+                        )}
+                        <SettingRow
+                            title="Auto-Sync Blueprints"
+                            description="Automatically sync blueprints from catalog to installations on launch. Conflicts will prompt for confirmation."
+                        >
+                            <ToggleSwitch
+                                checked={autoSyncBlueprints}
+                                onChange={async (val) => {
+                                    setAutoSyncBlueprints(val);
+                                    await window.launcher?.store?.set('autoSyncBlueprints', val);
+                                }}
+                            />
+                        </SettingRow>
+                        <SettingRow
+                            title="Auto-Sync Templates"
+                            description="Automatically sync templates from catalog to installations on launch. Conflicts will prompt for confirmation."
+                        >
+                            <ToggleSwitch
+                                checked={autoSyncTemplates}
+                                onChange={async (val) => {
+                                    setAutoSyncTemplates(val);
+                                    await window.launcher?.store?.set('autoSyncTemplates', val);
+                                }}
+                            />
+                        </SettingRow>
                     </div>
                 </div>
 
