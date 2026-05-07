@@ -801,6 +801,72 @@ const launcherApi = {
     }> => ipcRenderer.invoke(IPC.MODS_IMPORT_MODPACK, installationPath, manifestPath),
   },
 
+  /** Blueprint Catalog APIs */
+  catalog: {
+    /** List all items in the central blueprint catalog. */
+    list: (): Promise<{
+      catalogPath: string;
+      blueprints: Array<{
+        name: string;
+        type: string;
+        classification?: string;
+        boundingBox?: { min: [number, number, number]; max: [number, number, number] };
+        elementCount?: number;
+        sizeBytes: number;
+        modifiedMs: number;
+        dockedCount: number;
+      }>;
+      exported: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
+      templates: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.CATALOG_LIST),
+
+    /** List blueprints/templates in a specific installation. */
+    listInstallation: (installationPath: string): Promise<{
+      catalogPath: string;
+      blueprints: Array<{
+        name: string;
+        type: string;
+        classification?: string;
+        boundingBox?: { min: [number, number, number]; max: [number, number, number] };
+        elementCount?: number;
+        sizeBytes: number;
+        modifiedMs: number;
+        dockedCount: number;
+      }>;
+      exported: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
+      templates: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.CATALOG_LIST_INSTALLATION, installationPath),
+
+    /** Deploy items from catalog to one or more installations. */
+    deploy: (
+      items: Array<{ kind: string; name?: string; fileName?: string }>,
+      targetPaths: string[],
+      overwrite?: boolean,
+    ): Promise<{ success: boolean; copiedCount?: number; skippedCount?: number; errors?: string[] }> =>
+      ipcRenderer.invoke(IPC.CATALOG_DEPLOY, items, targetPaths, overwrite),
+
+    /** Import items from an installation into the catalog. */
+    import: (
+      installationPath: string,
+      items: Array<{ kind: string; name?: string; fileName?: string }>,
+      overwrite?: boolean,
+    ): Promise<{ success: boolean; copiedCount?: number; skippedCount?: number; errors?: string[] }> =>
+      ipcRenderer.invoke(IPC.CATALOG_IMPORT, installationPath, items, overwrite),
+
+    /** Delete an item from the catalog. */
+    delete: (
+      item: { kind: string; name?: string; fileName?: string },
+    ): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.CATALOG_DELETE, item),
+
+    /** Import a .sment file into the catalog (extracts + copies). */
+    importSment: (smentPath: string): Promise<{
+      success: boolean; copiedCount?: number; errors?: string[];
+    }> => ipcRenderer.invoke(IPC.CATALOG_IMPORT_SMENT, smentPath),
+  },
+
   /** Legacy installation detection APIs */
   legacy: {
     /** Scan the current and sub-directories for legacy StarMade installations (containing StarMade.jar). */

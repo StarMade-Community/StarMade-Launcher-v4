@@ -95,6 +95,9 @@ const LauncherSettings: React.FC = () => {
     const [isLoadingBackups, setIsLoadingBackups] = useState(false);
     const [isRestoringBackup, setIsRestoringBackup] = useState(false);
 
+    // ── Blueprint catalog path ──────────────────────────────────────────────
+    const [catalogPath, setCatalogPath] = useState<string>('');
+
     const languageOptions = [
         { value: 'English', label: 'English' }, //Todo: Support other languages, and maybe have this set the game's language if possible
     ];
@@ -135,6 +138,11 @@ const LauncherSettings: React.FC = () => {
                 .catch(() => {});
         }
         
+        // Load catalog path
+        window.launcher.store.get('catalogPath').then((val) => {
+            if (typeof val === 'string') setCatalogPath(val);
+        }).catch(() => {});
+
         // Load Java runtimes
         loadJavaRuntimes();
 
@@ -722,6 +730,48 @@ const LauncherSettings: React.FC = () => {
                             })}
                         </div>
                     )}
+                </div>
+
+                <div className="mt-8">
+                    <h2 className="font-display text-xl font-bold uppercase tracking-wider text-starmade-text-accent mb-4 pb-2 border-b-2 border-starmade-accent/30">
+                        Blueprint Catalog
+                    </h2>
+                    <div className="space-y-4">
+                        <SettingRow
+                            title="Catalog Directory"
+                            description="Central directory for storing and sharing blueprints and templates across installations."
+                        >
+                            <div className="flex items-center gap-2">
+                                {catalogPath && (
+                                    <button
+                                        onClick={() => window.launcher?.shell?.openPath(catalogPath)}
+                                        className="px-3 py-2 rounded-md bg-slate-700 hover:bg-slate-600 text-sm transition-colors"
+                                        title="Open in file manager"
+                                    >
+                                        <FolderIcon className="w-4 h-4" />
+                                    </button>
+                                )}
+                                <button
+                                    onClick={async () => {
+                                        const selected = await window.launcher?.dialog?.openFolder(catalogPath || undefined);
+                                        if (selected) {
+                                            setCatalogPath(selected);
+                                            await window.launcher?.store?.set('catalogPath', selected);
+                                        }
+                                    }}
+                                    className="px-4 py-2 rounded-md bg-starmade-accent hover:bg-starmade-accent/80 transition-colors text-sm font-semibold uppercase tracking-wider"
+                                >
+                                    Browse
+                                </button>
+                            </div>
+                        </SettingRow>
+                        {catalogPath && (
+                            <div className="bg-black/20 p-3 rounded-lg border border-white/10">
+                                <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Current Path</p>
+                                <p className="text-sm text-gray-200 font-mono break-all">{catalogPath}</p>
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 <div className="mt-8">

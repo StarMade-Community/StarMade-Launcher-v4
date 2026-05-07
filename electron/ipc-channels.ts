@@ -256,6 +256,21 @@ export const IPC = {
   /** Renderer → Main (invoke): import modpack manifest and download listed mods. */
   MODS_IMPORT_MODPACK: 'mods:import-modpack',
 
+  // ─── Blueprint Catalog ──────────────────────────────────────────────────────
+
+  /** Renderer → Main (invoke): list all blueprints, exported archives, and templates in the catalog directory. */
+  CATALOG_LIST: 'catalog:list',
+  /** Renderer → Main (invoke): list blueprints/templates in a specific installation's directory. */
+  CATALOG_LIST_INSTALLATION: 'catalog:list-installation',
+  /** Renderer → Main (invoke): copy items from catalog to one or more installations. */
+  CATALOG_DEPLOY: 'catalog:deploy',
+  /** Renderer → Main (invoke): import items from an installation into the catalog. */
+  CATALOG_IMPORT: 'catalog:import',
+  /** Renderer → Main (invoke): delete a blueprint, exported archive, or template from the catalog. */
+  CATALOG_DELETE: 'catalog:delete',
+  /** Renderer → Main (invoke): import a .sment file into the catalog (extracts ZIP + copies archive). */
+  CATALOG_IMPORT_SMENT: 'catalog:import-sment',
+
   // ─── Legacy installation detection ──────────────────────────────────────────
 
   /** Renderer → Main (invoke): scan current and sub-directories for legacy StarMade installs (StarMade.jar). */

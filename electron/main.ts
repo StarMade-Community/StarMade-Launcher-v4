@@ -38,6 +38,15 @@ import { isRunningOnWayland } from './wayland-detect.js';
 import { isRunningAsAppImage } from './appimage-detect.js';
 import { registerAppImageDesktopIntegration } from './desktop-integration.js';
 import { parseVersionTxt } from './legacy.js';
+import {
+  listCatalog,
+  listInstallationBlueprints,
+  deployToInstallations,
+  importToCatalog,
+  deleteCatalogItem,
+  importSmentToCatalog,
+} from './blueprints.js';
+import type { CatalogItemRef } from './blueprints.js';
 import { getManagedPathCandidates } from './install-paths.js';
 import { registerRemoteIpcHandlers } from './starmote-ipc.js';
 import { isStarmoteRolloutEnabled } from './starmote-feature-flag.js';
@@ -2491,6 +2500,72 @@ ipcMain.handle(IPC.MODS_IMPORT_MODPACK, async (_event, installationPath: string,
     };
   } catch (error) {
     return { success: false, error: String(error) };
+  }
+});
+
+// ─── Blueprint Catalog handlers ─────────────────────────────────────────────
+
+ipcMain.handle(IPC.CATALOG_LIST, () => {
+  const catalogPath = storeGet('catalogPath') as string | undefined;
+  if (!catalogPath) return { catalogPath: '', blueprints: [], exported: [], templates: [] };
+  try {
+    return listCatalog(catalogPath);
+  } catch (error) {
+    return { catalogPath, blueprints: [], exported: [], templates: [], error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.CATALOG_LIST_INSTALLATION, (_event, installationPath: string) => {
+  try {
+    return listInstallationBlueprints(installationPath);
+  } catch (error) {
+    return { catalogPath: installationPath, blueprints: [], exported: [], templates: [], error: String(error) };
+  }
+});
+
+ipcMain.handle(
+  IPC.CATALOG_DEPLOY,
+  (_event, items: CatalogItemRef[], targetPaths: string[], overwrite?: boolean) => {
+    const catalogPath = storeGet('catalogPath') as string | undefined;
+    if (!catalogPath) return { success: false, errors: ['No catalog path configured.'] };
+    try {
+      return deployToInstallations(catalogPath, items, targetPaths, overwrite ?? false);
+    } catch (error) {
+      return { success: false, errors: [String(error)] };
+    }
+  },
+);
+
+ipcMain.handle(
+  IPC.CATALOG_IMPORT,
+  (_event, installationPath: string, items: CatalogItemRef[], overwrite?: boolean) => {
+    const catalogPath = storeGet('catalogPath') as string | undefined;
+    if (!catalogPath) return { success: false, errors: ['No catalog path configured.'] };
+    try {
+      return importToCatalog(installationPath, items, catalogPath, overwrite ?? false);
+    } catch (error) {
+      return { success: false, errors: [String(error)] };
+    }
+  },
+);
+
+ipcMain.handle(IPC.CATALOG_DELETE, (_event, item: CatalogItemRef) => {
+  const catalogPath = storeGet('catalogPath') as string | undefined;
+  if (!catalogPath) return { success: false, error: 'No catalog path configured.' };
+  try {
+    return deleteCatalogItem(catalogPath, item);
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.CATALOG_IMPORT_SMENT, (_event, smentPath: string) => {
+  const catalogPath = storeGet('catalogPath') as string | undefined;
+  if (!catalogPath) return { success: false, errors: ['No catalog path configured.'] };
+  try {
+    return importSmentToCatalog(catalogPath, smentPath);
+  } catch (error) {
+    return { success: false, errors: [String(error)] };
   }
 });
 

@@ -478,6 +478,64 @@ declare global {
         }>;
       };
 
+      /** Blueprint Catalog APIs */
+      catalog: {
+        /** List all items in the central blueprint catalog. */
+        list: () => Promise<{
+          catalogPath: string;
+          blueprints: Array<{
+            name: string;
+            type: string;
+            classification?: string;
+            boundingBox?: { min: [number, number, number]; max: [number, number, number] };
+            elementCount?: number;
+            sizeBytes: number;
+            modifiedMs: number;
+            dockedCount: number;
+          }>;
+          exported: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
+          templates: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
+          error?: string;
+        }>;
+        /** List blueprints/templates in a specific installation. */
+        listInstallation: (installationPath: string) => Promise<{
+          catalogPath: string;
+          blueprints: Array<{
+            name: string;
+            type: string;
+            classification?: string;
+            boundingBox?: { min: [number, number, number]; max: [number, number, number] };
+            elementCount?: number;
+            sizeBytes: number;
+            modifiedMs: number;
+            dockedCount: number;
+          }>;
+          exported: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
+          templates: Array<{ fileName: string; sizeBytes: number; modifiedMs: number }>;
+          error?: string;
+        }>;
+        /** Deploy items from catalog to one or more installations. */
+        deploy: (
+          items: Array<{ kind: string; name?: string; fileName?: string }>,
+          targetPaths: string[],
+          overwrite?: boolean,
+        ) => Promise<{ success: boolean; copiedCount?: number; skippedCount?: number; errors?: string[] }>;
+        /** Import items from an installation into the catalog. */
+        import: (
+          installationPath: string,
+          items: Array<{ kind: string; name?: string; fileName?: string }>,
+          overwrite?: boolean,
+        ) => Promise<{ success: boolean; copiedCount?: number; skippedCount?: number; errors?: string[] }>;
+        /** Delete an item from the catalog. */
+        delete: (
+          item: { kind: string; name?: string; fileName?: string },
+        ) => Promise<{ success: boolean; error?: string }>;
+        /** Import a .sment file into the catalog (extracts + copies). */
+        importSment: (smentPath: string) => Promise<{
+          success: boolean; copiedCount?: number; errors?: string[];
+        }>;
+      };
+
       /** Icon image APIs */
       icons: {
         /** List available icon image paths (file:// URLs). */
