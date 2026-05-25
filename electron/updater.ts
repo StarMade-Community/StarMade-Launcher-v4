@@ -221,7 +221,7 @@ export async function checkForUpdates(
   let assetUrl: string | undefined;
   let assetName: string | undefined;
 
-  if (available && Array.isArray(release.assets)) {
+  if (Array.isArray(release.assets)) {
     const assets = release.assets as Array<{ name: string; browser_download_url: string }>;
     // Prefer the app.asar asset for silent update
     const asarAsset = findAsarAsset(assets);
