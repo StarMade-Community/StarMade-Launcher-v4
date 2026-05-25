@@ -38,6 +38,15 @@ const TIMEOUT_MS = 30_000;
 const ASAR_ASSET_NAME = 'app.asar';
 const UPDATE_FILE_NAME = 'app_update.asar';
 
+/**
+ * Persistent directory for storing the downloaded update between launches.
+ * The portable .exe extracts to a new temp directory each time, so we
+ * cannot rely on the resources dir being the same across restarts.
+ */
+function getUpdateStageDir(): string {
+  return app.getPath('userData');
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface UpdateInfo {
@@ -269,8 +278,8 @@ export async function downloadUpdate(
   _assetName: string,
   onProgress: (progress: DownloadProgress) => void
 ): Promise<string> {
-  const resourcesDir = getResourcesDir();
-  const destPath = path.join(resourcesDir, UPDATE_FILE_NAME);
+  const stageDir = getUpdateStageDir();
+  const destPath = path.join(stageDir, UPDATE_FILE_NAME);
 
   // Remove a stale partial download if present
   try { fs.unlinkSync(destPath); } catch { /* ignore */ }
