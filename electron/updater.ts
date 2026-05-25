@@ -136,7 +136,15 @@ function httpGetStream(
     const isHttps = url.startsWith('https');
     const lib: typeof https = isHttps ? https : (http as unknown as typeof https);
 
-    const req = lib.get(url, { timeout: TIMEOUT_MS }, res => {
+    const reqOptions = {
+      timeout: TIMEOUT_MS,
+      headers: {
+        'User-Agent': 'StarMade-Launcher',
+        Accept: 'application/octet-stream',
+      },
+    };
+
+    const req = lib.get(url, reqOptions, res => {
       if (
         res.statusCode &&
         res.statusCode >= 300 &&
@@ -286,6 +294,30 @@ export async function downloadUpdate(
     writeStream.on('error', reject);
     res.on('error', reject);
   });
+
+  // Validate that the downloaded file is actually an ASAR archive.
+  // ASAR files start with a 4-byte LE uint32 header size. If we got
+  // an HTML error page or a JSON API response instead, catch it now
+  // rather than crashing on next launch.
+  const fd = fs.openSync(destPath, 'r');
+  try {
+    const header = Buffer.alloc(16);
+    fs.readSync(fd, header, 0, 16, 0);
+    // ASAR header: 4 bytes pickle size, 4 bytes header-string size,
+    // then another pickle containing JSON starting with '{"files"'.
+    // A quick sanity check: the file must not start with '<' (HTML)
+    // or '{' at byte 0 (raw JSON), and must be > 1 KB.
+    const firstByte = header[0];
+    const fileSize = fs.fstatSync(fd).size;
+    if (fileSize < 1024 || firstByte === 0x3C /* < */ || firstByte === 0x7B /* { */) {
+      fs.closeSync(fd);
+      try { fs.unlinkSync(destPath); } catch { /* ignore */ }
+      const preview = fs.existsSync(destPath) ? '' : ` (first byte: 0x${firstByte.toString(16)}, size: ${fileSize})`;
+      throw new Error(`Downloaded file is not a valid ASAR package${preview}`);
+    }
+  } finally {
+    try { fs.closeSync(fd); } catch { /* ignore */ }
+  }
 
   return destPath;
 }

@@ -147,7 +147,7 @@ const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
 
     if (!isOpen || !updateInfo) return null;
 
-    const canSilentInstall = Boolean(updateInfo.assetUrl);
+    const canSilentInstall = Boolean(updateInfo.assetUrl) && updateInfo.assetName === 'app.asar';
 
     const formatBytes = (b: number) => {
         if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
