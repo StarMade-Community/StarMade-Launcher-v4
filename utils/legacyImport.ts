@@ -117,7 +117,7 @@ export async function buildLegacyImportedInstallation(
 
   const folderName = normalizedPath.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? 'legacy-install';
   const matchedVersion = versions.find(candidate => candidate.id === version);
-  const detectedType = matchedVersion?.type ?? 'archive';
+  const detectedType = matchedVersion?.type ?? 'release';
 
   return {
     id: createManagedInstallationId(),

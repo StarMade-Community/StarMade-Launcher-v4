@@ -2701,6 +2701,13 @@ function getLegacyAutoDetectRoots(): Array<{ root: string; maxDepth: number }> {
 
   const homeDir = os.homedir();
 
+  // The directory containing the launcher executable.  When launched via Steam
+  // this is the game's install folder (e.g. steamapps/common/StarMade/) where
+  // the old install's StarMade.jar + version.txt live alongside the new launcher.
+  // Depth 2 covers the typical Steam layout where the install is in a
+  // subdirectory (e.g. steamapps/common/StarMade/StarMade/StarMade.jar).
+  addRoot(path.dirname(process.execPath), 2);
+
   // Dev-only: app-local roots are unreliable in packaged builds.
   // process.cwd() is often '/' on macOS packaged apps; app.getAppPath() points
   // inside the .asar bundle and is useless for finding user installs.
@@ -2760,7 +2767,17 @@ async function findLegacyInstalls(dir: string, maxDepth = 4, depth = 0): Promise
       }
     }
 
-    if (hasJar) results.unshift(dir);
+    // Only treat as a valid install if StarMade.jar exists alongside
+    // version.txt — a bare jar (e.g. in a Downloads folder) is not enough.
+    if (hasJar) {
+      try {
+        await fs.promises.access(path.join(dir, 'version.txt'), fs.constants.F_OK);
+        results.unshift(dir);
+      } catch {
+        // No version.txt → not a real install, skip this directory.
+      }
+    }
+
     return results;
   } catch {
     return [];
