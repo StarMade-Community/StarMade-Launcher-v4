@@ -35,7 +35,7 @@ const GameUpdateNotice: React.FC = () => {
 
     if (ignoredUpdates[selectedInstallation.id] === latest.id) return null;
 
-    return { from: currentVersion, to: latest.id, toName: latest.name };
+    return { from: currentVersion, to: latest.id, toName: latest.name, target: latest };
   }, [selectedInstallation, versions, ignoredUpdates]);
 
   useEffect(() => {
@@ -44,7 +44,16 @@ const GameUpdateNotice: React.FC = () => {
 
   const applyUpdate = useCallback(() => {
     if (!selectedInstallation || !availableUpdate) return;
-    updateInstallation({ ...selectedInstallation, version: availableUpdate.to, installed: false });
+    // Carry the new version's buildPath forward — otherwise downloadVersion
+    // reuses the stale buildPath and re-downloads the old build, leaving the
+    // install on its previous version despite the label changing.
+    updateInstallation({
+      ...selectedInstallation,
+      version: availableUpdate.to,
+      buildPath: availableUpdate.target.buildPath,
+      requiredJavaVersion: availableUpdate.target.requiredJavaVersion ?? selectedInstallation.requiredJavaVersion,
+      installed: false,
+    });
     downloadVersion(selectedInstallation.id);
     setBackupPending(false);
     setDismissed(true);
