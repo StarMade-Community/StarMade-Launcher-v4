@@ -1,7 +1,7 @@
 {
   "name": "starmade-launcher",
   "private": true,
-  "version": "4.2.11",
+  "version": "4.2.12",
   "description": "StarMade Launcher",
   "author": "Schine GmbH & StarMade Contributors",
   "type": "module",
@@ -83,13 +83,15 @@
         {
           "target": "dmg",
           "arch": [
-            "universal"
+            "arm64",
+            "x64"
           ]
         },
         {
           "target": "zip",
           "arch": [
-            "universal"
+            "arm64",
+            "x64"
           ]
         }
       ],

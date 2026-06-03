@@ -50,9 +50,9 @@ jobs:
           path: release/StarMade-Launcher.exe
           retention-days: 7
 
-  # ─── Build for macOS (Universal) ──────────────────────────────────────────
-  build-macos:
-    name: Build macOS (Universal)
+  # ─── Build for macOS (Apple Silicon) ──────────────────────────────────────
+  build-macos-arm:
+    name: Build macOS (Apple Silicon)
     needs: test
     runs-on: macos-latest
     steps:
@@ -69,18 +69,51 @@ jobs:
         run: npm ci
 
       - name: Build Electron app
-        run: npm run build && node build-electron.mjs && npx electron-builder --mac --universal
+        run: npm run build && node build-electron.mjs && npx electron-builder --mac --arm64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SMD_API_KEY: ${{ secrets.SMD_API_KEY }}
 
-      - name: Upload macOS artifacts
+      - name: Upload macOS ARM artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macos-builds
+          name: macos-arm-builds
           path: |
-            release/StarMade-Launcher-macOS-universal.dmg
-            release/StarMade-Launcher-macOS-universal.zip
+            release/StarMade-Launcher-macOS-arm64.dmg
+            release/StarMade-Launcher-macOS-arm64.zip
+          retention-days: 7
+
+  # ─── Build for macOS (Intel) ─────────────────────────────────────────────
+  build-macos-x64:
+    name: Build macOS (Intel)
+    needs: test
+    runs-on: macos-13
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Electron app
+        run: npm run build && node build-electron.mjs && npx electron-builder --mac --x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SMD_API_KEY: ${{ secrets.SMD_API_KEY }}
+
+      - name: Upload macOS Intel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x64-builds
+          path: |
+            release/StarMade-Launcher-macOS-x64.dmg
+            release/StarMade-Launcher-macOS-x64.zip
           retention-days: 7
 
   # ─── Build for Linux ──────────────────────────────────────────────────────
@@ -125,7 +158,7 @@ jobs:
   # ─── Create Draft Release ─────────────────────────────────────────────────
   create-release:
     name: Create Draft Release
-    needs: [build-windows, build-macos, build-linux]
+    needs: [build-windows, build-macos-arm, build-macos-x64, build-linux]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -137,10 +170,16 @@ jobs:
           name: windows-builds
           path: artifacts/windows
 
-      - name: Download macOS artifacts
+      - name: Download macOS ARM artifacts
         uses: actions/download-artifact@v4
         with:
-          name: macos-builds
+          name: macos-arm-builds
+          path: artifacts/macos
+
+      - name: Download macOS Intel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-x64-builds
           path: artifacts/macos
 
       - name: Download Linux artifacts
@@ -195,8 +234,8 @@ jobs:
 
           ### Downloads
           - **Windows:** \`StarMade-Launcher.exe\`
-          - **macOS (installer):** \`StarMade-Launcher-macOS-universal.dmg\`
-          - **macOS (Steam/standalone):** \`StarMade-Launcher-macOS-universal.zip\`
+          - **macOS (Apple Silicon):** \`StarMade-Launcher-macOS-arm64.dmg\` / \`.zip\`
+          - **macOS (Intel):** \`StarMade-Launcher-macOS-x64.dmg\` / \`.zip\`
           - **Linux:** \`StarMade-Launcher.AppImage\`
 
           ### Installation
@@ -250,7 +289,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Artifacts Built" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Windows (x64)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ macOS (Universal)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ macOS (Apple Silicon / arm64)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ macOS (Intel / x64)" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Linux (x64)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
