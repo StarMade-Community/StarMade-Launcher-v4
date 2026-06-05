@@ -34,6 +34,21 @@ const LaunchHarness: React.FC = () => {
   );
 };
 
+const ServerPanelHarness: React.FC = () => {
+  const { serverPanelEnabled } = useApp();
+  return <span data-testid="server-panel-state">{serverPanelEnabled ? 'on' : 'off'}</span>;
+};
+
+const serverItem: ManagedItem = {
+  id: 'server-1',
+  name: 'My Server',
+  version: '0.203.175',
+  type: 'release',
+  icon: 'server',
+  path: '/tmp/starmade-server',
+  lastPlayed: 'Never',
+};
+
 const flushLaunch = async () => {
   await act(async () => {
     await Promise.resolve();
@@ -175,6 +190,87 @@ describe('AppContext post-launch behavior', () => {
     expect(screen.getByTestId('log-viewer-state')).toHaveTextContent('open');
     expect(close).not.toHaveBeenCalled();
     expect(hide).not.toHaveBeenCalled();
+  });
+});
+
+describe('AppContext server-panel migration', () => {
+  beforeEach(() => {
+    mockRecordSession.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete (window as unknown as Record<string, unknown>).launcher;
+  });
+
+  const renderWithData = (data: Record<string, unknown>) => {
+    mockUseData.mockReturnValue({
+      activeAccount: null,
+      installations: [installation],
+      recordSession: mockRecordSession,
+      ...data,
+    });
+    return render(
+      <AppProvider>
+        <ServerPanelHarness />
+      </AppProvider>,
+    );
+  };
+
+  const flush = async () => {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  };
+
+  it('grandfathers in existing hosts: no stored flag + existing servers → enabled', async () => {
+    const set = vi.fn().mockResolvedValue(undefined);
+    (window as unknown as Record<string, unknown>).launcher = {
+      store: { get: vi.fn().mockResolvedValue({ showLog: true }), set },
+    };
+
+    renderWithData({ servers: [serverItem], isLoaded: true });
+    await flush();
+
+    expect(screen.getByTestId('server-panel-state')).toHaveTextContent('on');
+    expect(set).toHaveBeenCalledWith(
+      'launcherSettings',
+      expect.objectContaining({ enableServerPanel: true }),
+    );
+  });
+
+  it('fresh install: no stored flag + no servers → hidden and persisted false', async () => {
+    const set = vi.fn().mockResolvedValue(undefined);
+    (window as unknown as Record<string, unknown>).launcher = {
+      store: { get: vi.fn().mockResolvedValue(null), set },
+    };
+
+    renderWithData({ servers: [], isLoaded: true });
+    await flush();
+
+    expect(screen.getByTestId('server-panel-state')).toHaveTextContent('off');
+    expect(set).toHaveBeenCalledWith(
+      'launcherSettings',
+      expect.objectContaining({ enableServerPanel: false }),
+    );
+  });
+
+  it('honours an explicit stored flag without re-migrating', async () => {
+    const set = vi.fn().mockResolvedValue(undefined);
+    (window as unknown as Record<string, unknown>).launcher = {
+      store: {
+        get: vi.fn().mockResolvedValue({ enableServerPanel: false }),
+        set,
+      },
+    };
+
+    // Has servers, but the flag was explicitly turned off — must stay off.
+    renderWithData({ servers: [serverItem], isLoaded: true });
+    await flush();
+
+    expect(screen.getByTestId('server-panel-state')).toHaveTextContent('off');
+    expect(set).not.toHaveBeenCalled();
   });
 });
 

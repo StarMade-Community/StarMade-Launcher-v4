@@ -159,6 +159,12 @@ export const IPC = {
   APP_GET_SYSTEM_MEMORY: 'app:get-system-memory',
   /** Renderer → Main (invoke): get server panel schema JSON used by config editors. */
   APP_GET_SERVER_PANEL_SCHEMA: 'app:get-server-panel-schema',
+  /**
+   * Renderer → Main (invoke): whether the launcher was started by Steam in
+   * Big Picture / Gaming Mode.  Drives Gaming-Mode-only post-launch behaviour.
+   * Returns: boolean
+   */
+  APP_IS_STEAM_GAMING_MODE: 'app:is-steam-gaming-mode',
 
   // ─── Licenses ───────────────────────────────────────────────────────────────
 

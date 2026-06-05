@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import CustomDropdown from '../../common/CustomDropdown';
 import { FolderIcon } from '../../common/icons';
 import useLegacyInstallImporter from '../../hooks/useLegacyInstallImporter';
+import { useApp } from '../../../contexts/AppContext';
 import type { LauncherCloseBehavior, LauncherSettingsData } from '@/types';
 import UpdateAvailableModal from '../../common/UpdateAvailableModal';
 import {
@@ -33,6 +34,7 @@ const DEFAULT_SETTINGS: LauncherSettingsData = {
     showLog: true,
     language: 'English (US)',
     closeBehavior: 'Keep the launcher open',
+    enableServerPanel: false,
 };
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
@@ -64,6 +66,7 @@ const ToggleSwitch: React.FC<{ checked: boolean; onChange: (checked: boolean) =>
 
 const LauncherSettings: React.FC = () => {
     const { isKnownPath, importInstallation } = useLegacyInstallImporter();
+    const { setServerPanelEnabled } = useApp();
     const [isLoaded, setIsLoaded] = useState(false);
     const [settings, setSettings] = useState<LauncherSettingsData>(DEFAULT_SETTINGS);
     const [userDataPath, setUserDataPath] = useState<string>('');
@@ -233,6 +236,14 @@ const LauncherSettings: React.FC = () => {
 
     const update = <K extends keyof LauncherSettingsData>(key: K, value: LauncherSettingsData[K]) => {
         setSettings(prev => ({ ...prev, [key]: value }));
+    };
+
+    // Toggle the server hosting UI. Persists via the normal settings flow and
+    // also updates the live app-wide visibility so the change takes effect
+    // immediately without a restart.
+    const handleServerPanelToggle = (enabled: boolean) => {
+        update('enableServerPanel', enabled);
+        setServerPanelEnabled(enabled);
     };
 
     // ── Legacy installation detection ────────────────────────────────────────
@@ -626,6 +637,20 @@ const LauncherSettings: React.FC = () => {
                     <div className="space-y-4">
                         <SettingRow title="Show StarMade Log" description="Shows a window that streams the log after the game has started.">
                             <ToggleSwitch checked={settings.showLog} onChange={(v) => update('showLog', v)} />
+                        </SettingRow>
+                    </div>
+                </div>
+
+                <div className="mt-8">
+                    <h2 className="font-display text-xl font-bold uppercase tracking-wider text-white mb-4 pb-2 border-b-2 border-white/10">
+                        Server Hosting
+                    </h2>
+                    <div className="space-y-4">
+                        <SettingRow
+                            title="Enable Server Panel"
+                            description="Show the Server Panel, the Servers tab, and the Start Server button. Hosting a server requires configuring port-forwarding on your router so other players can connect — leave this off if you only play singleplayer or join existing servers."
+                        >
+                            <ToggleSwitch checked={settings.enableServerPanel} onChange={handleServerPanelToggle} />
                         </SettingRow>
                     </div>
                 </div>

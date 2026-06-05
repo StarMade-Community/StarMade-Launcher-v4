@@ -280,6 +280,13 @@ export interface LauncherSettingsData {
   showLog: boolean;
   language: string;
   closeBehavior: LauncherCloseBehavior;
+  /**
+   * When true, the server hosting UI (Server Panel, the "Start Server" footer
+   * button, and the Servers tab) is shown. Hidden by default because hosting a
+   * server requires port-forwarding knowledge that non-technical players often
+   * lack, which generates a high volume of support tickets.
+   */
+  enableServerPanel: boolean;
 }
 
 export type Page = 'Play' | 'Installations' | 'News' | 'Screenshots' | 'Mods' | 'Blueprints' | 'Templates' | 'Settings' | 'ServerPanel';
@@ -313,6 +320,10 @@ export interface AppContextType {
     launchStatus: string | null;
     logViewerOpen: boolean;
     logViewerInstallation: ManagedItem | null;
+    /** When false, the server hosting UI is hidden across the launcher. Controlled by the launcher setting. */
+    serverPanelEnabled: boolean;
+    /** Update the live server-panel visibility (called by the launcher settings toggle). */
+    setServerPanelEnabled: (enabled: boolean) => void;
     navigate: (page: Page, props?: PageProps) => void;
     clearPageProps: () => void;
     openLaunchModal: (installation?: ManagedItem, sessionArgs?: SessionLaunchArgs) => void | Promise<void>;

@@ -36,7 +36,7 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
     // Restore state
     const [restoreTarget, setRestoreTarget] = useState<ManagedItem | null>(null);
 
-    const { openLaunchModal, navigate, clearPageProps } = useApp();
+    const { openLaunchModal, navigate, clearPageProps, serverPanelEnabled } = useApp();
     const { 
         installations, 
         servers,
@@ -230,6 +230,14 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
         }
     }, [activeTab]);
     
+    // If server hosting is disabled, never leave the user stranded on the
+    // (now hidden) Servers tab.
+    useEffect(() => {
+        if (!serverPanelEnabled && activeTab === 'servers') {
+            setActiveTab('installations');
+        }
+    }, [serverPanelEnabled, activeTab]);
+
     const handleInstallationsTabClick = useCallback(() => handleTabChange('installations'), [handleTabChange]);
     const handleServersTabClick = useCallback(() => handleTabChange('servers'), [handleTabChange]);
     
@@ -294,9 +302,11 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
                         <TabButton isActive={activeTab === 'installations'} onClick={handleInstallationsTabClick}>
                             Installations
                         </TabButton>
-                        <TabButton isActive={activeTab === 'servers'} onClick={handleServersTabClick}>
-                            Servers
-                        </TabButton>
+                        {serverPanelEnabled && (
+                            <TabButton isActive={activeTab === 'servers'} onClick={handleServersTabClick}>
+                                Servers
+                            </TabButton>
+                        )}
                         {activeTab === 'installations' && (
                             <p className="text-sm text-gray-300 border border-white/10 rounded-md px-3 py-1 bg-black/20">
                                 Total play time: <span className="text-white font-semibold">{formatPlayTime(totalInstallPlayTimeMs)}</span>

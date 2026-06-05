@@ -19,6 +19,9 @@ const launcherApi = {
     /** Returns the server panel schema JSON used to drive config editor metadata. */
     getServerPanelSchema: (): Promise<unknown> =>
       ipcRenderer.invoke(IPC.APP_GET_SERVER_PANEL_SCHEMA),
+    /** Whether the launcher was started by Steam in Big Picture / Gaming Mode. */
+    isSteamGamingMode: (): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.APP_IS_STEAM_GAMING_MODE),
   },
 
   licenses: {

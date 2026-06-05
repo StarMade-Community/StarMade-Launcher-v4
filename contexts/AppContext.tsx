@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useMemo, useEffect, useRef, ReactNode } from 'react';
 import type { AppContextType, Page, PageProps, ManagedItem, PlaySession, SessionLaunchArgs, LauncherSettingsData } from '../types';
 import { useData } from './DataContext';
 
@@ -11,11 +11,12 @@ const DEFAULT_LAUNCHER_SETTINGS: LauncherSettingsData = {
     showLog: true,
     language: 'English (US)',
     closeBehavior: 'Keep the launcher open',
+    enableServerPanel: false,
 };
 const POST_LAUNCH_CLOSE_DELAY_MS = 250;
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-    const { activeAccount, installations, recordSession } = useData();
+    const { activeAccount, installations, servers, isLoaded: isDataLoaded, recordSession } = useData();
     const [activePage, setActivePage] = useState<Page>('Play');
     const [pageProps, setPageProps] = useState<PageProps>({});
     const [isLaunchModalOpen, setIsLaunchModalOpen] = useState(false);
@@ -26,6 +27,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const [pendingSessionArgs, setPendingSessionArgs] = useState<SessionLaunchArgs | null>(null);
     const [logViewerOpen, setLogViewerOpen] = useState(false);
     const [logViewerInstallation, setLogViewerInstallation] = useState<ManagedItem | null>(null);
+    const [serverPanelEnabled, setServerPanelEnabled] = useState(DEFAULT_LAUNCHER_SETTINGS.enableServerPanel);
+    const serverPanelMigratedRef = useRef(false);
 
     const navigate = useCallback((page: Page, props: PageProps = {}) => {
         setActivePage(page);
@@ -63,14 +66,68 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         return DEFAULT_LAUNCHER_SETTINGS;
     }, []);
 
-    const applyPostLaunchBehavior = useCallback((settings: LauncherSettingsData, installation: ManagedItem) => {
+    // Hydrate the live server-panel visibility from persisted settings, applying
+    // a one-time migration for users upgrading from a version that predates the
+    // `enableServerPanel` setting: if they already have server entries, keep the
+    // panel visible (it was previously always-on for them); fresh installs and
+    // server-less users default to hidden. Runs once, after launcher data has
+    // hydrated so `servers` reflects the persisted state.
+    useEffect(() => {
+        if (serverPanelMigratedRef.current || !isDataLoaded) return;
+        if (typeof window === 'undefined' || !window.launcher?.store) {
+            serverPanelMigratedRef.current = true;
+            return;
+        }
+        serverPanelMigratedRef.current = true;
+
+        let cancelled = false;
+        window.launcher.store.get(LAUNCHER_SETTINGS_KEY).then((stored) => {
+            if (cancelled) return;
+
+            const storedSettings = (stored && typeof stored === 'object')
+                ? stored as Partial<LauncherSettingsData>
+                : {};
+
+            // Already migrated/explicitly set — honour the stored value.
+            if (typeof storedSettings.enableServerPanel === 'boolean') {
+                setServerPanelEnabled(storedSettings.enableServerPanel);
+                return;
+            }
+
+            // Migration: grandfather in existing hosts so their panel doesn't vanish.
+            const enabled = servers.length > 0;
+            setServerPanelEnabled(enabled);
+            window.launcher?.store?.set(LAUNCHER_SETTINGS_KEY, {
+                ...DEFAULT_LAUNCHER_SETTINGS,
+                ...storedSettings,
+                enableServerPanel: enabled,
+            });
+        }).catch(() => {
+            if (!cancelled) setServerPanelEnabled(DEFAULT_LAUNCHER_SETTINGS.enableServerPanel);
+        });
+
+        return () => { cancelled = true; };
+    }, [isDataLoaded, servers]);
+
+    const applyPostLaunchBehavior = useCallback(async (settings: LauncherSettingsData, installation: ManagedItem) => {
+        if (typeof window === 'undefined' || !window.launcher?.window) {
+            return;
+        }
+
+        // Steam Big Picture / Gaming Mode: ignore the user's closeBehavior. Close
+        // the launcher window so the game owns the screen, and do NOT open the
+        // log-viewer window (a second transparent window fights the gamescope
+        // compositor). The main process keeps the app alive (window-all-closed
+        // guard) until the game exits, so Steam keeps tracking the session.
+        const gamingMode = await window.launcher.app?.isSteamGamingMode?.().catch(() => false) ?? false;
+        if (gamingMode) {
+            setTimeout(() => window.launcher?.window?.close(), POST_LAUNCH_CLOSE_DELAY_MS);
+            return;
+        }
+
         if (settings.closeBehavior === 'Keep the launcher open' && settings.showLog) {
             setLogViewerInstallation(installation);
             setLogViewerOpen(true);
-        }
-
-        if (typeof window === 'undefined' || !window.launcher?.window) {
-            return;
         }
 
         switch (settings.closeBehavior) {
@@ -327,6 +384,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         launchStatus,
         logViewerOpen,
         logViewerInstallation,
+        serverPanelEnabled,
+        setServerPanelEnabled,
         navigate,
         clearPageProps,
         openLaunchModal,
@@ -346,6 +405,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         launchStatus,
         logViewerOpen,
         logViewerInstallation,
+        serverPanelEnabled,
         navigate,
         clearPageProps,
         openLaunchModal,

@@ -278,7 +278,7 @@ const SciFiPlayButton: React.FC<SciFiPlayButtonProps> = ({ isUpdating, isDownloa
 
 
 const Footer: React.FC = () => {
-  const { navigate, isLaunching, launchStatus, openLaunchModal, completeLaunching } = useApp();
+  const { navigate, isLaunching, launchStatus, openLaunchModal, completeLaunching, serverPanelEnabled } = useApp();
   const { installations, servers, selectedInstallationId, selectedServer, downloadStatuses, setSelectedInstallationId, setSelectedServerId } = useData();
 
   const availableInstallations = installations.filter(
@@ -324,7 +324,8 @@ const Footer: React.FC = () => {
                 onUpdateComplete={completeLaunching}
             />
 
-            <button 
+            {serverPanelEnabled && (
+            <button
                 onClick={() => {
                     const targetServer = selectedServer ?? servers[0] ?? null;
                     if (targetServer) {
@@ -343,6 +344,7 @@ const Footer: React.FC = () => {
                 </div>
                 <ChevronRightIcon className="w-4 h-4 text-gray-400 group-hover:text-white transition-colors" />
             </button>
+            )}
         </div>
 
         <div className="flex-1 flex justify-end">

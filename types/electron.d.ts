@@ -36,6 +36,8 @@ declare global {
         getSystemMemory: () => Promise<number>;
         /** Returns server panel schema JSON used by config editors. */
         getServerPanelSchema: () => Promise<unknown>;
+        /** Whether the launcher was started by Steam in Big Picture / Gaming Mode. */
+        isSteamGamingMode: () => Promise<boolean>;
       };
 
       /** Third-party licenses APIs */

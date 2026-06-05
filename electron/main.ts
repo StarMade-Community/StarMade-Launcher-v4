@@ -22,7 +22,8 @@ import { fetchAllVersions, invalidateVersionCache } from './versions.js';
 import { startDownload, cancelDownload } from './downloader.js';
 import type { DownloadProgress } from './downloader.js';
 import { downloadJava, detectSystemJava, resolveJavaPath, getDefaultJavaPaths, findJavaExecutableInDir } from './java.js';
-import { launchGame, stopGame, getGameStatus, getAllRunningGames, getLogPath, openLogLocation, clearServerLogFiles, getGraphicsInfo, listServerLogFiles, readServerLogFile, sendServerStdin, listChatFiles, readChatFile, getPlayTimeTotals } from './launcher.js';
+import { launchGame, stopGame, getGameStatus, getAllRunningGames, getLogPath, openLogLocation, clearServerLogFiles, getGraphicsInfo, listServerLogFiles, readServerLogFile, sendServerStdin, listChatFiles, readChatFile, getPlayTimeTotals, hasRunningGames } from './launcher.js';
+import { isSteamGamingMode } from './steam.js';
 import type { UpdateInfo } from './updater.js';
 import { checkForUpdates, downloadUpdate, installUpdate, openReleasesPage, applyPendingUpdate } from './updater.js';
 import { createBackup, listBackups, restoreBackup } from './backup.js';
@@ -216,6 +217,14 @@ function loadRendererRoute(
   return window.loadFile(path.join(__dirname, '../dist/index.html'), { query: queryObject });
 }
 
+/**
+ * Whether the launcher was started by Steam in Big Picture / Gaming Mode.
+ * Computed once at startup (the Steam env vars are fixed for the process
+ * lifetime) and used to gate Gaming-Mode-only window/lifecycle behaviour.
+ * On desktop / macOS this is always false, so nothing below changes.
+ */
+const gamingMode = isSteamGamingMode();
+
 function createWindow(): void {
   const { height: workAreaHeight } = screen.getPrimaryDisplay().workAreaSize;
   const useShortScreenSizing = workAreaHeight < 720;
@@ -236,9 +245,14 @@ function createWindow(): void {
     resizable: true,
     thickFrame: true,
     frame: false,
-    roundedCorners: true,
     titleBarStyle: 'hidden',
-    transparent: true,
+    // Under Steam Gaming Mode the launcher is composited by gamescope, where a
+    // transparent/frameless ARGB window is the prime suspect for the Big Picture
+    // freeze/crash.  Render opaque + fullscreen there so the launcher owns the
+    // surface cleanly (rounded corners are invisible in fullscreen anyway).
+    ...(gamingMode
+      ? { transparent: false, roundedCorners: false, fullscreen: true }
+      : { transparent: true, roundedCorners: true }),
     backgroundColor: '#0D0D1B',
     icon: iconPath,
     show: false,
@@ -1587,6 +1601,7 @@ function readServerPanelSchema(): unknown {
 ipcMain.handle(IPC.APP_GET_USER_DATA, () => app.getPath('userData'));
 ipcMain.handle(IPC.APP_GET_SYSTEM_MEMORY, () => Math.floor(os.totalmem() / (1024 * 1024)));
 ipcMain.handle(IPC.APP_GET_SERVER_PANEL_SCHEMA, () => readServerPanelSchema());
+ipcMain.handle(IPC.APP_IS_STEAM_GAMING_MODE, () => gamingMode);
 
 const LICENSES_DIR_NAMES = ['licenses'];
 
@@ -3095,8 +3110,18 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  if (process.platform === 'darwin') return;
+
+  // Under Steam Gaming Mode, Steam tracks the launcher process itself as the
+  // running game.  When the launcher window closes to hand the screen to
+  // StarMade, the process must stay alive for the whole session — otherwise
+  // Steam thinks the game exited and Big Picture reclaims the foreground over
+  // the still-running game.  The app is quit later by quitLauncherIfIdle() (via
+  // the game-process 'exit' handler in launcher.ts) once the game ends, which
+  // returns Steam to the library cleanly.  Desktop/macOS: gamingMode is false,
+  // so this is identical to the previous unconditional quit.
+  if (gamingMode && hasRunningGames()) return;
+
+  app.quit();
 });
 

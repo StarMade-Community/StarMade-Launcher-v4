@@ -71,6 +71,7 @@ describe('Installations tab switching during downloads', () => {
       openLaunchModal: vi.fn(),
       navigate: vi.fn(),
       clearPageProps: mockClearPageProps,
+      serverPanelEnabled: true,
     });
   });
 
