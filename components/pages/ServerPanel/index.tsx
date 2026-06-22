@@ -18,6 +18,7 @@ import {
   getRemoteBackendLabel,
   getDefaultRemoteConnectPort,
   isAzureVmBackend,
+  isDockerBackend,
   type DatabaseSectorLoadFilter,
   type RemoteFileAccessProtocol,
   type RemoteBackendType,
@@ -28,7 +29,7 @@ interface ServerPanelProps {
   serverName?: string;
 }
 
-type ServerPanelTab = 'control' | 'actions' | 'logs' | 'chat' | 'configuration' | 'files' | 'database';
+type ServerPanelTab = 'control' | 'actions' | 'logs' | 'chat' | 'configuration' | 'files' | 'database' | 'performance';
 const REMOTE_UNSUPPORTED_TABS: ServerPanelTab[] = ['logs', 'configuration', 'files'];
 const CONFIG_EDITOR_TABS = [
   { id: 'server-cfg', label: 'server.cfg' },
@@ -98,7 +99,7 @@ interface ChatChannelInfo {
 
 interface RemoteConnectionStatus {
   serverId: string;
-  backend?: 'starmote' | 'azure-vm';
+  backend?: 'starmote' | 'azure-vm' | 'docker';
   connected: boolean;
   state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
   isReady?: boolean;
@@ -107,7 +108,7 @@ interface RemoteConnectionStatus {
   username?: string;
   connectedAt?: string;
   error?: string;
-  reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed';
+  reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed' | 'docker_unavailable' | 'docker_connect_failed' | 'docker_container_missing' | 'docker_command_failed';
 }
 
 const GENERAL_CHANNEL_ID = 'all';
@@ -338,9 +339,137 @@ const tabItems: { id: ServerPanelTab; label: string }[] = [
   { id: 'configuration', label: 'Configuration' },
   { id: 'files', label: 'Files' },
   { id: 'database', label: 'Database' },
+  { id: 'performance', label: 'Performance' },
 ];
 
 const LOG_FILTER_OPTIONS: LogFilter[] = ['info', 'warnings', 'errors', 'debug'];
+
+// ─── Performance tab ───────────────────────────────────────────────────────────
+
+/** Renderer-side mirror of the main-process ServerMetricsSample shape. */
+interface PerfSample {
+  ok: boolean;
+  timestamp: number;
+  source: 'local' | 'docker' | 'ssh' | 'unavailable';
+  cpuPercent?: number;
+  cpuCores?: number;
+  memoryBytes?: number;
+  memoryLimitBytes?: number;
+  memoryPercent?: number;
+  netRxBytes?: number;
+  netTxBytes?: number;
+  pids?: number;
+  uptimeMs?: number;
+  scopeLabel?: string;
+  error?: string;
+}
+
+const PERF_POLL_INTERVAL_MS = 2000;
+const PERF_HISTORY_CAP = 90; // ~3 minutes at 2s cadence
+
+const formatBytes = (bytes: number | undefined): string => {
+  if (bytes === undefined || !Number.isFinite(bytes)) return '—';
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  // Binary (1024-based) magnitudes, labelled with the colloquial GB/MB form
+  // that matches how the JVM (-Xmx) and Docker interpret "32G".
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = bytes / 1024;
+  let unitIdx = 0;
+  while (value >= 1024 && unitIdx < units.length - 1) {
+    value /= 1024;
+    unitIdx += 1;
+  }
+  return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIdx]}`;
+};
+
+const formatPercent = (value: number | undefined): string =>
+  value === undefined || !Number.isFinite(value) ? '—' : `${value.toFixed(1)}%`;
+
+/**
+ * Lightweight SVG area/line chart for a rolling metric series. No dependencies.
+ * `values` are oldest→newest; `max` fixes the y-axis ceiling (auto when omitted).
+ */
+const MetricTimeSeriesChart: React.FC<{
+  values: number[];
+  max?: number;
+  color: string;
+  unitSuffix?: string;
+  height?: number;
+}> = ({ values, max, color, unitSuffix = '', height = 120 }) => {
+  const width = 320;
+  const padding = 4;
+  const innerW = width - padding * 2;
+  const innerH = height - padding * 2;
+
+  const finiteValues = values.filter((v) => Number.isFinite(v));
+  const dataMax = finiteValues.length ? Math.max(...finiteValues) : 0;
+  const ceiling = Math.max(max ?? dataMax * 1.15, 0.0001);
+
+  // Need at least two points to draw a line; render a baseline otherwise.
+  const count = values.length;
+  const xFor = (i: number): number =>
+    count <= 1 ? padding : padding + (i / (count - 1)) * innerW;
+  const yFor = (v: number): number => {
+    const clamped = Math.max(0, Math.min(v, ceiling));
+    return padding + innerH - (clamped / ceiling) * innerH;
+  };
+
+  const linePoints = values
+    .map((v, i) => `${xFor(i).toFixed(1)},${yFor(Number.isFinite(v) ? v : 0).toFixed(1)}`)
+    .join(' ');
+  const areaPoints =
+    count >= 1
+      ? `${padding},${padding + innerH} ${linePoints} ${xFor(count - 1).toFixed(1)},${padding + innerH}`
+      : '';
+
+  const gridLines = [0.25, 0.5, 0.75];
+  const ceilingLabel = `${ceiling >= 100 ? ceiling.toFixed(0) : ceiling.toFixed(1)}${unitSuffix}`;
+
+  // The SVG stretches to fill width (preserveAspectRatio="none"), which would
+  // distort SVG <text>. Axis labels are rendered as crisp HTML overlays instead.
+  return (
+    <div className="relative w-full" style={{ height }}>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
+        className="absolute inset-0 h-full w-full"
+        role="img"
+      >
+        {gridLines.map((g) => (
+          <line
+            key={g}
+            x1={padding}
+            x2={width - padding}
+            y1={padding + innerH * g}
+            y2={padding + innerH * g}
+            stroke="currentColor"
+            strokeWidth={0.5}
+            className="text-white/10"
+          />
+        ))}
+        {count >= 1 && (
+          <polygon points={areaPoints} fill={color} fillOpacity={0.15} stroke="none" />
+        )}
+        {count >= 2 && (
+          <polyline
+            points={linePoints}
+            fill="none"
+            stroke={color}
+            strokeWidth={1.5}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        )}
+      </svg>
+      <span className="pointer-events-none absolute left-1.5 top-1 text-[11px] font-medium tabular-nums text-gray-300">
+        {ceilingLabel}
+      </span>
+      <span className="pointer-events-none absolute bottom-0.5 left-1.5 text-[11px] font-medium tabular-nums text-gray-500">
+        0{unitSuffix}
+      </span>
+    </div>
+  );
+};
 
 const createDefaultDashboardLayout = (): DashboardLayout => ({
   groups: [
@@ -2055,6 +2184,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [azureVmSshKeyPathInput, setAzureVmSshKeyPathInput] = useState('');
   const [azureVmSshPasswordInput, setAzureVmSshPasswordInput] = useState('');
   const [azureVmScreenSessionInput, setAzureVmScreenSessionInput] = useState('');
+  const [dockerHostInput, setDockerHostInput] = useState('');
+  const [dockerContainerInput, setDockerContainerInput] = useState('');
+  const [dockerScreenSessionInput, setDockerScreenSessionInput] = useState('');
   const [remoteFileAccessPasswordInput, setRemoteFileAccessPasswordInput] = useState('');
   const [isRemoteFileSessionActive, setIsRemoteFileSessionActive] = useState(false);
   const [remoteFileAccessProtocolInput, setRemoteFileAccessProtocolInput] = useState<RemoteFileAccessProtocol>('none');
@@ -2066,6 +2198,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const [isRemoteConnectPending, setIsRemoteConnectPending] = useState(false);
   const [remoteConnectionStatus, setRemoteConnectionStatus] = useState<RemoteConnectionStatus | null>(null);
   const [isRemoteDisconnectPending, setIsRemoteDisconnectPending] = useState(false);
+  const [perfHistory, setPerfHistory] = useState<PerfSample[]>([]);
+  const [perfLatest, setPerfLatest] = useState<PerfSample | null>(null);
   const [remoteStatusesByServerId, setRemoteStatusesByServerId] = useState<Record<string, RemoteConnectionStatus>>({});
   const [remoteCommandInput, setRemoteCommandInput] = useState<string>('');
   const [isRemoteCommandSending, setIsRemoteCommandSending] = useState(false);
@@ -2144,6 +2278,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   const hasGameApi = typeof window !== 'undefined' && !!window.launcher?.game;
   const starmoteApi = typeof window !== 'undefined' ? window.launcher?.starmote : undefined;
   const hasStarmoteApi = !!starmoteApi;
+  const serverMetricsApi = typeof window !== 'undefined' ? window.launcher?.serverMetrics : undefined;
   const remoteFilesApi = typeof window !== 'undefined' ? window.launcher?.remoteFiles : undefined;
   const hasRemoteFilesApi = !!remoteFilesApi;
   const hasDownloadApi = typeof window !== 'undefined' && !!window.launcher?.download;
@@ -2277,6 +2412,61 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   }, [remoteConnectionStatus?.backend, remoteConnectionStatus?.error, remoteConnectionStatus?.reasonCode]);
 
   const isRemoteServerProfile = isRemoteConnectSupported(effectiveServer);
+
+  // ─── Performance metrics polling ───────────────────────────────────────────
+  const perfServerId = effectiveServer?.id;
+  const isRemoteMetricsConnected = !!remoteConnectionStatus?.connected;
+  const perfActive =
+    activeTab === 'performance'
+    && !!serverMetricsApi
+    && !!perfServerId
+    && (isRemoteServerProfile ? isRemoteMetricsConnected : lifecycleState === 'running');
+
+  // Reset history when switching servers so charts never mix two servers' data.
+  useEffect(() => {
+    setPerfHistory([]);
+    setPerfLatest(null);
+  }, [perfServerId]);
+
+  useEffect(() => {
+    if (!perfActive || !serverMetricsApi || !perfServerId) return;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async (): Promise<void> => {
+      try {
+        const sample = await serverMetricsApi.get({
+          serverId: perfServerId,
+          backend: effectiveServer?.remoteBackend,
+          isRemote: effectiveServer?.isRemote,
+        });
+        if (cancelled) return;
+        setPerfLatest(sample as PerfSample);
+        if (sample.ok) {
+          setPerfHistory((prev) => {
+            const next = [...prev, sample as PerfSample];
+            return next.length > PERF_HISTORY_CAP ? next.slice(next.length - PERF_HISTORY_CAP) : next;
+          });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setPerfLatest({ ok: false, timestamp: Date.now(), source: 'unavailable', error: String(error) });
+        }
+      } finally {
+        if (!cancelled) {
+          timer = setTimeout(poll, PERF_POLL_INTERVAL_MS);
+        }
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [perfActive, serverMetricsApi, perfServerId, effectiveServer?.remoteBackend, effectiveServer?.isRemote]);
+
   const remoteConnectEligibleServers = useMemo(
     () => servers.filter((server) => isRemoteConnectSupported(server)),
     [servers],
@@ -2291,7 +2481,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
   });
   const isRemoteCommandRuntimeReady = isRemoteServerProfile && canExecuteRemoteCommandActions;
   const isRemoteFileSessionEnabled = isRemoteServerProfile && hasRemoteFilesApi && isRemoteFileSessionActive;
-  const isRemoteLogsEnabled = isRemoteServerProfile && isAzureVmBackend(effectiveServer);
+  const isRemoteLogsEnabled = isRemoteServerProfile && (isAzureVmBackend(effectiveServer) || isDockerBackend(effectiveServer));
   const isCommandRuntimeReady = isRemoteServerProfile
     ? isRemoteCommandRuntimeReady
     : lifecycleState === 'running';
@@ -2318,6 +2508,20 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setAzureVmSshKeyPathInput(server?.azureVmSshKeyPath?.trim() || '');
       setAzureVmSshPasswordInput('');
       setAzureVmScreenSessionInput(server?.azureVmScreenSession?.trim() || '');
+      setDockerHostInput('');
+      setDockerContainerInput('');
+      setDockerScreenSessionInput('');
+    } else if (nextBackend === 'docker') {
+      // For Docker the port field holds the game port (informational).
+      setRemoteConnectPortInput(server?.port?.trim() || serverPortInput || '4242');
+      setRemoteConnectUsernameInput('');
+      setAzureVmSshPortInput('22');
+      setAzureVmSshKeyPathInput('');
+      setAzureVmSshPasswordInput('');
+      setAzureVmScreenSessionInput('');
+      setDockerHostInput(server?.dockerHost?.trim() || '');
+      setDockerContainerInput(server?.dockerContainer?.trim() || '');
+      setDockerScreenSessionInput(server?.dockerScreenSession?.trim() || '');
     } else {
       setRemoteConnectPortInput(server?.port?.trim() || serverPortInput || '4242');
       setRemoteConnectUsernameInput(activeAccount?.name?.trim() || '');
@@ -2325,6 +2529,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
       setAzureVmSshKeyPathInput('');
       setAzureVmSshPasswordInput('');
       setAzureVmScreenSessionInput('');
+      setDockerHostInput('');
+      setDockerContainerInput('');
+      setDockerScreenSessionInput('');
     }
 
     setRemoteFileAccessProtocolInput(nextFileProtocol);
@@ -2391,8 +2598,14 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
 
     const backend = remoteBackendInput;
     const isAzureVm = backend === 'azure-vm';
+    const isDocker = backend === 'docker';
 
-    // For Azure VM the port field holds the SSH port; for StarMote it's the game port.
+    if (isDocker && !dockerContainerInput.trim()) {
+      setRemoteConnectError('A Docker container name is required.');
+      return;
+    }
+
+    // For Azure VM the port field holds the SSH port; for StarMote/Docker it's the game port.
     const portDefault = isAzureVm ? '22' : '4242';
     const parsedPort = Number.parseInt(remoteConnectPortInput.trim() || portDefault, 10);
     if (!Number.isFinite(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
@@ -2409,8 +2622,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     const nextRemoteFileRootPath = remoteFileAccessRootPathInput.trim() || undefined;
     const activeAccountId = activeAccount?.id;
 
-    // StarMote requires a signed-in StarMade account; Azure VM uses SSH key or password auth.
-    if (!isAzureVm && !activeAccountId) {
+    // StarMote requires a signed-in StarMade account; Azure VM and Docker use their own auth.
+    if (backend === 'starmote' && !activeAccountId) {
       setRemoteConnectError('Sign in with a StarMade account to use StarMote remote control.');
       return;
     }
@@ -2431,6 +2644,16 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
             sshPassword: azureVmSshPasswordInput || undefined,
             screenSessionName: azureVmScreenSessionInput.trim() || undefined,
             serverRootPath: nextRemoteFileRootPath || undefined,
+          }
+        : isDocker
+        ? {
+            serverId: targetServer.id,
+            host,
+            port: parsedPort,
+            backend: 'docker' as const,
+            dockerHost: dockerHostInput.trim() || undefined,
+            dockerContainer: dockerContainerInput.trim(),
+            screenSessionName: dockerScreenSessionInput.trim() || undefined,
           }
         : {
             serverId: targetServer.id,
@@ -2497,6 +2720,11 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
         updatedItem.azureVmSshKeyPath = azureVmSshKeyPathInput.trim() || undefined;
         updatedItem.azureVmSshUsername = username || 'azureuser';
         updatedItem.azureVmScreenSession = azureVmScreenSessionInput.trim() || undefined;
+      } else if (isDocker) {
+        updatedItem.port = String(parsedPort);
+        updatedItem.dockerHost = dockerHostInput.trim() || undefined;
+        updatedItem.dockerContainer = dockerContainerInput.trim();
+        updatedItem.dockerScreenSession = dockerScreenSessionInput.trim() || undefined;
       } else {
         updatedItem.port = String(parsedPort);
       }
@@ -2530,6 +2758,9 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     remoteBackendInput,
     azureVmSshKeyPathInput,
     azureVmScreenSessionInput,
+    dockerHostInput,
+    dockerContainerInput,
+    dockerScreenSessionInput,
     remoteFileAccessHostInput,
     remoteFileAccessPasswordInput,
     remoteFileAccessPortInput,
@@ -6283,6 +6514,8 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   setRemoteConnectPortInput(getDefaultRemoteConnectPort(next));
                   if (next === 'azure-vm') {
                     setRemoteConnectUsernameInput('azureuser');
+                  } else if (next === 'docker') {
+                    setRemoteConnectUsernameInput('');
                   } else {
                     setRemoteConnectUsernameInput(activeAccount?.name?.trim() || '');
                   }
@@ -6292,6 +6525,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
               >
                 <option value="starmote">StarMote (game protocol)</option>
                 <option value="azure-vm">Azure VM (SSH)</option>
+                <option value="docker">Docker Container</option>
               </select>
             </label>
 
@@ -6401,6 +6635,57 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
                   </label>
                   <p className="mt-1 text-xs text-gray-500">
                     Name of the screen or tmux session running the StarMade server process. Used when sending admin commands.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {remoteBackendInput === 'docker' && (
+              <div className="space-y-3">
+                <div className="rounded-md border border-blue-500/20 bg-blue-500/5 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-blue-200">Docker Container</p>
+                  <p className="mt-1 text-xs text-gray-400">
+                    Controls a StarMade server running inside a Docker container via the local <code className="font-mono">docker</code> CLI.
+                    Logs stream from <code className="font-mono">docker logs</code>, and live CPU/memory appear in the Performance tab.
+                    The <code className="font-mono">docker</code> CLI must be installed locally.
+                  </p>
+                </div>
+                <label className="block text-sm">
+                  <span className="mb-1 block text-gray-300">Docker Host <span className="text-gray-500">(optional)</span></span>
+                  <input
+                    value={dockerHostInput}
+                    onChange={(event) => setDockerHostInput(event.target.value)}
+                    disabled={isRemoteConnectPending}
+                    placeholder="ssh://user@host  or  tcp://203.0.113.10:2375  (blank = local Docker)"
+                    className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200 font-mono text-xs"
+                  />
+                  <span className="mt-1 block text-xs text-gray-500">
+                    Passed to <code className="font-mono">docker -H</code>. For <code className="font-mono">ssh://</code> hosts, SSH key auth must be available to your local SSH agent.
+                  </span>
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-1 block text-gray-300">Container Name / ID</span>
+                  <input
+                    value={dockerContainerInput}
+                    onChange={(event) => setDockerContainerInput(event.target.value)}
+                    disabled={isRemoteConnectPending}
+                    placeholder="starmade-server"
+                    className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200 font-mono text-xs"
+                  />
+                </label>
+                <div>
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-gray-300">Screen/tmux Session Name <span className="text-gray-500">(inside container)</span></span>
+                    <input
+                      value={dockerScreenSessionInput}
+                      onChange={(event) => setDockerScreenSessionInput(event.target.value)}
+                      disabled={isRemoteConnectPending}
+                      placeholder="StarMade  (auto-detected if blank)"
+                      className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-gray-200"
+                    />
+                  </label>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Name of the screen/tmux session inside the container running the server. Used to deliver admin commands via <code className="font-mono">docker exec</code>.
                   </p>
                 </div>
               </div>
@@ -8326,6 +8611,132 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     );
   };
 
+  const renderPerformanceTab = () => {
+    if (!serverMetricsApi) {
+      return renderPlaceholderTab(
+        'Performance metrics unavailable',
+        'This build does not expose the metrics bridge. Run the desktop app to view live performance data.',
+      );
+    }
+
+    const backendLabel = isRemoteServerProfile
+      ? getRemoteBackendLabel(effectiveServer?.remoteBackend)
+      : 'Local process';
+
+    const notActiveMessage = isRemoteServerProfile
+      ? `Connect to this ${backendLabel} server to view live CPU and memory usage.`
+      : 'Start this server to view live CPU and memory usage.';
+
+    if (!perfActive && perfHistory.length === 0) {
+      return renderPlaceholderTab('Performance monitoring idle', notActiveMessage);
+    }
+
+    const latest = perfLatest;
+    const cpuValues = perfHistory.map((s) => (Number.isFinite(s.cpuPercent ?? NaN) ? (s.cpuPercent as number) : 0));
+    const memPercentAvailable = perfHistory.some((s) => Number.isFinite(s.memoryPercent ?? NaN));
+    const memValues = perfHistory.map((s) =>
+      memPercentAvailable
+        ? (Number.isFinite(s.memoryPercent ?? NaN) ? (s.memoryPercent as number) : 0)
+        : (Number.isFinite(s.memoryBytes ?? NaN) ? (s.memoryBytes as number) / (1024 * 1024) : 0),
+    );
+
+    const cores = latest?.cpuCores;
+    const sourceLabel = latest?.scopeLabel
+      ?? (latest?.source === 'docker' ? 'Docker container'
+        : latest?.source === 'ssh' ? 'Remote host (SSH)'
+        : latest?.source === 'local' ? 'Local server process'
+        : 'Unknown');
+    const isDockerSource = latest?.source === 'docker';
+
+    const card = (label: string, value: string, sub?: string) => (
+      <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">{label}</p>
+        <p className="mt-1 text-2xl font-semibold text-white tabular-nums">{value}</p>
+        {sub ? <p className="mt-0.5 text-xs text-gray-500">{sub}</p> : null}
+      </div>
+    );
+
+    return (
+      <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto pr-1">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-200">Performance</h3>
+            <p className="text-xs text-gray-500">
+              {sourceLabel} · sampling every {Math.round(PERF_POLL_INTERVAL_MS / 1000)}s
+            </p>
+          </div>
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${
+              perfActive
+                ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
+                : 'border-white/10 bg-black/20 text-gray-400'
+            }`}
+          >
+            <span className={`h-1.5 w-1.5 rounded-full ${perfActive ? 'bg-emerald-400' : 'bg-gray-500'}`} />
+            {perfActive ? 'Live' : 'Paused'}
+          </span>
+        </div>
+
+        {latest && !latest.ok ? (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
+            {latest.error || 'Metrics are currently unavailable.'}
+          </div>
+        ) : null}
+
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {card(
+            'CPU',
+            formatPercent(latest?.cpuPercent),
+            cores ? `${cores} cores available` : (isDockerSource ? 'of host capacity' : undefined),
+          )}
+          {card(
+            'Memory',
+            formatBytes(latest?.memoryBytes),
+            latest?.memoryLimitBytes
+              ? `of ${formatBytes(latest.memoryLimitBytes)}${latest?.memoryPercent !== undefined ? ` · ${formatPercent(latest.memoryPercent)}` : ''}`
+              : (latest?.memoryPercent !== undefined ? formatPercent(latest.memoryPercent) : undefined),
+          )}
+          {isDockerSource
+            ? card('Network I/O', `${formatBytes(latest?.netRxBytes)} ↓`, `${formatBytes(latest?.netTxBytes)} ↑`)
+            : card('Samples', String(perfHistory.length), `cap ${PERF_HISTORY_CAP}`)}
+          {isDockerSource
+            ? card('Processes', latest?.pids !== undefined ? String(latest.pids) : '—', 'threads in container')
+            : card('Source', backendLabel, perfActive ? 'connected' : 'idle')}
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+          <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-300">CPU usage</p>
+              <p className="text-xs text-cyan-300 tabular-nums">{formatPercent(latest?.cpuPercent)}</p>
+            </div>
+            <MetricTimeSeriesChart values={cpuValues} color="#22d3ee" unitSuffix="%" />
+          </div>
+          <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-300">
+                Memory {memPercentAvailable ? 'usage' : '(MB)'}
+              </p>
+              <p className="text-xs text-violet-300 tabular-nums">
+                {memPercentAvailable ? formatPercent(latest?.memoryPercent) : formatBytes(latest?.memoryBytes)}
+              </p>
+            </div>
+            <MetricTimeSeriesChart
+              values={memValues}
+              color="#a78bfa"
+              max={memPercentAvailable ? 100 : undefined}
+              unitSuffix={memPercentAvailable ? '%' : ''}
+            />
+          </div>
+        </div>
+
+        {perfHistory.length === 0 ? (
+          <p className="text-center text-xs text-gray-500">Collecting samples…</p>
+        ) : null}
+      </div>
+    );
+  };
+
   const renderPlaceholderTab = (title: string, description: string) => (
     <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-white/20 bg-black/20 p-6 text-center">
       <div>
@@ -8666,6 +9077,7 @@ const ServerPanel: React.FC<ServerPanelProps> = ({ serverId, serverName }) => {
     if (activeTab === 'configuration') return renderConfiguration();
     if (activeTab === 'files') return renderFilesTab();
     if (activeTab === 'database') return renderDatabaseTab();
+    if (activeTab === 'performance') return renderPerformanceTab();
     return renderPlaceholderTab(
       'Database',
       'Database tools placeholder. This area is reserved for universe/player data operations later.'

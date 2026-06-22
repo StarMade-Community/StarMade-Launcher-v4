@@ -365,7 +365,7 @@ const launcherApi = {
       serverId: string;
       host: string;
       port: number;
-      backend?: 'starmote' | 'azure-vm';
+      backend?: 'starmote' | 'azure-vm' | 'docker';
       username?: string;
       clientVersion?: string;
       activeAccountId?: string;
@@ -375,11 +375,14 @@ const launcherApi = {
       sshPassword?: string;
       screenSessionName?: string;
       serverRootPath?: string;
+      // Docker
+      dockerHost?: string;
+      dockerContainer?: string;
     }): Promise<{
       success: boolean;
       status?: {
         serverId: string;
-        backend?: 'starmote' | 'azure-vm';
+        backend?: 'starmote' | 'azure-vm' | 'docker';
         connected: boolean;
         state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
         isReady?: boolean;
@@ -388,7 +391,7 @@ const launcherApi = {
         username?: string;
         connectedAt?: string;
         error?: string;
-        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed';
+        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed' | 'docker_unavailable' | 'docker_connect_failed' | 'docker_container_missing' | 'docker_command_failed';
       };
       error?: string;
     }> => ipcRenderer.invoke(IPC.STARMOTE_CONNECT, payload),
@@ -398,7 +401,7 @@ const launcherApi = {
       success: boolean;
       status?: {
         serverId: string;
-        backend?: 'starmote' | 'azure-vm';
+        backend?: 'starmote' | 'azure-vm' | 'docker';
         connected: boolean;
         state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
         isReady?: boolean;
@@ -407,7 +410,7 @@ const launcherApi = {
         username?: string;
         connectedAt?: string;
         error?: string;
-        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed';
+        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed' | 'docker_unavailable' | 'docker_connect_failed' | 'docker_container_missing' | 'docker_command_failed';
       };
       error?: string;
     }> => ipcRenderer.invoke(IPC.STARMOTE_DISCONNECT, { serverId }),
@@ -421,7 +424,7 @@ const launcherApi = {
       success: boolean;
       status?: {
         serverId: string;
-        backend?: 'starmote' | 'azure-vm';
+        backend?: 'starmote' | 'azure-vm' | 'docker';
         connected: boolean;
         state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
         isReady?: boolean;
@@ -430,7 +433,7 @@ const launcherApi = {
         username?: string;
         connectedAt?: string;
         error?: string;
-        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed';
+        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed' | 'docker_unavailable' | 'docker_connect_failed' | 'docker_container_missing' | 'docker_command_failed';
       };
       error?: string;
       reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced';
@@ -440,7 +443,7 @@ const launcherApi = {
     getStatus: (serverId?: string): Promise<{
       statuses: Array<{
         serverId: string;
-        backend?: 'starmote' | 'azure-vm';
+        backend?: 'starmote' | 'azure-vm' | 'docker';
         connected: boolean;
         state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
         isReady?: boolean;
@@ -449,14 +452,14 @@ const launcherApi = {
         username?: string;
         connectedAt?: string;
         error?: string;
-        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed';
+        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed' | 'docker_unavailable' | 'docker_connect_failed' | 'docker_container_missing' | 'docker_command_failed';
       }>;
     }> => ipcRenderer.invoke(IPC.STARMOTE_STATUS, { serverId }),
 
     /** Subscribe to remote connection status changes. Returns a cleanup function. */
     onStatusChanged: (cb: (status: {
       serverId: string;
-      backend?: 'starmote' | 'azure-vm';
+      backend?: 'starmote' | 'azure-vm' | 'docker';
       connected: boolean;
       state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
       isReady?: boolean;
@@ -465,11 +468,11 @@ const launcherApi = {
       username?: string;
       connectedAt?: string;
       error?: string;
-      reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed';
+      reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed' | 'docker_unavailable' | 'docker_connect_failed' | 'docker_container_missing' | 'docker_command_failed';
     }) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, status: {
         serverId: string;
-        backend?: 'starmote' | 'azure-vm';
+        backend?: 'starmote' | 'azure-vm' | 'docker';
         connected: boolean;
         state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
         isReady?: boolean;
@@ -478,7 +481,7 @@ const launcherApi = {
         username?: string;
         connectedAt?: string;
         error?: string;
-        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed';
+        reasonCode?: 'connected' | 'authenticating' | 'ready' | 'auth_failed' | 'timeout' | 'connect_failed' | 'socket_error' | 'protocol_timeout' | 'registry_unavailable' | 'not_ready' | 'invalid_command' | 'send_failed' | 'closed' | 'disconnected' | 'replaced' | 'ssh_connect_failed' | 'ssh_command_failed' | 'docker_unavailable' | 'docker_connect_failed' | 'docker_container_missing' | 'docker_command_failed';
       }) => cb(status);
       ipcRenderer.on(IPC.STARMOTE_STATUS_CHANGED, listener);
       return () => ipcRenderer.removeListener(IPC.STARMOTE_STATUS_CHANGED, listener);
@@ -504,6 +507,32 @@ const launcherApi = {
     },
   },
   } : {}),
+
+  // ─── Server performance metrics ────────────────────────────────────────────
+  serverMetrics: {
+    /** Sample CPU/memory for a running server (local process, Docker container, or SSH host). */
+    get: (payload: {
+      serverId: string;
+      backend?: 'starmote' | 'azure-vm' | 'docker';
+      isRemote?: boolean;
+      uptimeMs?: number;
+    }): Promise<{
+      ok: boolean;
+      timestamp: number;
+      source: 'local' | 'docker' | 'ssh' | 'unavailable';
+      cpuPercent?: number;
+      cpuCores?: number;
+      memoryBytes?: number;
+      memoryLimitBytes?: number;
+      memoryPercent?: number;
+      netRxBytes?: number;
+      netTxBytes?: number;
+      pids?: number;
+      uptimeMs?: number;
+      scopeLabel?: string;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC.SERVER_METRICS, payload),
+  },
 
   remoteFiles: {
     setSession: (payload: {

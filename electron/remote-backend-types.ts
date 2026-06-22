@@ -4,7 +4,7 @@
 // layer can route connect / disconnect / command calls without knowing the
 // underlying transport.
 
-export type RemoteBackendType = 'starmote' | 'azure-vm';
+export type RemoteBackendType = 'starmote' | 'azure-vm' | 'docker';
 
 export type RemoteConnectionState =
   | 'idle'
@@ -34,7 +34,12 @@ export type RemoteReasonCode =
   | 'replaced'
   // Azure VM / SSH codes
   | 'ssh_connect_failed'
-  | 'ssh_command_failed';
+  | 'ssh_command_failed'
+  // Docker codes
+  | 'docker_unavailable'
+  | 'docker_connect_failed'
+  | 'docker_container_missing'
+  | 'docker_command_failed';
 
 /** Uniform connection status emitted by every backend. */
 export interface RemoteConnectionStatus {
@@ -82,6 +87,53 @@ export interface RemoteConnectOptions {
   screenSessionName?: string;
   /** Absolute path to the StarMade server root on the remote host (e.g. /home/user/Servers/SOE). Used to locate the log file. */
   serverRootPath?: string;
+  // ── Docker ─────────────────────────────────────────────────────────────────
+  /**
+   * Docker daemon host the local `docker` CLI should target via `-H`.
+   * Examples: `ssh://user@host`, `tcp://203.0.113.10:2375`. Empty/undefined
+   * targets the local Docker socket.
+   */
+  dockerHost?: string;
+  /** Name or id of the container running the StarMade server. */
+  dockerContainer?: string;
+}
+
+// ─── Runtime metrics ───────────────────────────────────────────────────────────
+
+export type ServerMetricsSource = 'local' | 'docker' | 'ssh' | 'unavailable';
+
+/** Point-in-time resource usage sample for a running server (local or remote). */
+export interface ServerMetricsSample {
+  ok: boolean;
+  /** Epoch milliseconds the sample was taken. */
+  timestamp: number;
+  source: ServerMetricsSource;
+  /**
+   * CPU usage as a percentage. For process samples this is percent of a single
+   * core (so a value > 100 means more than one core's worth of work). For SSH
+   * host samples it is the host's overall CPU utilisation (0–100).
+   */
+  cpuPercent?: number;
+  /** Number of logical cores available on the host, used to normalise cpuPercent. */
+  cpuCores?: number;
+  /** Resident memory used, in bytes. */
+  memoryBytes?: number;
+  /** Memory ceiling (container limit or host total), in bytes, when known. */
+  memoryLimitBytes?: number;
+  /** Memory used as a percentage of the limit, when known. */
+  memoryPercent?: number;
+  /** Cumulative bytes received over the network (docker only), when known. */
+  netRxBytes?: number;
+  /** Cumulative bytes transmitted over the network (docker only), when known. */
+  netTxBytes?: number;
+  /** Number of OS threads/processes (docker only), when known. */
+  pids?: number;
+  /** Process/container uptime in milliseconds, when known. */
+  uptimeMs?: number;
+  /** Human-readable label describing what the sample measures. */
+  scopeLabel?: string;
+  /** Populated when ok === false. */
+  error?: string;
 }
 
 export interface RemoteConnectResult {

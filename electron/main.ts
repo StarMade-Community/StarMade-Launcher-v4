@@ -55,6 +55,7 @@ import type { CatalogItemRef, SyncProgress } from './blueprints.js';
 import { getManagedPathCandidates } from './install-paths.js';
 import { isSafeDeletionPath, isStarMadeInstallDir } from './safe-delete.js';
 import { registerRemoteIpcHandlers } from './starmote-ipc.js';
+import { sampleLocalProcessMetrics, makeUnavailableSample } from './server-metrics.js';
 import { isStarmoteRolloutEnabled } from './starmote-feature-flag.js';
 import { RemoteFileBackend } from './remote-file-backend.js';
 import type { RemoteFileSession } from './remote-file-backend.js';
@@ -422,9 +423,19 @@ if (isStarmoteRolloutEnabled()) {
     // Always force-refresh the OAuth token before sending it to the game server.
     // This prevents stale/expired tokens from causing code -10 registry rejections.
     resolveAuthTokenForAccount: (accountId) => getAccessTokenForLaunch(accountId, { forceRefresh: true }),
+    getRunningServerPid: (serverId) => getGameStatus(serverId).pid,
   });
 } else {
   console.info('[starmote] rollout disabled via STARMOTE_ENABLED=0');
+  // Local performance metrics must still work when the remote rollout is off.
+  ipcMain.handle(IPC.SERVER_METRICS, async (_event, payloadRaw) => {
+    const payload = (payloadRaw ?? {}) as { serverId?: string; isRemote?: boolean; uptimeMs?: number };
+    const serverId = payload?.serverId?.trim();
+    if (!serverId || payload?.isRemote) {
+      return makeUnavailableSample('Remote metrics are unavailable while the remote rollout is disabled.');
+    }
+    return sampleLocalProcessMetrics(getGameStatus(serverId).pid, payload?.uptimeMs);
+  });
 }
 
 // ─── Remote file access IPC handlers ─────────────────────────────────────────

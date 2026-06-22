@@ -4,6 +4,10 @@ import type { ManagedItem, ServerLifecycleState } from '../../types';
 import {
   buildDatabaseEntityListSql,
   formatDatabaseEntityType,
+  getDefaultRemoteConnectPort,
+  getRemoteBackendLabel,
+  isAzureVmBackend,
+  isDockerBackend,
   getDefaultRemoteFileAccessPort,
   isRemoteCommandActionEnabled,
   isRemoteConnectSupported,
@@ -26,6 +30,29 @@ const baseServer: ManagedItem = {
   port: '4242',
   isRemote: false,
 };
+
+describe('remote backend helpers', () => {
+  it('labels each backend type', () => {
+    expect(getRemoteBackendLabel('starmote')).toBe('StarMote');
+    expect(getRemoteBackendLabel('azure-vm')).toBe('Azure VM (SSH)');
+    expect(getRemoteBackendLabel('docker')).toBe('Docker Container');
+    expect(getRemoteBackendLabel(undefined)).toBe('StarMote');
+  });
+
+  it('returns sensible default connect ports per backend', () => {
+    expect(getDefaultRemoteConnectPort('azure-vm')).toBe('22');
+    expect(getDefaultRemoteConnectPort('docker')).toBe('4242');
+    expect(getDefaultRemoteConnectPort('starmote')).toBe('4242');
+  });
+
+  it('detects azure-vm and docker backends from a profile', () => {
+    expect(isAzureVmBackend({ ...baseServer, remoteBackend: 'azure-vm' })).toBe(true);
+    expect(isDockerBackend({ ...baseServer, remoteBackend: 'docker' })).toBe(true);
+    expect(isDockerBackend({ ...baseServer, remoteBackend: 'azure-vm' })).toBe(false);
+    expect(isDockerBackend(baseServer)).toBe(false);
+    expect(isDockerBackend(null)).toBe(false);
+  });
+});
 
 describe('serverPanel helpers', () => {
   it('normalizes wildcard bind hosts to loopback for remote connect defaults', () => {

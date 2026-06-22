@@ -8,11 +8,30 @@ type RemoteReasonCodeShape =
   | 'protocol_timeout' | 'registry_unavailable'
   | 'not_ready' | 'invalid_command' | 'send_failed'
   | 'closed' | 'disconnected' | 'replaced'
-  | 'ssh_connect_failed' | 'ssh_command_failed';
+  | 'ssh_connect_failed' | 'ssh_command_failed'
+  | 'docker_unavailable' | 'docker_connect_failed' | 'docker_container_missing' | 'docker_command_failed';
+
+/** Point-in-time CPU/memory sample for a running server. */
+interface ServerMetricsSampleShape {
+  ok: boolean;
+  timestamp: number;
+  source: 'local' | 'docker' | 'ssh' | 'unavailable';
+  cpuPercent?: number;
+  cpuCores?: number;
+  memoryBytes?: number;
+  memoryLimitBytes?: number;
+  memoryPercent?: number;
+  netRxBytes?: number;
+  netTxBytes?: number;
+  pids?: number;
+  uptimeMs?: number;
+  scopeLabel?: string;
+  error?: string;
+}
 
 interface RemoteConnectionStatusShape {
   serverId: string;
-  backend?: 'starmote' | 'azure-vm';
+  backend?: 'starmote' | 'azure-vm' | 'docker';
   connected: boolean;
   state?: 'idle' | 'connecting' | 'connected' | 'authenticating' | 'ready' | 'error';
   isReady?: boolean;
@@ -297,7 +316,7 @@ declare global {
           serverId: string;
           host: string;
           port: number;
-          backend?: 'starmote' | 'azure-vm';
+          backend?: 'starmote' | 'azure-vm' | 'docker';
           username?: string;
           clientVersion?: string;
           activeAccountId?: string;
@@ -307,6 +326,9 @@ declare global {
           sshPassword?: string;
           screenSessionName?: string;
           serverRootPath?: string;
+          // Docker
+          dockerHost?: string;
+          dockerContainer?: string;
         }) => Promise<{
           success: boolean;
           status?: RemoteConnectionStatusShape;
@@ -348,6 +370,17 @@ declare global {
           source: 'framed-packet' | 'text-fallback' | 'ssh-stdout' | 'ssh-stderr';
           commandId?: number;
         }) => void) => () => void;
+      };
+
+      /** Server performance metrics. Always present (works for local and remote servers). */
+      serverMetrics?: {
+        /** Sample CPU/memory for a running server (local process, Docker container, or SSH host). */
+        get: (payload: {
+          serverId: string;
+          backend?: 'starmote' | 'azure-vm' | 'docker';
+          isRemote?: boolean;
+          uptimeMs?: number;
+        }) => Promise<ServerMetricsSampleShape>;
       };
 
       /** Dialog APIs */

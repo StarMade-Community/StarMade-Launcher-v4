@@ -22,7 +22,9 @@ import type {
   RemoteCommandResult,
   RemoteConnectionStatus,
   RemoteRuntimeEvent,
+  ServerMetricsSample,
 } from './remote-backend-types.js';
+import { parseSshHostMetrics, makeUnavailableSample } from './server-metrics.js';
 
 interface AzureVmSession {
   serverId: string;
@@ -261,7 +263,71 @@ export class AzureVmBackend implements IRemoteBackend {
     return Array.from(this.sessions.values()).map((s) => this.buildStatus(s));
   }
 
+  /**
+   * Sample host-level CPU load and memory over SSH for the Performance tab.
+   * Returns host metrics (not per-process) since the server pid is unknown.
+   */
+  async getStats(serverId: string): Promise<ServerMetricsSample> {
+    const session = this.sessions.get(serverId);
+    if (!session || session.state !== 'ready') {
+      return makeUnavailableSample('SSH session is not connected.');
+    }
+
+    // Gather core count, load average and memory in a single round-trip.
+    const command = 'nproc 2>/dev/null; cat /proc/loadavg 2>/dev/null; free -b 2>/dev/null';
+    const result = await this.runOneShotSshCapture(session, command, 12_000);
+    if (!result.ok) {
+      return makeUnavailableSample(result.error || 'Failed to read host metrics over SSH.');
+    }
+
+    const lines = result.stdout.split('\n');
+    const firstLine = lines.find((l) => l.trim())?.trim() ?? '';
+    const cpuCores = Number.parseInt(firstLine, 10);
+    return parseSshHostMetrics(
+      result.stdout,
+      Number.isFinite(cpuCores) && cpuCores > 0 ? cpuCores : 1,
+    );
+  }
+
   // ─── Private helpers ─────────────────────────────────────────────────────────
+
+  /**
+   * Run a single SSH command and resolve with captured stdout. Unlike
+   * runOneShotSsh this does NOT emit runtime events (used for quiet polling).
+   */
+  private runOneShotSshCapture(
+    session: AzureVmSession,
+    command: string,
+    timeoutMs: number,
+  ): Promise<{ ok: boolean; stdout: string; error?: string }> {
+    return new Promise((resolve) => {
+      const { cmd, args, opts } = buildSpawnConfig(session, command);
+      const proc = spawn(cmd, args, opts);
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+
+      const finish = (ok: boolean, error?: string): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ ok, stdout, error });
+      };
+
+      const timer = setTimeout(() => {
+        try { proc.kill('SIGKILL'); } catch { /* ignore */ }
+        finish(false, 'SSH command timed out.');
+      }, timeoutMs);
+
+      proc.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
+      proc.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+      proc.on('error', (err) => finish(false, err.message));
+      proc.on('close', (code) => {
+        if (code === 0) finish(true);
+        else finish(false, stderr.trim() || `SSH exited with code ${code ?? 'null'}.`);
+      });
+    });
+  }
 
   private buildStatus(session: AzureVmSession): RemoteConnectionStatus {
     const isReady = session.state === 'ready';

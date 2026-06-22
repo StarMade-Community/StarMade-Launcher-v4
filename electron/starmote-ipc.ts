@@ -11,11 +11,14 @@ import {
   type StarmoteRuntimeEvent,
 } from './starmote-session-manager.js';
 import { AzureVmBackend } from './azure-vm-backend.js';
+import { DockerBackend } from './docker-backend.js';
 import { logStarmoteDebug } from './starmote-debug.js';
+import { sampleLocalProcessMetrics, makeUnavailableSample } from './server-metrics.js';
 import type {
   RemoteBackendType,
   RemoteConnectionStatus,
   RemoteRuntimeEvent,
+  ServerMetricsSample,
 } from './remote-backend-types.js';
 
 // ─── Interface types ──────────────────────────────────────────────────────────
@@ -43,6 +46,18 @@ interface RemoteConnectPayload {
   sshPort?: number;
   sshKeyPath?: string;
   sshPassword?: string;
+  screenSessionName?: string;
+  serverRootPath?: string;
+  // Docker
+  dockerHost?: string;
+  dockerContainer?: string;
+}
+
+interface RemoteMetricsPayload {
+  serverId: string;
+  backend?: RemoteBackendType;
+  isRemote?: boolean;
+  uptimeMs?: number;
 }
 
 interface RemoteDisconnectPayload {
@@ -67,6 +82,8 @@ export interface RegisterRemoteIpcOptions {
   resolveAuthTokenForAccount?: (accountId: string) => Promise<string | null>;
   resolveUsernameForAccount?: (accountId: string) => Promise<string | null> | string | null;
   loginClientVersion?: string;
+  /** Resolve the OS pid of a locally-running server, for the Performance tab. */
+  getRunningServerPid?: (serverId: string) => number | undefined;
 }
 
 const USER_AGENT_STAR_MOTE_STANDALONE = 2;
@@ -92,6 +109,7 @@ export function registerRemoteIpcHandlers(options: RegisterRemoteIpcOptions): vo
     resolveAuthTokenForAccount,
     resolveUsernameForAccount,
     loginClientVersion,
+    getRunningServerPid,
   } = options;
 
   logStarmoteDebug('ipc.registered');
@@ -124,6 +142,11 @@ export function registerRemoteIpcHandlers(options: RegisterRemoteIpcOptions): vo
   });
 
   const azureVmBackend = new AzureVmBackend({
+    onStatusChanged: (status) => broadcastStatus(status),
+    onRuntimeEvent: (event) => broadcastRuntimeEvent(event),
+  });
+
+  const dockerBackend = new DockerBackend({
     onStatusChanged: (status) => broadcastStatus(status),
     onRuntimeEvent: (event) => broadcastRuntimeEvent(event),
   });
@@ -174,6 +197,28 @@ export function registerRemoteIpcHandlers(options: RegisterRemoteIpcOptions): vo
 
         if (connectResult.success) {
           backendByServerId.set(serverId, 'azure-vm');
+        }
+        return connectResult;
+      }
+
+      // ── Docker path ─────────────────────────────────────────────────────────
+      if (backend === 'docker') {
+        const dockerHost = payload?.dockerHost?.trim() || '';
+        const dockerContainer = payload?.dockerContainer?.trim() || '';
+        const screenSessionName = payload?.screenSessionName?.trim() || undefined;
+
+        const connectResult = await dockerBackend.connect({
+          serverId,
+          backend: 'docker',
+          host,
+          port,
+          dockerHost,
+          dockerContainer,
+          screenSessionName,
+        });
+
+        if (connectResult.success) {
+          backendByServerId.set(serverId, 'docker');
         }
         return connectResult;
       }
@@ -245,6 +290,9 @@ export function registerRemoteIpcHandlers(options: RegisterRemoteIpcOptions): vo
       if (backend === 'azure-vm') {
         return azureVmBackend.disconnect(serverId);
       }
+      if (backend === 'docker') {
+        return dockerBackend.disconnect(serverId);
+      }
 
       const rawStatus = starmoteManager.disconnect(serverId);
       return {
@@ -271,13 +319,17 @@ export function registerRemoteIpcHandlers(options: RegisterRemoteIpcOptions): vo
         ? [azureVmBackend.getStatusFor(requestedId)]
         : azureVmBackend.getStatuses();
 
-      // Deduplicate: if a serverId appears in both, prefer the connected one.
+      const dockerStatuses = requestedId
+        ? [dockerBackend.getStatusFor(requestedId)]
+        : dockerBackend.getStatuses();
+
+      // Deduplicate: if a serverId appears in more than one backend, prefer connected.
       const byId = new Map<string, RemoteConnectionStatus>();
 
       for (const s of starmoteStatuses) {
         byId.set(s.serverId, tagStarmoteStatus(s));
       }
-      for (const s of azureStatuses) {
+      for (const s of [...azureStatuses, ...dockerStatuses]) {
         const existing = byId.get(s.serverId);
         if (!existing || s.connected) byId.set(s.serverId, s);
       }
@@ -312,12 +364,45 @@ export function registerRemoteIpcHandlers(options: RegisterRemoteIpcOptions): vo
       if (backend === 'azure-vm') {
         return azureVmBackend.sendAdminCommand({ serverId, command });
       }
+      if (backend === 'docker') {
+        return dockerBackend.sendAdminCommand({ serverId, command });
+      }
 
       const result = await starmoteManager.sendAdminCommand({ serverId, command });
       if (result.status) {
         return { ...result, status: tagStarmoteStatus(result.status) };
       }
       return result as { success: boolean; status?: RemoteConnectionStatus; error?: string; reasonCode?: string };
+    },
+  );
+
+  // ── SERVER_METRICS ─────────────────────────────────────────────────────────
+
+  ipcMain.handle(
+    IPC.SERVER_METRICS,
+    async (_event, payloadRaw): Promise<ServerMetricsSample> => {
+      const payload = (payloadRaw ?? {}) as Partial<RemoteMetricsPayload>;
+      const serverId = payload?.serverId?.trim();
+      if (!serverId) {
+        return makeUnavailableSample('serverId is required.');
+      }
+
+      // Prefer the backend that actually owns a live session for this server.
+      const backend = backendByServerId.get(serverId) ?? payload?.backend;
+
+      if (backend === 'docker') {
+        return dockerBackend.getStats(serverId);
+      }
+      if (backend === 'azure-vm') {
+        return azureVmBackend.getStats(serverId);
+      }
+
+      // Local server: sample the tracked process.
+      if (payload?.isRemote) {
+        return makeUnavailableSample('No live remote session to sample.');
+      }
+      const pid = getRunningServerPid?.(serverId);
+      return sampleLocalProcessMetrics(pid, payload?.uptimeMs);
     },
   );
 }

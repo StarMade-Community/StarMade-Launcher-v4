@@ -444,6 +444,13 @@ export const IPC = {
    * Payload: { version: 1; serverId: string; command: string }
    */
   STARMOTE_SEND_ADMIN_COMMAND: 'starmote:send-admin-command',
+
+  /**
+   * Renderer → Main (invoke): sample CPU/memory usage for a running server.
+   * Routes to local process / Docker container / SSH host depending on the profile.
+   * Payload: { serverId: string; backend?: RemoteBackendType; isRemote?: boolean }
+   */
+  SERVER_METRICS: 'server:metrics',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

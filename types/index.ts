@@ -59,7 +59,7 @@ export interface ManagedItem {
   /** True when this server entry is a remote profile (no local install/download path). */
   isRemote?: boolean;
   /** Which remote connection backend to use. Defaults to 'starmote' when omitted. */
-  remoteBackend?: 'starmote' | 'azure-vm';
+  remoteBackend?: 'starmote' | 'azure-vm' | 'docker';
   // ── Azure VM / SSH backend fields ──────────────────────────────────────────
   /** SSH port on the Azure VM (default 22). */
   azureVmSshPort?: string;
@@ -69,6 +69,13 @@ export interface ManagedItem {
   azureVmSshUsername?: string;
   /** screen/tmux session name to target when sending admin commands (e.g. 'StarMade'). */
   azureVmScreenSession?: string;
+  // ── Docker backend fields ───────────────────────────────────────────────────
+  /** Docker daemon host for the local CLI's `-H` flag (e.g. ssh://user@host or tcp://host:2375). Blank uses the local socket. */
+  dockerHost?: string;
+  /** Name or id of the container running the StarMade server. */
+  dockerContainer?: string;
+  /** screen/tmux session name inside the container for admin command injection. */
+  dockerScreenSession?: string;
   /** Optional remote file-access protocol used later for file/config access on remote servers. */
   remoteFileAccessProtocol?: 'none' | 'ftp' | 'sftp';
   /** Optional host for remote file access. Defaults to the remote server host when omitted. */

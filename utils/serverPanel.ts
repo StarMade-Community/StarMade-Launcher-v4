@@ -2,21 +2,27 @@ import type { ManagedItem, ServerLifecycleState } from '../types';
 
 export type DatabaseSectorLoadFilter = 'all' | 'loaded' | 'unloaded';
 export type RemoteFileAccessProtocol = 'none' | 'ftp' | 'sftp';
-export type RemoteBackendType = 'starmote' | 'azure-vm';
+export type RemoteBackendType = 'starmote' | 'azure-vm' | 'docker';
 
 export function getRemoteBackendLabel(backend: RemoteBackendType | undefined): string {
   switch (backend) {
     case 'azure-vm': return 'Azure VM (SSH)';
+    case 'docker': return 'Docker Container';
     default: return 'StarMote';
   }
 }
 
 export function getDefaultRemoteConnectPort(backend: RemoteBackendType | undefined): string {
-  return backend === 'azure-vm' ? '22' : '4242';
+  if (backend === 'azure-vm') return '22';
+  return '4242';
 }
 
 export function isAzureVmBackend(server: ManagedItem | null | undefined): boolean {
   return server?.remoteBackend === 'azure-vm';
+}
+
+export function isDockerBackend(server: ManagedItem | null | undefined): boolean {
+  return server?.remoteBackend === 'docker';
 }
 
 const WILDCARD_HOSTS = new Set([
