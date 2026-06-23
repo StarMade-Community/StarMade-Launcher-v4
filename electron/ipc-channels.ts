@@ -157,6 +157,17 @@ export const IPC = {
 
   /** Renderer → Main (invoke): get the app userData directory path. */
   APP_GET_USER_DATA: 'app:get-user-data',
+  /**
+   * Renderer → Main (invoke): get the default parent directory for new
+   * installations/servers (absolute, under <Documents>/My Games/StarMade).
+   * Arg: isServer (boolean). Returns: string
+   */
+  APP_GET_DEFAULT_GAME_DIR: 'app:get-default-game-dir',
+  /**
+   * Renderer → Main (invoke): resolve a possibly-relative managed installation
+   * path to a stable absolute path. Arg: targetPath (string). Returns: string
+   */
+  APP_RESOLVE_MANAGED_PATH: 'app:resolve-managed-path',
   /** Renderer → Main (invoke): get total system RAM in MB. */
   APP_GET_SYSTEM_MEMORY: 'app:get-system-memory',
   /** Renderer → Main (invoke): get server panel schema JSON used by config editors. */

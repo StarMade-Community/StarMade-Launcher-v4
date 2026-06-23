@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { gunzipSync } from 'zlib';
 import { getManagedPathCandidates } from './install-paths.js';
+import { getManagedInstallRoot } from './store.js';
 
 export interface ModRecord {
   fileName: string;
@@ -152,7 +153,7 @@ function getInstallationRoot(installationPath: string, launcherDir: string): str
     throw new Error('Installation path is required.');
   }
 
-  const candidates = getManagedPathCandidates(installationPath, launcherDir);
+  const candidates = getManagedPathCandidates(installationPath, launcherDir, process.cwd(), getManagedInstallRoot());
   const existing = candidates.find((candidate) => fs.existsSync(candidate));
   if (!existing) throw new Error('Installation path does not exist.');
   return existing;

@@ -3,6 +3,14 @@ import os from 'os';
 import path from 'path';
 import { gzipSync } from 'zlib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// mods.ts → store.ts reads app.getPath() for the managed install root.
+// `mock`-prefixed name so Vitest allows it inside the hoisted factory.
+const mockElectronUserData = path.join(os.tmpdir(), 'starmade-launcher-test-mods-store');
+vi.mock('electron', () => ({
+  app: { getPath: vi.fn(() => mockElectronUserData) },
+}));
+
 import {
   clearSmdCache,
   downloadModForInstallation,

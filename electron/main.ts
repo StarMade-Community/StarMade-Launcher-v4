@@ -17,7 +17,7 @@ import net from 'net';
 import { Worker } from 'worker_threads';
 import { config as loadDotEnv } from 'dotenv';
 import { IPC } from './ipc-channels.js';
-import { storeGet, storeSet, storeDelete, storeClearAll } from './store.js';
+import { storeGet, storeSet, storeDelete, storeClearAll, getManagedInstallRoot } from './store.js';
 import { fetchAllVersions, invalidateVersionCache } from './versions.js';
 import { startDownload, cancelDownload } from './downloader.js';
 import type { DownloadProgress } from './downloader.js';
@@ -52,7 +52,7 @@ import {
   importWithProgress,
 } from './blueprints.js';
 import type { CatalogItemRef, SyncProgress } from './blueprints.js';
-import { getManagedPathCandidates } from './install-paths.js';
+import { getManagedPathCandidates, resolveManagedInstallPath } from './install-paths.js';
 import { isSafeDeletionPath, isStarMadeInstallDir } from './safe-delete.js';
 import { registerRemoteIpcHandlers } from './starmote-ipc.js';
 import { sampleLocalProcessMetrics, makeUnavailableSample } from './server-metrics.js';
@@ -187,6 +187,30 @@ if (process.platform === 'linux' && isRunningOnWayland(process.env)) {
  */
 function getLauncherDir(): string {
   return app.isPackaged ? app.getPath('userData') : app.getAppPath();
+}
+
+/**
+ * Default parent directory for newly created installations/servers.
+ *
+ * Lives under `<Documents>/My Games/StarMade` so game files are placed in a
+ * stable, user-visible location.  Crucially this is an *absolute* path: the
+ * old relative default (`./StarMade/Installations`) resolved against
+ * `process.cwd()`, which on the Windows portable build is the self-extracting
+ * temp directory that is wiped on reboot — taking the installation with it.
+ */
+function getDefaultGameDir(isServer: boolean): string {
+  return path.join(getManagedInstallRoot(), 'StarMade', isServer ? 'Servers' : 'Installations');
+}
+
+/**
+ * Resolve a possibly-relative installation path to a stable absolute path.
+ *
+ * Defensive belt-and-braces used at the filesystem boundary (download, launch,
+ * folder open) so a relative path can never be resolved against the throwaway
+ * working directory, even for records written before the v2 store migration.
+ */
+function resolveInstallPath(targetPath: string): string {
+  return resolveManagedInstallPath(targetPath, getManagedInstallRoot());
 }
 
 // ─── Window ──────────────────────────────────────────────────────────────────
@@ -663,11 +687,15 @@ ipcMain.handle(
       if (!sender.isDestroyed()) sender.send(channel, payload);
     };
 
+    // Resolve to an absolute path so files are never written relative to the
+    // working directory (the throwaway temp dir on the Windows portable build).
+    const resolvedTargetDir = resolveInstallPath(targetDir);
+
     // Fire-and-forget: progress/complete/error arrive via separate push events.
     startDownload(
       installationId,
       buildPath,
-      targetDir,
+      resolvedTargetDir,
       (progress: DownloadProgress) => send(IPC.DOWNLOAD_PROGRESS, progress),
       ()                           => send(IPC.DOWNLOAD_COMPLETE,  { installationId }),
       (error: string)              => send(IPC.DOWNLOAD_ERROR,     { installationId, error }),
@@ -797,7 +825,11 @@ ipcMain.handle(IPC.GAME_LAUNCH, async (_event, options: {
     }
   }
 
-  return launchGame({ ...options, launcherDir, authToken: authToken ?? undefined });
+  // Resolve a possibly-relative installation path to its stable absolute form
+  // so the game's working directory and file lookups never depend on cwd.
+  const installationPath = resolveInstallPath(options.installationPath);
+
+  return launchGame({ ...options, installationPath, launcherDir, authToken: authToken ?? undefined });
 });
 
 ipcMain.handle(IPC.GAME_STOP, (_event, installationId: string) => {
@@ -1008,7 +1040,9 @@ function writeGameConfigXml(installationPath: string, xmlContent: string): { suc
 }
 
 function resolveInstallationTargetPath(installationPath: string, relativePath: string): string {
-  const root = path.resolve(installationPath);
+  // Resolve a relative installation path against the managed root rather than
+  // the working directory, so file operations target the real install location.
+  const root = path.resolve(resolveInstallPath(installationPath) || installationPath);
   const target = path.resolve(path.join(root, relativePath));
   if (target !== root && !target.startsWith(`${root}${path.sep}`)) {
     throw new Error('Invalid file path.');
@@ -1621,6 +1655,8 @@ function readServerPanelSchema(): unknown {
 }
 
 ipcMain.handle(IPC.APP_GET_USER_DATA, () => app.getPath('userData'));
+ipcMain.handle(IPC.APP_GET_DEFAULT_GAME_DIR, (_event, isServer: boolean) => getDefaultGameDir(Boolean(isServer)));
+ipcMain.handle(IPC.APP_RESOLVE_MANAGED_PATH, (_event, targetPath: string) => resolveInstallPath(typeof targetPath === 'string' ? targetPath : ''));
 ipcMain.handle(IPC.APP_GET_SYSTEM_MEMORY, () => Math.floor(os.totalmem() / (1024 * 1024)));
 ipcMain.handle(IPC.APP_GET_SERVER_PANEL_SCHEMA, () => readServerPanelSchema());
 ipcMain.handle(IPC.APP_IS_STEAM_GAMING_MODE, () => gamingMode);
@@ -1736,7 +1772,7 @@ ipcMain.handle(IPC.INSTALLATION_DELETE_FILES, async (_event, targetPath: string)
     return { success: false, error: 'Invalid path.' };
   }
 
-  const candidatePaths = getManagedPathCandidates(targetPath, getLauncherDir());
+  const candidatePaths = getManagedPathCandidates(targetPath, getLauncherDir(), process.cwd(), getManagedInstallRoot());
   const resolvedTargetPath = candidatePaths.find(candidate => fs.existsSync(candidate)) ?? candidatePaths[0];
 
   if (!resolvedTargetPath) {
@@ -2130,7 +2166,7 @@ function copyImageToDir(sourcePath: string, targetDir: string, fallbackBaseName:
 
 function resolveInstallationRoot(installationPath: string): string | null {
   if (typeof installationPath !== 'string' || installationPath.trim().length === 0) return null;
-  const candidates = getManagedPathCandidates(installationPath, getLauncherDir());
+  const candidates = getManagedPathCandidates(installationPath, getLauncherDir(), process.cwd(), getManagedInstallRoot());
   return candidates.find(candidate => fs.existsSync(candidate)) ?? null;
 }
 

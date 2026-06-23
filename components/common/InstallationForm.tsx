@@ -270,7 +270,15 @@ const InstallationForm: React.FC<InstallationFormProps> = ({ item, isNew, onSave
         javaPath21?: string;
       } : {};
 
-      if (defaults.gameDir) setGameDir(defaults.gameDir);
+      if (defaults.gameDir) {
+        setGameDir(defaults.gameDir);
+      } else if (window.launcher?.app?.getDefaultGameDir) {
+        // No saved default — fall back to the absolute managed default from the
+        // main process (under <Documents>/My Games/StarMade) so we never seed a
+        // relative path that would resolve against the throwaway temp dir.
+        const dir = await window.launcher.app.getDefaultGameDir(itemTypeName === 'Server').catch(() => '');
+        if (dir) setGameDir(dir);
+      }
       if (defaults.port && itemTypeName === 'Server') setPort(defaults.port);
       if (defaults.serverIp && itemTypeName === 'Server') setServerIp(defaults.serverIp);
       if (typeof defaults.maxPlayers === 'number' && itemTypeName === 'Server') setMaxPlayers(Math.max(0, Math.round(defaults.maxPlayers)));

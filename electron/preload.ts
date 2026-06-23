@@ -13,7 +13,14 @@ const launcherApi = {
   app: {
     /** Returns the Electron userData directory path. */
     getUserDataPath: (): Promise<string> =>
-      ipcRenderer.invoke(IPC.APP_GET_USER_DATA), /** Returns total system RAM in MB. */
+      ipcRenderer.invoke(IPC.APP_GET_USER_DATA),
+    /** Returns the absolute default parent directory for new installations/servers. */
+    getDefaultGameDir: (isServer: boolean): Promise<string> =>
+      ipcRenderer.invoke(IPC.APP_GET_DEFAULT_GAME_DIR, isServer),
+    /** Resolves a possibly-relative managed installation path to an absolute path. */
+    resolveManagedPath: (targetPath: string): Promise<string> =>
+      ipcRenderer.invoke(IPC.APP_RESOLVE_MANAGED_PATH, targetPath),
+    /** Returns total system RAM in MB. */
     getSystemMemory: (): Promise<number> =>
       ipcRenderer.invoke(IPC.APP_GET_SYSTEM_MEMORY),
     /** Returns the server panel schema JSON used to drive config editor metadata. */

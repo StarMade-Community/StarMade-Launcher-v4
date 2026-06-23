@@ -18,17 +18,21 @@ interface DefaultSettingsData {
 }
 
 /**
- * Get the default game directory (launcher directory + /StarMade)
+ * Get the default game directory placeholder.
+ *
+ * In Electron the real absolute default is fetched from the main process (see
+ * the load effect below) — it depends on the user's Documents folder, which the
+ * renderer cannot compute. We start blank so a relative path is never persisted:
+ * the old `./StarMade/Installations` default resolved against the working
+ * directory, which is a throwaway temp dir on the Windows portable build.
+ *
+ * The relative string is kept only as a non-Electron (browser preview) fallback.
  */
 const getDefaultGameDirectory = (isServer: boolean): string => {
-    // In Electron, we can get the app path
     if (typeof window !== 'undefined' && window.launcher) {
-        // For now, use a sensible default until we can get the actual app path
-        // This will be the current working directory + /StarMade
-        const subdir = isServer ? 'Servers' : 'Installations';
-        return `./StarMade/${subdir}`;
+        return '';
     }
-    // Browser fallback
+    // Browser fallback (preview only — never written to a real install).
     return isServer ? './StarMade/Servers' : './StarMade/Installations';
 };
 
@@ -103,6 +107,23 @@ const DefaultSettingsForm: React.FC<{ isServer: boolean }> = ({ isServer }) => {
         });
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [storeKey]);
+
+    // Backfill the absolute default game directory once the stored settings are
+    // loaded.  Only fills a blank value so we never clobber a user's choice; the
+    // real default depends on the Documents folder and lives in the main process.
+    useEffect(() => {
+        if (loadedKeyRef.current !== storeKey) return;
+        if (settings.gameDir.trim() !== '') return;
+        if (typeof window === 'undefined' || !window.launcher?.app?.getDefaultGameDir) return;
+
+        let cancelled = false;
+        window.launcher.app.getDefaultGameDir(isServer).then((dir) => {
+            if (cancelled || !dir) return;
+            setSettings(prev => (prev.gameDir.trim() === '' ? { ...prev, gameDir: dir } : prev));
+        }).catch(() => { /* leave blank; the form requires a directory before save */ });
+
+        return () => { cancelled = true; };
+    }, [storeKey, isServer, settings.gameDir]);
 
     // Populate default Java paths from Electron on mount.
     // Only fill in paths for JREs that are actually installed — using

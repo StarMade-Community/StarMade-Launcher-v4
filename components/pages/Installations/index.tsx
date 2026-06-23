@@ -305,10 +305,16 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
         }
     }, [activeTab, openLaunchModal, setSelectedServerId, navigate]);
     
-    const handleOpenFolder = useCallback((path: string) => {
-        if (typeof window !== 'undefined' && window.launcher?.shell) {
-            window.launcher.shell.openPath(path);
+    const handleOpenFolder = useCallback(async (path: string) => {
+        if (typeof window === 'undefined' || !window.launcher?.shell) return;
+        // Resolve relative/legacy paths to their stable absolute location before
+        // opening, so the folder button works even for records created before the
+        // path migration (a relative path can't be opened by the OS shell).
+        let target = path;
+        if (window.launcher.app?.resolveManagedPath) {
+            target = (await window.launcher.app.resolveManagedPath(path).catch(() => path)) || path;
         }
+        window.launcher.shell.openPath(target);
     }, []);
     
     const TabButton: React.FC<{ isActive: boolean; onClick: () => void; children: React.ReactNode }> = React.memo(({ isActive, onClick, children }) => (

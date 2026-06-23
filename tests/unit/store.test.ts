@@ -91,4 +91,69 @@ describe('store module', () => {
       expect(storeGet('ghost')).toBeUndefined();
     });
   });
+
+  describe('v2 relative-path migration', () => {
+    /** Write a raw store file to disk so the next load() runs the migration. */
+    function writeStoreFile(data: unknown) {
+      fs.mkdirSync(mockUserDataPath, { recursive: true });
+      fs.writeFileSync(
+        path.join(mockUserDataPath, 'launcher-store.json'),
+        JSON.stringify(data),
+        'utf-8',
+      );
+    }
+
+    const managedRoot = path.join(mockUserDataPath, 'My Games');
+
+    it('rewrites relative installation/server paths to absolute on load', async () => {
+      writeStoreFile({
+        __version: 1,
+        installations: [
+          { id: '1', path: './StarMade/Installations/Alpha' },
+          { id: '2', path: path.resolve('already', 'absolute') },
+        ],
+        servers: [{ id: '3', path: './StarMade/Servers/Beta' }],
+      });
+
+      const { storeGet } = await freshStore();
+
+      const installs = storeGet('installations') as Array<{ id: string; path: string }>;
+      expect(installs[0].path).toBe(path.resolve(managedRoot, './StarMade/Installations/Alpha'));
+      // Absolute paths are left untouched.
+      expect(installs[1].path).toBe(path.resolve('already', 'absolute'));
+
+      const servers = storeGet('servers') as Array<{ id: string; path: string }>;
+      expect(servers[0].path).toBe(path.resolve(managedRoot, './StarMade/Servers/Beta'));
+      expect(storeGet('__version')).toBe(2);
+    });
+
+    it('rewrites the relative default gameDir to absolute', async () => {
+      writeStoreFile({
+        __version: 1,
+        defaultInstallationSettings: { gameDir: './StarMade/Installations' },
+        defaultServerSettings: { gameDir: './StarMade/Servers' },
+      });
+
+      const { storeGet } = await freshStore();
+
+      const inst = storeGet('defaultInstallationSettings') as { gameDir: string };
+      const srv = storeGet('defaultServerSettings') as { gameDir: string };
+      expect(inst.gameDir).toBe(path.resolve(managedRoot, './StarMade/Installations'));
+      expect(srv.gameDir).toBe(path.resolve(managedRoot, './StarMade/Servers'));
+    });
+
+    it('leaves an already-migrated (v2) store untouched', async () => {
+      const relative = './StarMade/Installations/Gamma';
+      writeStoreFile({
+        __version: 2,
+        installations: [{ id: '1', path: relative }],
+      });
+
+      const { storeGet } = await freshStore();
+
+      const installs = storeGet('installations') as Array<{ id: string; path: string }>;
+      // Already at v2 → migration must not run, so the value is preserved verbatim.
+      expect(installs[0].path).toBe(relative);
+    });
+  });
 });

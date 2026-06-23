@@ -51,6 +51,10 @@ declare global {
       app: {
         /** Returns the Electron userData directory path. */
         getUserDataPath: () => Promise<string>;
+        /** Returns the absolute default parent directory for new installations/servers. */
+        getDefaultGameDir: (isServer: boolean) => Promise<string>;
+        /** Resolves a possibly-relative managed installation path to an absolute path. */
+        resolveManagedPath: (targetPath: string) => Promise<string>;
         /** Returns total system RAM in MB. */
         getSystemMemory: () => Promise<number>;
         /** Returns server panel schema JSON used by config editors. */
