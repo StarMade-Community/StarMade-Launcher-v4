@@ -2,8 +2,12 @@
  * Java runtime detection and management.
  *
  * StarMade version requirements:
- *   - Versions >= 0.3.x   require Java 21  (with --add-opens arg)
- *   - Versions <  0.3.x   require Java 8   (no extra args)
+ *   - Versions >= 0.3     require Java 21  (with --add-opens arg)
+ *   - Versions <  0.3     require Java 8   (no extra args)
+ *
+ * Note two version schemes are in play — the legacy decimal one ("0.203.175",
+ * "0.400.307") and the current counter-style one introduced 2026-08 ("0.4.1").
+ * See getRequiredJavaVersion.
  *
  * Phase 4 TODO:
  *   - Auto-download Adoptium/Temurin Java 8 and Java 21 to launcher directory
@@ -43,24 +47,36 @@ export const JAVA_8_ARGS: string[] = [];
  * @returns 21 for versions >= 0.3.x, otherwise 8.
  */
 export function getRequiredJavaVersion(starMadeVersion: string): 8 | 21 {
-	// Parse version string (format: "0.203.175" or "0.302.101" or "1.0")
-	const parts = starMadeVersion.split('.').map(p => parseInt(p, 10));
-	if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1])) {
+	// Two schemes appear in the build indexes:
+	//   legacy — the version is a decimal fraction: "0.17", "0.19624",
+	//            "0.203.175", "0.302.101", "0.400.307" (patch appended as a
+	//            third component once the minor was zero-padded to 3 digits).
+	//   current — since 2026-08 a conventional major.minor.patch counter whose
+	//            minor starts at 4: "0.4.0", "0.4.1" (replaced "0.400.307").
+	const parts = starMadeVersion.split('.');
+	const major = parseInt(parts[0], 10);
+	if (parts.length < 2 || isNaN(major)) {
 		// Default to Java 8 for unparseable versions (legacy/archive)
 		return 8;
 	}
 
-	const [major, minor] = parts;
+	const minorStr = parts[1].trim();
+	if (!/^\d+$/.test(minorStr)) return 8;
 
 	// StarMade 1.x and above require Java 21
 	if (major >= 1) return 21;
 
-	// StarMade uses a 3-component minor number: 0.3xx.yyy = "0.3.x" era.
-	// Versions 0.300.x and above require Java 21.
-	// Legacy versions (0.200.x – 0.205.x, etc.) use Java 8.
-	if (major === 0 && minor >= 300) return 21;
+	// A 3-component version with a 1- or 2-digit minor can only be the current
+	// scheme — the legacy scheme always padded its minor to three digits before
+	// it grew a patch component. That scheme began at 0.4, long after the Java
+	// 21 cut-over, so every such build needs Java 21. (Without this, "0.4.1"
+	// reads as the decimal 0.4 < ... and, worse, a future "0.10.0" would read as
+	// 0.10 and fall back to Java 8.)
+	if (parts.length >= 3 && minorStr.length <= 2) return 21;
 
-	return 8;
+	// Legacy scheme: compare as the decimal fraction it is, so
+	// 0.19624 < 0.203 < 0.3 <= 0.302 < 0.400. Everything from 0.3 on needs Java 21.
+	return parseFloat(`0.${minorStr}`) >= 0.3 ? 21 : 8;
 }
 
 /**

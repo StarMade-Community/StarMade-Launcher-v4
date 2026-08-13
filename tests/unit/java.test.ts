@@ -85,6 +85,46 @@ describe('getRequiredJavaVersion', () => {
     it('returns 21 for version 2.0.0', () => {
       expect(getRequiredJavaVersion('2.0.0')).toBe(21);
     });
+
+    it('returns 21 for version 0.400.307 (last legacy-scheme pre build)', () => {
+      expect(getRequiredJavaVersion('0.400.307')).toBe(21);
+    });
+  });
+
+  describe('current version scheme (0.4.x counter, introduced 2026-08)', () => {
+    it('returns 21 for version 0.4.0', () => {
+      expect(getRequiredJavaVersion('0.4.0')).toBe(21);
+    });
+
+    it('returns 21 for version 0.4.1', () => {
+      expect(getRequiredJavaVersion('0.4.1')).toBe(21);
+    });
+
+    it('returns 21 for a future two-digit minor (0.10.0)', () => {
+      expect(getRequiredJavaVersion('0.10.0')).toBe(21);
+    });
+
+    it('returns 21 for a two-component 0.5', () => {
+      expect(getRequiredJavaVersion('0.5')).toBe(21);
+    });
+  });
+
+  describe('legacy decimal versions are compared as fractions', () => {
+    it('returns 8 for version 0.17 (2014-era build)', () => {
+      expect(getRequiredJavaVersion('0.17')).toBe(8);
+    });
+
+    it('returns 8 for version 0.1801 (decimal 0.1801, not minor 1801)', () => {
+      expect(getRequiredJavaVersion('0.1801')).toBe(8);
+    });
+
+    it('returns 8 for version 0.19624', () => {
+      expect(getRequiredJavaVersion('0.19624')).toBe(8);
+    });
+
+    it('returns 8 for version 0.163', () => {
+      expect(getRequiredJavaVersion('0.163')).toBe(8);
+    });
   });
 });
 
