@@ -38,7 +38,7 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
     // Restore state
     const [restoreTarget, setRestoreTarget] = useState<ManagedItem | null>(null);
 
-    const { openLaunchModal, navigate, clearPageProps, serverPanelEnabled } = useApp();
+    const { openLaunchModal, openLogViewer, navigate, clearPageProps, serverPanelEnabled } = useApp();
     const { 
         installations, 
         servers,
@@ -434,6 +434,7 @@ const [deleteTarget, setDeleteTarget] = useState<ManagedItem | null>(null);
                                 onAction={handleItemAction}
                                 onOpenFolder={typeof window !== 'undefined' && window.launcher?.shell ? handleOpenFolder : undefined}
                                 onRestore={activeTab === 'installations' ? handleRestore : undefined}
+                                onViewLogs={openLogViewer}
                             />
                         ))
                     )}

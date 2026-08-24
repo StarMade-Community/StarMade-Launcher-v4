@@ -11,6 +11,7 @@ import Play from './components/pages/Play';
 import Settings from './components/pages/Settings';
 import ServerPanel from './components/pages/ServerPanel';
 import LaunchConfirmModal from './components/common/LaunchConfirmModal';
+import LaunchErrorNotice from './components/common/LaunchErrorNotice';
 import GameLogViewer from './components/common/GameLogViewer';
 import UpdateAvailableModal from './components/common/UpdateAvailableModal';
 import LegacyImportPromptModal from './components/common/LegacyImportPromptModal';
@@ -363,6 +364,8 @@ const App: React.FC = () => {
         onOpenSettings={handleOpenLegacyImportSettings}
         onDismiss={handleDismissLegacyPrompt}
       />
+
+      <LaunchErrorNotice />
 
       <GameUpdateNotice />
 

@@ -4,7 +4,9 @@
  * Download flow (mirrors v2 launcher `src/services/updater.coffee`):
  *   1. Fetch the checksum manifest for the chosen build path.
  *   2. For each listed file, compare its SHA-1 against the local copy.
- *   3. Download every file that is missing or has a mismatched checksum.
+ *   3. Download every file that is missing or has a mismatched checksum,
+ *      retrying with HTTP Range resume and verifying the SHA-1 before the
+ *      file is moved into place.
  *   4. Report progress back to the renderer via callbacks.
  *
  * Checksum manifest format (one entry per line):
@@ -21,8 +23,12 @@ import crypto from 'crypto';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE_URL    = 'http://files.star-made.org';
+/** Overridable so tests (and mirrors) can point elsewhere. Read per-call. */
+const baseUrl = () => process.env.STARMADE_CDN_URL || BASE_URL;
 /** Maximum concurrent file downloads. */
 const CONCURRENCY = 3;
+/** Attempts per file before giving up (transient network errors are common). */
+const MAX_ATTEMPTS = 3;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -128,11 +134,16 @@ async function needsDownload(filePath: string, expectedChecksum: string): Promis
 
 // ─── Single-file download ─────────────────────────────────────────────────────
 
+const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
 function downloadFile(
-  session:  DownloadSession,
-  url:      string,
-  destPath: string,
-  onBytes:  (n: number) => void,
+  session:          DownloadSession,
+  url:              string,
+  destPath:         string,
+  expectedSize:     number,
+  expectedChecksum: string,
+  resumeFrom:       number,
+  onTotalBytes:     (total: number) => void,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     if (session.cancelled) { reject(new Error('Cancelled')); return; }
@@ -144,63 +155,154 @@ function downloadFile(
       return;
     }
 
-    const tmpPath     = `${destPath}.tmp`;
-    const writeStream = fs.createWriteStream(tmpPath);
+    const tmpPath = `${destPath}.tmp`;
+    let writeStream: fs.WriteStream | null = null;
+    let settled = false;
 
-    const req = http.get(url, { timeout: 60_000 }, (res) => {
-      if (res.statusCode !== 200) {
-        writeStream.destroy();
-        try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-        reject(new Error(`HTTP ${res.statusCode} downloading ${url}`));
-        res.resume();
-        return;
+    // The partial `.tmp` is deliberately left in place: the next attempt
+    // resumes from it. Only `downloadWithRetry` decides when to discard one.
+    // `end()` rather than `destroy()` so buffered bytes reach disk and the
+    // resume starts from the true offset; `settled` keeps the resulting
+    // 'finish' event from resolving a download that actually failed.
+    const fail = (err: Error, flush = true) => {
+      if (settled) return;
+      settled = true;
+      if (flush && writeStream && !writeStream.destroyed) writeStream.end();
+      else writeStream?.destroy();
+      reject(err);
+    };
+
+    /** Size check, then SHA-1, then the atomic rename into place. */
+    const finalise = async (): Promise<void> => {
+      const actualSize = fs.statSync(tmpPath).size;
+      if (expectedSize > 0 && actualSize !== expectedSize) {
+        // A connection dropped mid-transfer can still close the stream
+        // cleanly, so the byte count is the first thing to check.
+        throw new Error(`Incomplete download (${actualSize} of ${expectedSize} bytes)`);
       }
+      if (expectedChecksum) {
+        const actual = await sha1File(tmpPath);
+        if (actual !== expectedChecksum) {
+          throw new Error(`Checksum mismatch (expected ${expectedChecksum}, got ${actual})`);
+        }
+      }
+      fs.renameSync(tmpPath, destPath); // atomic replace
+    };
 
-      res.on('data', (chunk: Buffer) => { onBytes(chunk.length); });
-      res.on('error', (err) => {
-        writeStream.destroy();
-        try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-        reject(err);
-      });
-
-      writeStream.on('error', (err) => {
-        try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-        reject(err);
-      });
-
-      writeStream.on('finish', () => {
-        if (session.cancelled) {
-          try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-          reject(new Error('Cancelled'));
+    const req = http.get(
+      url,
+      {
+        timeout: 60_000,
+        headers: resumeFrom > 0 ? { Range: `bytes=${resumeFrom}-` } : {},
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        if (status !== 200 && status !== 206) {
+          fail(new Error(`HTTP ${status} downloading ${url}`));
+          res.resume();
           return;
         }
-        try {
-          fs.renameSync(tmpPath, destPath); // atomic replace
-          resolve();
-        } catch (err) {
-          reject(err);
-        }
-      });
 
-      res.pipe(writeStream);
-    });
+        // 206 means the server honoured the Range header. A plain 200 in reply
+        // to a Range request means it ignored it and is resending the whole
+        // file, so the partial must be overwritten rather than appended to.
+        const offset = status === 206 ? resumeFrom : 0;
 
-    req.on('error', (err) => {
-      writeStream.destroy();
-      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-      reject(err);
-    });
+        writeStream = fs.createWriteStream(tmpPath, { flags: offset > 0 ? 'a' : 'w' });
+        // Registered before any write: the stream can fail (EACCES, ENOSPC, a
+        // Windows file lock) and an unhandled 'error' event would take down
+        // the whole main process.
+        // Don't try to flush a stream that is itself the thing that failed.
+        writeStream.on('error', (err) => fail(err, false));
+
+        let received = 0;
+        res.on('data', (chunk: Buffer) => {
+          received += chunk.length;
+          onTotalBytes(offset + received);
+        });
+        res.on('error', fail);
+
+        writeStream.on('finish', () => {
+          if (settled) return;
+          if (session.cancelled) { settled = true; reject(new Error('Cancelled')); return; }
+
+          finalise()
+            .then(() => { settled = true; resolve(); })
+            .catch(fail);
+        });
+
+        res.pipe(writeStream);
+      },
+    );
+
+    req.on('error', fail);
 
     req.on('timeout', () => {
       req.destroy();
-      writeStream.destroy();
-      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-      reject(new Error('Download timed out'));
+      fail(new Error('Download timed out'));
     });
 
     session.activeRequests.add(req);
     req.on('close', () => session.activeRequests.delete(req));
   });
+}
+
+/**
+ * `downloadFile` with bounded retries, resuming from whatever the previous
+ * attempt managed to write. A leftover `.tmp` from an earlier launcher run is
+ * resumed too — if it turns out to be stale, the SHA-1 check rejects it and the
+ * next attempt starts clean.
+ *
+ * Client errors (HTTP 4xx) are terminal; retrying a 404 never helps.
+ */
+async function downloadWithRetry(
+  session:          DownloadSession,
+  url:              string,
+  destPath:         string,
+  expectedSize:     number,
+  expectedChecksum: string,
+  onBytes:          (n: number) => void,
+): Promise<void> {
+  const tmpPath = `${destPath}.tmp`;
+
+  // `downloadFile` reports absolute per-file totals; the caller counts deltas.
+  let credited = 0;
+  const report = (total: number) => { onBytes(total - credited); credited = total; };
+
+  const discardPartial = () => { try { fs.unlinkSync(tmpPath); } catch { /* ignore */ } };
+
+  for (let attempt = 1; ; attempt++) {
+    let resumeFrom = 0;
+    try {
+      const size = fs.statSync(tmpPath).size;
+      // An over-long partial can only be junk — a truncated manifest entry or a
+      // stale file from another build.
+      if (expectedSize > 0 && size >= expectedSize) discardPartial();
+      else resumeFrom = size;
+    } catch { /* no partial to resume */ }
+
+    report(resumeFrom);
+
+    try {
+      await downloadFile(session, url, destPath, expectedSize, expectedChecksum, resumeFrom, report);
+      return;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+
+      // A hash mismatch means the bytes on disk are wrong, not merely
+      // incomplete — resuming from them would fail forever.
+      if (msg.startsWith('Checksum mismatch')) {
+        discardPartial();
+        report(0);
+      }
+
+      if (session.cancelled || msg === 'Cancelled' || attempt >= MAX_ATTEMPTS || /^HTTP 4/.test(msg)) {
+        throw err;
+      }
+      console.warn(`[downloader] attempt ${attempt}/${MAX_ATTEMPTS} failed for ${url}: ${msg}`);
+      await delay(500 * 2 ** (attempt - 1));
+    }
+  }
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -236,7 +338,7 @@ export async function startDownload(
   try {
     // ── Step 1: Fetch checksum manifest ─────────────────────────────────────
     const cleanBuild  = buildPath.replace(/^\.\//, '');
-    const checksumUrl = `${BASE_URL}/${cleanBuild}/checksums`;
+    const checksumUrl = `${baseUrl()}/${cleanBuild}/checksums`;
 
     emit('checksums', { percent: 0, bytesReceived: 0, totalBytes: 0, filesDownloaded: 0, totalFiles: 0, currentFile: 'Fetching checksums…' });
 
@@ -269,6 +371,22 @@ export async function startDownload(
 
     if (session.cancelled) throw new Error('Cancelled');
 
+    // Sweep orphaned `.tmp` files: partials are kept after a failure so the
+    // next run can resume them, but one whose file is now verified good — or
+    // that belongs to a path this build no longer ships — is dead weight.
+    const resumable = new Set(
+      toDownload.map(e => path.join(targetDir, ...e.relativePath.replace(/^\.\//, '').split('/')) + '.tmp'),
+    );
+    try {
+      for (const rel of fs.readdirSync(targetDir, { recursive: true }) as string[]) {
+        if (!rel.endsWith('.tmp')) continue;
+        const tmpPath = path.join(targetDir, rel);
+        if (!resumable.has(tmpPath)) fs.rmSync(tmpPath, { force: true });
+      }
+    } catch (err) {
+      console.warn('[downloader] could not sweep .tmp files:', err);
+    }
+
     if (toDownload.length === 0) {
       emit('downloading', { percent: 100, bytesReceived: 0, totalBytes: 0, filesDownloaded: 0, totalFiles: 0, currentFile: 'Already up to date' });
       onComplete();
@@ -297,15 +415,21 @@ export async function startDownload(
 
         const entry        = queue.shift()!;
         const cleanRelPath = entry.relativePath.replace(/^\.\//, '');
-        const fileUrl      = `${BASE_URL}/${cleanBuild}/${cleanRelPath}`;
+        const fileUrl      = `${baseUrl()}/${cleanBuild}/${cleanRelPath}`;
         const localPath    = path.join(targetDir, ...cleanRelPath.split('/'));
 
         emitProgress(cleanRelPath);
 
-        await downloadFile(session, fileUrl, localPath, (bytes) => {
-          bytesReceived += bytes;
-          emitProgress(cleanRelPath);
-        });
+        try {
+          await downloadWithRetry(session, fileUrl, localPath, entry.size, entry.checksum, (bytes) => {
+            bytesReceived += bytes;
+            emitProgress(cleanRelPath);
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg === 'Cancelled') throw err;
+          throw new Error(`${cleanRelPath}: ${msg}`);
+        }
 
         filesDownloaded++;
         emitProgress(cleanRelPath);
@@ -325,6 +449,11 @@ export async function startDownload(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg !== 'Cancelled') {
+      // Stop the sibling workers first: their in-flight progress events would
+      // otherwise arrive after onError and overwrite the error state, leaving
+      // the UI stuck on a frozen progress bar with no reason shown.
+      cancelDownload(installationId);
+      console.error(`[downloader] ${installationId} failed:`, msg);
       onError(msg);
     }
   } finally {

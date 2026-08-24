@@ -115,6 +115,11 @@ declare global {
         fetch: (invalidate?: boolean) => Promise<Version[]>;
       };
 
+      news: {
+        /** Fetch the Steam news feed as raw RSS XML via the main process (no CORS). */
+        fetch: () => Promise<{ success: boolean; xml?: string; error?: string }>;
+      };
+
       /** Game download API — Phase 3. */
       download: {
         /**

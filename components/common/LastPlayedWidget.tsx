@@ -166,16 +166,19 @@ const SessionCard: React.FC<SessionCardProps> = ({
  */
 const LastPlayedWidget: React.FC = () => {
     const { launchSession } = useApp();
-    const { lastPlayedSession, pinnedSessions, pinSession, unpinSession } = useData();
+    const { lastPlayedSession, pinnedSessions, pinSession, unpinSession, installations } = useData();
 
-    // Nothing to show if there are no sessions at all.
-    if (!lastPlayedSession && pinnedSessions.length === 0) return null;
+    // A card whose installation has since been deleted cannot be launched, and
+    // clicking it would do nothing at all — so don't offer it.
+    const isLaunchable = (s: PlaySession) => installations.some(i => i.id === s.installationId);
 
+    const lastPlayed = lastPlayedSession && isLaunchable(lastPlayedSession) ? lastPlayedSession : null;
     // Deduplicate: if the last-played is already pinned show it only in the
     // "last played" slot so users don't see the same card twice.
-    const pinnedToShow = pinnedSessions.filter(
-        s => s.id !== lastPlayedSession?.id,
-    );
+    const pinnedToShow = pinnedSessions.filter(s => isLaunchable(s) && s.id !== lastPlayed?.id);
+
+    // Nothing to show if there are no launchable sessions at all.
+    if (!lastPlayed && pinnedToShow.length === 0) return null;
 
     return (
         <div className="fixed bottom-20 right-4 z-20 flex flex-col items-end gap-1">
@@ -183,12 +186,12 @@ const LastPlayedWidget: React.FC = () => {
                 Quick Play
             </p>
             <div className="flex items-end gap-2 flex-wrap justify-end max-w-[700px]">
-                {lastPlayedSession && (
+                {lastPlayed && (
                     <SessionCard
-                        key={lastPlayedSession.id}
-                        session={lastPlayedSession}
+                        key={lastPlayed.id}
+                        session={lastPlayed}
                         isLastPlayed
-                        isPinned={pinnedSessions.some(s => s.id === lastPlayedSession.id)}
+                        isPinned={pinnedSessions.some(s => s.id === lastPlayed.id)}
                         onPlay={launchSession}
                         onPin={pinSession}
                         onUnpin={unpinSession}

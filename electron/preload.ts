@@ -76,6 +76,12 @@ const launcherApi = {
       ipcRenderer.invoke(IPC.VERSIONS_FETCH, { invalidate }),
   },
 
+  news: {
+    /** Fetch the Steam news feed as raw RSS XML (main process — no CORS). */
+    fetch: (): Promise<{ success: boolean; xml?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC.NEWS_FETCH),
+  },
+
   // ─── Phase 3: Download ────────────────────────────────────────────────────
 
   download: {

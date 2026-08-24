@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useMemo, useEffect, useRef, ReactNode } from 'react';
 import type { AppContextType, Page, PageProps, ManagedItem, PlaySession, SessionLaunchArgs, LauncherSettingsData } from '../types';
 import { useData } from './DataContext';
+import { makeSessionId } from '../utils/playSession';
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
@@ -244,6 +245,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
 
         try {
+            // Resolved once and reused for both the launch and the session
+            // record, so a replay of that record produces an identical launch.
+            // `undefined` means "no -uplink at all", which is how singleplayer
+            // launches — it is not the same as connecting to localhost.
+            const uplink     = sessionArgs?.uplink ?? installation.serverIp;
+            const uplinkPort = sessionArgs?.uplinkPort
+                ?? (installation.port ? parseInt(installation.port, 10) : undefined);
+
             const result = await window.launcher.game.launch({
                 installationId: installation.id,
                 installationPath: installation.path,
@@ -258,40 +267,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 activeAccountId: activeAccount?.id,
                 // Direct-connect args: prefer session-specific overrides, fall back
                 // to the installation's own serverIp/port (for server entries).
-                uplink: sessionArgs?.uplink ?? installation.serverIp,
-                uplinkPort: sessionArgs?.uplinkPort ?? (installation.port ? parseInt(installation.port, 10) : undefined),
+                uplink,
+                uplinkPort,
                 modIds: sessionArgs?.modIds,
             });
 
             if (result.success) {
                 console.log(`Game launched successfully with PID ${result.pid}`);
 
-                // Record this as the last-played session.
-                // Use a stable, deterministic id derived from the session target
-                // (installationId + serverAddress + serverPort + modIds) so that
-                // repeated launches of the same target update the existing record
-                // rather than creating a new one, preserving pin/unpin identity.
-                const serverAddress = sessionArgs?.uplink ?? installation.serverIp ?? 'localhost';
-                const serverPort    = sessionArgs?.uplinkPort
-                    ?? (installation.port ? parseInt(installation.port, 10) : undefined)
-                    ?? 4242;
-                const modIds        = sessionArgs?.modIds;
-                const isMultiplayer = serverAddress !== 'localhost' && serverAddress !== '';
-                const stableId = [
-                    installation.id,
-                    serverAddress,
-                    String(serverPort),
-                    (modIds ?? []).slice().sort().join(','),
-                ].join('::');
+                // Record this as the last-played session, keyed by a stable id
+                // derived from the launch target so repeated launches update the
+                // existing record rather than piling up duplicates that break
+                // pin identity.
+                const modIds = sessionArgs?.modIds;
                 const session: PlaySession = {
-                    id: stableId,
+                    id: makeSessionId(installation.id, uplink, uplinkPort, modIds),
                     installationId: installation.id,
                     installationName: installation.name,
                     installationPath: installation.path,
                     installationVersion: installation.version,
-                    sessionType: isMultiplayer ? 'multiplayer' : 'singleplayer',
-                    serverAddress,
-                    serverPort,
+                    sessionType: uplink ? 'multiplayer' : 'singleplayer',
+                    ...(uplink ? { serverAddress: uplink, serverPort: uplinkPort ?? 4242 } : {}),
                     modIds,
                     timestamp: new Date().toISOString(),
                 };
@@ -364,6 +360,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
     }, [isLaunching, performLaunch]);
     
+    /** Dismiss a launch failure notice without starting another launch. */
+    const dismissLaunchError = useCallback(() => setLaunchError(null), []);
+
     const completeLaunching = useCallback(() => {
         console.log("Launch sequence complete.");
         setIsLaunching(false);
@@ -387,12 +386,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const launchSession = useCallback((session: PlaySession) => {
         const installation = installations.find(i => i.id === session.installationId);
         if (!installation) {
-            console.warn('[AppContext] launchSession: installation not found for session', session.installationId);
+            // The installation was deleted after the session was recorded.
+            // Surface it rather than making the click a silent no-op.
+            setLaunchError(`"${session.installationName}" is no longer installed.`);
             return;
         }
+        // `sessionType` is the authority, not `serverAddress`: records written
+        // by older launcher versions still carry a placeholder localhost
+        // address on singleplayer sessions.
+        const isMultiplayer = session.sessionType === 'multiplayer';
         openLaunchModal(installation, {
-            uplink:     session.serverAddress,
-            uplinkPort: session.serverPort,
+            uplink:     isMultiplayer ? session.serverAddress : undefined,
+            uplinkPort: isMultiplayer ? session.serverPort    : undefined,
             modIds:     session.modIds,
         });
     }, [installations, openLaunchModal]);
@@ -404,6 +409,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         isLaunching,
         launchError,
         launchStatus,
+        dismissLaunchError,
         logViewerOpen,
         logViewerInstallation,
         serverPanelEnabled,
@@ -425,6 +431,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         isLaunching,
         launchError,
         launchStatus,
+        dismissLaunchError,
         logViewerOpen,
         logViewerInstallation,
         serverPanelEnabled,

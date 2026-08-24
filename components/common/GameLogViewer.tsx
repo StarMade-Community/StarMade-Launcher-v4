@@ -18,6 +18,10 @@ interface LogEntry {
 
 const CRASH_CONTEXT_RADIUS = 100;
 
+/** Upper bound on retained log lines. Comfortably above what a crash report
+ * needs (2 × CRASH_CONTEXT_RADIUS) while keeping memory bounded. */
+const MAX_BUFFERED_LOG_ENTRIES = 5000;
+
 const CRASH_MARKERS: Array<{ label: string; pattern: RegExp }> = [
   { label: 'exiting normal', pattern: /exiting normal/i },
   { label: 'critical gl error', pattern: /critical gl error/i },
@@ -118,8 +122,12 @@ const GameLogViewer: React.FC<GameLogViewerProps> = ({
     return report.join('\n');
   };
 
+  // Deliberately not gated on `isOpen`: this component stays mounted for as
+  // long as an installation is selected, and unsubscribing while the panel is
+  // closed silently drops every line the game logs in the meantime — reopening
+  // would resume mid-stream with a hole in the log.
   useEffect(() => {
-    if (!isOpen || typeof window === 'undefined' || !window.launcher?.game) {
+    if (typeof window === 'undefined' || !window.launcher?.game) {
       return;
     }
 
@@ -144,7 +152,10 @@ const GameLogViewer: React.FC<GameLogViewerProps> = ({
         };
         
         setLogs(prev => {
-          const updated = [...prev, newLog];
+          // ponytail: fixed-size buffer; StarMade can log for hours and this
+          // now collects the whole session. Spill to disk if anyone needs more
+          // scrollback than this — the full log is already on disk anyway.
+          const updated = [...prev, newLog].slice(-MAX_BUFFERED_LOG_ENTRIES);
           
           if (!crashDetected) {
             const processExitMatch = data.message.match(/Process exited with code (-?\d+)/);
@@ -199,7 +210,7 @@ const GameLogViewer: React.FC<GameLogViewerProps> = ({
     });
 
     return cleanup;
-  }, [isOpen, installationId, crashDetected]);
+  }, [installationId, crashDetected]);
 
   // Auto-scroll to bottom when new logs arrive
   useEffect(() => {

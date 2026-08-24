@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
+import { normalizePlaySession } from '../utils/playSession';
 import type { DataContextType, ManagedItem, Account, Version, DownloadStatus, DownloadProgress, LoginResult, RegisterResult, PlaySession, PlayTimeTotals } from '../types';
 import { isActivelyDownloading } from '../utils/downloadState';
 
@@ -146,14 +147,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 setSelectedVersion({ id: storedSelectedVersionId } as Version);
             }
 
-            // Load pinned sessions
+            // Load pinned sessions. Normalising on the way in keeps a pin
+            // written by an older launcher matching the record a fresh launch
+            // of the same target writes — otherwise it becomes a duplicate that
+            // never updates and relaunches with the wrong arguments.
             if (Array.isArray(storedPinnedSessions)) {
-                setPinnedSessions(storedPinnedSessions as PlaySession[]);
+                setPinnedSessions((storedPinnedSessions as PlaySession[]).map(normalizePlaySession));
             }
 
             // Load last played session
             if (storedLastPlayed && typeof storedLastPlayed === 'object' && !Array.isArray(storedLastPlayed)) {
-                setLastPlayedSession(storedLastPlayed as PlaySession);
+                setLastPlayedSession(normalizePlaySession(storedLastPlayed as PlaySession));
             }
 
             setIsLoaded(true);

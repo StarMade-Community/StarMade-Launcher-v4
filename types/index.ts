@@ -25,12 +25,13 @@ export interface PlaySession {
   /** Whether this was a singleplayer world or a multiplayer server connection. */
   sessionType: 'singleplayer' | 'multiplayer';
   /**
-   * Server address passed via `-uplink`.
-   * `'localhost'` for singleplayer worlds, the remote IP for multiplayer.
+   * Server address passed via `-uplink`. Absent for singleplayer: an ordinary
+   * launch passes no `-uplink` at all, and recording a placeholder here would
+   * relaunch the session as a direct connection instead.
    */
-  serverAddress: string;
-  /** Server port (typically 4242). */
-  serverPort: number;
+  serverAddress?: string;
+  /** Server port for `-uplink` (typically 4242). Absent for singleplayer. */
+  serverPort?: number;
   /** Enabled mod IDs to be passed as a comma-separated list after `-uplink`. */
   modIds?: string[];
   /** ISO 8601 timestamp of the last time this session was launched. */
@@ -323,6 +324,8 @@ export interface AppContextType {
     isLaunchModalOpen: boolean;
     isLaunching: boolean;
     launchError: string | null;
+    /** Dismiss a launch failure notice without starting another launch. */
+    dismissLaunchError: () => void;
     /** Human-readable status shown in the launch button during pre-launch steps (e.g. "Downloading Java 8…"). */
     launchStatus: string | null;
     logViewerOpen: boolean;

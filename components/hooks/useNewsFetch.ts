@@ -20,13 +20,42 @@ const REQUEST_TIMEOUT_MS = 10000;
 
 const FEED_URL = 'https://store.steampowered.com/feeds/news/app/244770/';
 
-/** CORS proxies tried in order. Any one of these can be down at a given moment
- * (the free public ones are flaky), so we fall through to the next before
- * counting the whole attempt as a failure. Each entry wraps the feed URL. */
+/** Returns the feed as raw RSS XML, or throws. */
+type FeedSource = (signal: AbortSignal) => Promise<string>;
+
+/**
+ * The main process fetches the feed directly — it isn't subject to CORS, so no
+ * third party is involved and nothing can rate-limit us.
+ */
+const viaMainProcess: FeedSource = async () => {
+    const result = await window.launcher.news.fetch();
+    if (!result.success || !result.xml) {
+        throw new Error(result.error ?? 'Main-process news fetch failed.');
+    }
+    return result.xml;
+};
+
+/**
+ * Public CORS proxies. Only reachable when the UI runs in a plain browser
+ * (`vite dev`) rather than Electron: they are free services that are down often
+ * enough that relying on them is what made the feed almost always fail.
+ */
 const PROXIES: ((url: string) => string)[] = [
     (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
     (url) => `https://thingproxy.freeboard.io/fetch/${url}`,
+];
+
+const viaProxy = (buildProxyUrl: (url: string) => string): FeedSource => async (signal) => {
+    const response = await fetch(buildProxyUrl(FEED_URL), { signal });
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    return response.text();
+};
+
+/** Sources tried in order, best first. */
+export const feedSources = (): FeedSource[] => [
+    ...(typeof window !== 'undefined' && window.launcher?.news ? [viaMainProcess] : []),
+    ...PROXIES.map(viaProxy),
 ];
 
 // Module-level cache shared across every useNewsFetch() instance. Because the
@@ -68,42 +97,38 @@ const useNewsFetch = () => {
             setLoading(true);
             setError(null);
             try {
-                // Try each proxy in turn; only give up (and trigger a retry) once
-                // every proxy has failed for this attempt.
+                // Try each source in turn; only give up (and trigger a retry)
+                // once every source has failed for this attempt.
                 let xml: Document | null = null;
                 let lastError: unknown = null;
-                for (const buildProxyUrl of PROXIES) {
+                for (const source of feedSources()) {
                     // Per-attempt timeout chained to the outer abort signal, so a
-                    // hung proxy doesn't stall the whole fetch.
+                    // hung source doesn't stall the whole fetch.
                     const timeoutController = new AbortController();
                     const onAbort = () => timeoutController.abort();
                     signal.addEventListener('abort', onAbort);
                     const timeoutId = setTimeout(() => timeoutController.abort(), REQUEST_TIMEOUT_MS);
                     try {
-                        const response = await fetch(buildProxyUrl(FEED_URL), { signal: timeoutController.signal });
-                        if (!response.ok) {
-                            throw new Error(`HTTP error! status: ${response.status}`);
-                        }
-                        const text = await response.text();
+                        const text = await source(timeoutController.signal);
 
                         const parser = new DOMParser();
                         const candidate = parser.parseFromString(text, 'application/xml');
                         if (candidate.querySelector('parsererror')) {
-                            throw new Error('Proxy returned a non-XML body.');
+                            throw new Error('Feed source returned a non-XML body.');
                         }
                         // A valid RSS payload must contain at least one item; an
                         // empty body parses "successfully" but is useless, so
-                        // treat it as a failure and move to the next proxy.
+                        // treat it as a failure and move to the next source.
                         if (candidate.querySelectorAll('item').length === 0) {
-                            throw new Error('Proxy returned an empty feed.');
+                            throw new Error('Feed source returned an empty feed.');
                         }
                         xml = candidate;
                         break;
-                    } catch (proxyError) {
-                        // Propagate a real cancellation; otherwise record and try next proxy.
-                        if (signal.aborted) throw proxyError;
-                        lastError = proxyError;
-                        console.warn('News proxy failed, trying next:', proxyError);
+                    } catch (sourceError) {
+                        // Propagate a real cancellation; otherwise record and try the next source.
+                        if (signal.aborted) throw sourceError;
+                        lastError = sourceError;
+                        console.warn('News source failed, trying next:', sourceError);
                     } finally {
                         clearTimeout(timeoutId);
                         signal.removeEventListener('abort', onAbort);
@@ -111,7 +136,7 @@ const useNewsFetch = () => {
                 }
 
                 if (!xml) {
-                    throw lastError ?? new Error('All news proxies failed.');
+                    throw lastError ?? new Error('Every news source failed.');
                 }
 
                 const items = xml.querySelectorAll('item');

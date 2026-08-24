@@ -34,6 +34,13 @@ export const IPC = {
   /** Renderer → Main (invoke): fetch all available versions from the StarMade CDN. Returns Version[]. */
   VERSIONS_FETCH: 'versions:fetch',
 
+  /**
+   * Renderer → Main (invoke): fetch the Steam news RSS feed.
+   * Done in the main process because the renderer is subject to CORS and the
+   * public proxies that worked around it are unreliable.
+   */
+  NEWS_FETCH: 'news:fetch',
+
   // ─── Phase 3: Game download ───────────────────────────────────────────────
 
   /** Renderer → Main (invoke): start downloading game files for an installation. */

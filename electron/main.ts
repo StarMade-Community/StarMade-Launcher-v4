@@ -676,6 +676,28 @@ ipcMain.handle(IPC.VERSIONS_FETCH, async (_event, { invalidate = false } = {}) =
   return fetchAllVersions();
 });
 
+// ─── News IPC handler ────────────────────────────────────────────────────────
+
+/** StarMade's Steam news feed (app 244770). */
+const STEAM_NEWS_FEED = 'https://store.steampowered.com/feeds/news/app/244770/';
+
+// Fetched here rather than in the renderer: the renderer is subject to CORS, and
+// the free public proxies used to work around that are down often enough that
+// the feed mostly failed to load. The main process has no such restriction.
+ipcMain.handle(IPC.NEWS_FETCH, async () => {
+  try {
+    const res = await fetch(STEAM_NEWS_FEED, {
+      signal: AbortSignal.timeout(15_000),
+      headers: { 'User-Agent': `StarMade-Launcher/${app.getVersion()}` },
+    });
+    if (!res.ok) return { success: false, error: `HTTP ${res.status} fetching the Steam news feed` };
+    return { success: true, xml: await res.text() };
+  } catch (err) {
+    console.warn('[news] fetch failed:', err);
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+});
+
 // ─── Download IPC handlers ────────────────────────────────────────────────────
 
 ipcMain.handle(
