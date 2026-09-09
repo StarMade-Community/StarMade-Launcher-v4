@@ -96,13 +96,20 @@ import { promisify } from 'util';
 import AdmZip from 'adm-zip';
 import tar from 'tar-stream';
 import { createGunzip } from 'zlib';
+import { createHash } from 'crypto';
 
 const execFileAsync = promisify(execFile);
 
 /**
- * Build the Adoptium download URL for the specified Java version.
+ * Look up the Adoptium release asset for the specified Java version.
+ *
+ * Uses the assets API rather than the /binary/ redirect endpoint so we get the
+ * publisher's SHA-256 alongside the download URL. Both come from the same TLS
+ * response, so this does not defend against a compromised Adoptium API — it
+ * defends against a tampered or truncated download from the release host it
+ * redirects to (GitHub), and against corrupted transfers.
  */
-function getAdoptiumUrl(version: 8 | 21): string {
+export async function getAdoptiumAsset(version: 8 | 21): Promise<{ link: string; checksum: string }> {
 	const platform = process.platform === 'win32' ? 'windows'
 		: process.platform === 'darwin' ? 'mac'
 			: 'linux';
@@ -110,32 +117,106 @@ function getAdoptiumUrl(version: 8 | 21): string {
 	const arch = (process.arch === 'arm64' && !(platform === 'mac' && version === 8))
 		? 'aarch64' : 'x64';
 
-	return `https://api.adoptium.net/v3/binary/latest/${version}/ga/${platform}/${arch}/jre/hotspot/normal/eclipse`;
+	const url = `https://api.adoptium.net/v3/assets/latest/${version}/hotspot`
+		+ `?os=${platform}&architecture=${arch}&image_type=jre`;
+
+	const res = await fetch(url, { headers: { accept: 'application/json' } });
+	if (!res.ok) throw new Error(`Failed to query Adoptium API: HTTP ${res.status}`);
+
+	const assets = await res.json() as Array<{ binary?: { package?: { link?: string; checksum?: string } } }>;
+	// `package` is the archive (.zip/.tar.gz); `installer` would be the .msi.
+	const pkg = assets?.[0]?.binary?.package;
+	if (!pkg?.link || !pkg?.checksum) {
+		throw new Error(`Adoptium API returned no JRE package for Java ${version} on ${platform}/${arch}`);
+	}
+	return { link: pkg.link, checksum: pkg.checksum };
+}
+
+/**
+ * SHA-256 of a file, lowercase hex.
+ */
+function sha256File(filePath: string): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const hash = createHash('sha256');
+		const stream = fs.createReadStream(filePath);
+		stream.on('data', (chunk) => hash.update(chunk));
+		stream.on('error', reject);
+		stream.on('end', () => resolve(hash.digest('hex')));
+	});
 }
 
 /**
  * Download a file from a URL to a target path.
  */
-function downloadFile(url: string, targetPath: string, onProgress?: (percent: number) => void): Promise<void> {
+
+/**
+ * Hosts the JRE download is allowed to come from, including redirect targets.
+ * Adoptium redirects api.adoptium.net -> github.com -> release-assets.githubusercontent.com,
+ * and GitHub has renamed that asset host before (objects.githubusercontent.com), so this
+ * matches on registrable suffix. If a future rename breaks JRE downloads, add the host here.
+ */
+const JRE_DOWNLOAD_HOSTS = ['adoptium.net', 'github.com', 'githubusercontent.com'];
+
+const MAX_REDIRECTS = 5;
+
+export function isAllowedDownloadUrl(url: string): boolean {
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		return false;
+	}
+	if (parsed.protocol !== 'https:') return false;
+	const host = parsed.hostname.toLowerCase();
+	return JRE_DOWNLOAD_HOSTS.some((d) => host === d || host.endsWith('.' + d));
+}
+
+function downloadFile(
+	url: string,
+	targetPath: string,
+	onProgress?: (percent: number) => void,
+	redirectsLeft: number = MAX_REDIRECTS,
+): Promise<void> {
 	return new Promise((resolve, reject) => {
+		if (!isAllowedDownloadUrl(url)) {
+			reject(new Error(`Refusing to download from untrusted URL: ${url}`));
+			return;
+		}
+
 		const file = fs.createWriteStream(targetPath);
+		const fail = (err: Error) => {
+			file.close(() => fs.unlink(targetPath, () => {}));
+			reject(err);
+		};
 
 		https.get(url, (response) => {
 			// Handle redirects (301 Moved Permanently, 302 Found, 303 See Other,
 			//                    307 Temporary Redirect, 308 Permanent Redirect)
 			const status = response.statusCode ?? 0;
 			if (status === 301 || status === 302 || status === 303 || status === 307 || status === 308) {
-				const redirectUrl = response.headers.location;
-				if (redirectUrl) {
-					file.close();
-					fs.unlinkSync(targetPath);
-					downloadFile(redirectUrl, targetPath, onProgress).then(resolve).catch(reject);
+				const location = response.headers.location;
+				if (!location) {
+					fail(new Error(`Redirect (HTTP ${status}) with no location header`));
 					return;
 				}
+				if (redirectsLeft <= 0) {
+					fail(new Error(`Too many redirects (>${MAX_REDIRECTS}) downloading ${url}`));
+					return;
+				}
+				response.resume(); // drain so the socket can be reused
+				// location may be relative; resolve it against the current URL.
+				const next = new URL(location, url).toString();
+				file.close(() => {
+					fs.unlink(targetPath, () => {
+						downloadFile(next, targetPath, onProgress, redirectsLeft - 1).then(resolve).catch(reject);
+					});
+				});
+				return;
 			}
 
-			if (response.statusCode !== 200) {
-				reject(new Error(`Failed to download: HTTP ${response.statusCode}`));
+			if (status !== 200) {
+				response.resume();
+				fail(new Error(`Failed to download: HTTP ${response.statusCode}`));
 				return;
 			}
 
@@ -149,28 +230,41 @@ function downloadFile(url: string, targetPath: string, onProgress?: (percent: nu
 				}
 			});
 
+			response.on('error', fail);
+			file.on('error', fail);
 			response.pipe(file);
 
 			file.on('finish', () => {
 				file.close();
 				resolve();
 			});
-		}).on('error', (err) => {
-			fs.unlink(targetPath, () => {}); // Clean up on error
-			reject(err);
-		});
+		}).on('error', fail);
 	});
 }
 
 /**
  * Extract a .tar.gz archive to a target directory.
  */
+/**
+ * Resolve an archive entry path inside `targetDir`, rejecting anything that escapes it
+ * (zip-slip / tar traversal). Returns null if the path is not contained.
+ */
+export function safeExtractPath(targetDir: string, entryName: string): string | null {
+	const root = path.resolve(targetDir);
+	const resolved = path.resolve(root, entryName);
+	return resolved === root || resolved.startsWith(root + path.sep) ? resolved : null;
+}
+
 async function extractTarGz(archivePath: string, targetDir: string): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const extract = tar.extract();
 		const gunzip = createGunzip();
 		extract.on('entry', (header, stream, next) => {
-			const filePath = path.join(targetDir, header.name);
+			const filePath = safeExtractPath(targetDir, header.name);
+			if (!filePath) {
+				reject(new Error(`[Java] Refusing to extract entry outside target directory: ${header.name}`));
+				return;
+			}
 
 			if (header.type === 'directory') {
 				fs.mkdirSync(filePath, { recursive: true });
@@ -180,6 +274,14 @@ async function extractTarGz(archivePath: string, targetDir: string): Promise<voi
 
 			} else if (header.type === 'symlink' || header.type === 'link') {
 				// JDK archives contain many symlinks; create them instead of writing data.
+				// Link targets are attacker-controlled too: a symlink escaping targetDir lets a
+				// later entry write through it. Hard links resolve from the archive root,
+				// symlinks from the entry's own directory.
+				const linkBase = header.type === 'link' ? targetDir : path.dirname(filePath);
+				if (!safeExtractPath(linkBase, header.linkname!)) {
+					reject(new Error(`[Java] Refusing to create link outside target directory: ${header.name} -> ${header.linkname}`));
+					return;
+				}
 				fs.mkdirSync(path.dirname(filePath), { recursive: true });
 				try {
 					if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
@@ -238,10 +340,16 @@ export async function downloadJava(
 
 	try {
 		// Download the archive
-		const url = getAdoptiumUrl(version);
-		await downloadFile(url, tempFile, onProgress);
+		const { link, checksum } = await getAdoptiumAsset(version);
+		await downloadFile(link, tempFile, onProgress);
 
-		console.log(`[Java] Download complete. Extracting to ${jreDir}...`);
+		// Verify before extracting — never unpack an archive we haven't authenticated.
+		const actual = await sha256File(tempFile);
+		if (actual !== checksum.toLowerCase()) {
+			throw new Error(`[Java] Checksum mismatch for Java ${version}: expected ${checksum}, got ${actual}`);
+		}
+
+		console.log(`[Java] Download verified. Extracting to ${jreDir}...`);
 
 		// Remove existing JRE directory if it exists
 		if (fs.existsSync(jreDir)) {

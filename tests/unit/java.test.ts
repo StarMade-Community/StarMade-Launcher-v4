@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -19,6 +19,9 @@ vi.mock('tar-stream', () => ({
 }));
 
 import {
+  safeExtractPath,
+  isAllowedDownloadUrl,
+  getAdoptiumAsset,
   getRequiredJavaVersion,
   getJvmArgsForJava,
   parseJavaVersion,
@@ -362,5 +365,78 @@ describe('ensureJava', () => {
     });
     expect(result).toEqual({ path: '/downloaded/java21', downloaded: true, usedPreferred: false });
     expect(download).toHaveBeenCalledOnce();
+  });
+});
+
+describe('safeExtractPath', () => {
+  const target = path.join(os.tmpdir(), 'jre21');
+
+  it('resolves normal entries inside the target', () => {
+    expect(safeExtractPath(target, 'bin/java')).toBe(path.join(target, 'bin', 'java'));
+  });
+
+  it('rejects traversal entries', () => {
+    expect(safeExtractPath(target, '../evil')).toBeNull();
+    expect(safeExtractPath(target, 'bin/../../../evil')).toBeNull();
+    expect(safeExtractPath(target, path.join(path.parse(target).root, 'abs', 'evil'))).toBeNull();
+  });
+
+  it('rejects sibling dirs that share the target prefix', () => {
+    expect(safeExtractPath(target, '../jre21-evil/x')).toBeNull();
+  });
+});
+
+describe('getAdoptiumAsset', () => {
+  const mockFetch = (body: unknown, ok = true) => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok, status: ok ? 200 : 503, json: async () => body })));
+  };
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('returns the archive package link and checksum, not the installer', async () => {
+    mockFetch([{
+      binary: {
+        installer: { link: 'https://example.test/jre.msi', checksum: 'aaa' },
+        package:   { link: 'https://example.test/jre.zip', checksum: 'BBB' },
+      },
+    }]);
+    await expect(getAdoptiumAsset(21)).resolves.toEqual({
+      link: 'https://example.test/jre.zip',
+      checksum: 'BBB',
+    });
+  });
+
+  it('throws when the API omits a checksum', async () => {
+    mockFetch([{ binary: { package: { link: 'https://example.test/jre.zip' } } }]);
+    await expect(getAdoptiumAsset(21)).rejects.toThrow(/no JRE package/);
+  });
+
+  it('throws on a non-OK response', async () => {
+    mockFetch([], false);
+    await expect(getAdoptiumAsset(21)).rejects.toThrow(/HTTP 503/);
+  });
+});
+
+describe('isAllowedDownloadUrl', () => {
+  it('allows the Adoptium redirect chain', () => {
+    for (const url of [
+      'https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jre/hotspot/normal/eclipse',
+      'https://github.com/adoptium/temurin21-binaries/releases/download/x/jre.zip',
+      'https://release-assets.githubusercontent.com/github-production-release-asset/1/2?sig=x',
+      'https://objects.githubusercontent.com/legacy-asset-host/1',
+    ]) {
+      expect(isAllowedDownloadUrl(url)).toBe(true);
+    }
+  });
+
+  it('rejects lookalike hosts that merely end with an allowed name', () => {
+    expect(isAllowedDownloadUrl('https://evilgithub.com/x')).toBe(false);
+    expect(isAllowedDownloadUrl('https://github.com.evil.test/x')).toBe(false);
+    expect(isAllowedDownloadUrl('https://notadoptium.net/x')).toBe(false);
+  });
+
+  it('rejects non-https and unparseable URLs', () => {
+    expect(isAllowedDownloadUrl('http://github.com/x')).toBe(false);
+    expect(isAllowedDownloadUrl('file:///etc/passwd')).toBe(false);
+    expect(isAllowedDownloadUrl('not a url')).toBe(false);
   });
 });

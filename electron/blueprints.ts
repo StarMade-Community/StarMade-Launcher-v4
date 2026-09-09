@@ -418,6 +418,12 @@ export function importSmentToCatalog(
   const bpRoot = path.join(catalogPath, BLUEPRINTS_DIR);
   const expDest = path.join(catalogPath, EXPORTED_DIR, path.basename(smentFilePath));
 
+  // adm-zip follows symlinks that already exist in the destination
+  // (GHSA-vwc7-r8mq-g2x9, unfixed as of 0.6.0), which would let a crafted .sment
+  // overwrite files outside the catalog. Extract into a freshly created staging
+  // dir instead - it contains no symlinks to follow - then move the result into
+  // place. Staging lives under catalogPath so the move stays on one filesystem.
+  let staging: string | null = null;
   try {
     const zip = new AdmZip(smentFilePath);
     const entries = zip.getEntries();
@@ -436,18 +442,29 @@ export function importSmentToCatalog(
       if (norm === HEADER_FILE) hasRootHeader = true;
     }
 
-    if (!hasRootHeader && topLevels.size === 1) {
-      // Wrapped: extract into the blueprints root, the zip provides the folder.
-      zip.extractAllTo(bpRoot, true);
-    } else {
-      // Flat archive: nest under a folder named after the .sment file.
-      const bpDest = path.join(bpRoot, path.basename(smentFilePath, '.sment'));
-      fs.mkdirSync(bpDest, { recursive: true });
-      zip.extractAllTo(bpDest, true);
+    const wrapped = !hasRootHeader && topLevels.size === 1;
+    // The wrapper name comes from the archive, so it must not escape bpRoot.
+    const wrapperName = wrapped ? [...topLevels][0] : '';
+    if (wrapped && (wrapperName === '.' || wrapperName === '..')) {
+      throw new Error(`Refusing to import .sment with unsafe top-level entry: ${wrapperName}`);
     }
+
+    staging = fs.mkdtempSync(path.join(catalogPath, '.sment-import-'));
+    zip.extractAllTo(staging, true);
+
+    // Wrapped: the zip supplies the folder, so move that folder itself.
+    // Flat: the staging dir *is* the blueprint folder.
+    const moveFrom = wrapped ? path.join(staging, wrapperName) : staging;
+    const bpDest = path.join(bpRoot, wrapped ? wrapperName : path.basename(smentFilePath, '.sment'));
+
+    fs.rmSync(bpDest, { recursive: true, force: true });
+    fs.renameSync(moveFrom, bpDest);
+    if (!wrapped) staging = null; // consumed by the rename
     copiedCount++;
   } catch (err) {
     errors.push(`Failed to extract ${smentFilePath}: ${String(err)}`);
+  } finally {
+    if (staging) fs.rmSync(staging, { recursive: true, force: true });
   }
 
   try {

@@ -31,6 +31,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Non-blocking for now: the existing codebase has a lint backlog (see
+      # eslint.config.js). Drop continue-on-error once the baseline is clean.
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true
+
       - name: Run tests
         run: npm test
 
